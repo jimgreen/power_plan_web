@@ -12,7 +12,9 @@ import json
 import math
 import mimetypes
 import os
+import re
 import secrets
+import shutil
 import sqlite3
 import threading
 import time
@@ -27,6 +29,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, unquote, urlparse
 from urllib.request import urlopen
 
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
+
 import planning_store
 
 
@@ -40,6 +46,8 @@ NASA_POWER_HOURLY_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 AMAP_GEOCODING_URL = "https://restapi.amap.com/v3/geocode/geo"
 OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+OPTIMIZATION_RESULT_WORKBOOK_NAME = "optimization_results.xlsx"
+RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
 AMAP_WEB_SERVICE_KEY = os.environ.get("POWER_PLAN_AMAP_KEY") or os.environ.get("AMAP_WEB_SERVICE_KEY") or os.environ.get("AMAP_KEY")
 NASA_POWER_PARAMETERS = {
     "wind_speed": "WS10M",
@@ -350,6 +358,8 @@ class OptimizationRuntime:
         self.progress = 0
         self._started_monotonic = 0.0
         self._last_progress_log = -1
+        self.result_file = ""
+        self._results_exported = False
         self._logs: list[dict[str, str]] = []
         self._lock = threading.Lock()
         self._append_log_unlocked("info", "优化规划待启动")
@@ -375,6 +385,8 @@ class OptimizationRuntime:
                 self.progress = 0
                 self._started_monotonic = time.monotonic()
                 self._last_progress_log = -1
+                self.result_file = ""
+                self._results_exported = False
                 self._append_log_unlocked("ok", f"启动优化规划，方案：{self.scheme}")
                 self._append_log_unlocked("info", "后台优化规划程序已启动")
             elif action == "stop":
@@ -400,6 +412,7 @@ class OptimizationRuntime:
             self.status = "已完成"
             self.end_time = _now_text()
             self._append_log_unlocked("ok", "优化规划完成")
+            self._export_results_once_unlocked()
 
     def _payload_unlocked(self) -> dict:
         return {
@@ -408,6 +421,7 @@ class OptimizationRuntime:
             "start_time": self.start_time,
             "end_time": self.end_time,
             "progress": self.progress,
+            "result_file": self.result_file,
             "metrics": self._metrics_unlocked(),
             "results": self._results_unlocked(),
             "logs": list(self._logs),
@@ -659,6 +673,13 @@ class OptimizationRuntime:
         if len(self._logs) > 120:
             del self._logs[:-120]
 
+    def _export_results_once_unlocked(self) -> None:
+        if self._results_exported:
+            return
+        result_path = export_optimization_results_workbook(self._payload_unlocked())
+        self.result_file = str(result_path)
+        self._results_exported = True
+
 
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -670,6 +691,196 @@ class OptimizationStateError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def export_optimization_results_workbook(payload: dict) -> Path:
+    scheme = str(payload.get("scheme") or "未选择方案")
+    result_path = PLANNING_STORE.scheme_dir(scheme) / OPTIMIZATION_RESULT_WORKBOOK_NAME
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = build_optimization_results_workbook(payload)
+    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+    workbook.save(tmp_path)
+    tmp_path.replace(result_path)
+    return result_path
+
+
+def build_optimization_results_workbook(payload: dict) -> Workbook:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
+    logs = payload.get("logs") if isinstance(payload.get("logs"), list) else []
+    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
+
+    append_rows_sheet(
+        workbook,
+        "总体指标",
+        [
+            {"指标": "方案", "数值": payload.get("scheme", ""), "单位": ""},
+            {"指标": "状态", "数值": payload.get("status", ""), "单位": ""},
+            {"指标": "进度", "数值": payload.get("progress", ""), "单位": "%"},
+            *[
+                {
+                    "指标": metric.get("label", ""),
+                    "数值": metric.get("value", ""),
+                    "单位": metric.get("unit", ""),
+                }
+                for metric in metrics
+            ],
+        ],
+        ["指标", "数值", "单位"],
+    )
+
+    for table in results.get("overview_tables", []):
+        append_rows_sheet(workbook, str(table.get("title", "结果表")), table.get("rows", []))
+    append_rows_sheet(workbook, "供能分析", results.get("green_table", []))
+    append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
+    append_rows_sheet(workbook, "安全评估", results.get("safety_table", []))
+    append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
+    append_rows_sheet(workbook, "运行日志", logs, ["time", "level", "message"], {"time": "时间", "level": "级别", "message": "消息"})
+    return workbook
+
+
+def append_rows_sheet(
+    workbook: Workbook,
+    title: str,
+    rows: list[dict],
+    headers: list[str] | None = None,
+    labels: dict[str, str] | None = None,
+) -> None:
+    sheet = workbook.create_sheet(safe_sheet_title(title, workbook.sheetnames))
+    normalized_rows = rows if isinstance(rows, list) else []
+    header_keys = headers or keys_from_rows(normalized_rows)
+    if not header_keys:
+        header_keys = ["内容"]
+    header_labels = labels or {}
+    sheet.append([header_labels.get(key, key) for key in header_keys])
+    for row in normalized_rows:
+        if isinstance(row, dict):
+            sheet.append([row.get(key, "") for key in header_keys])
+    style_result_sheet(sheet)
+
+
+def keys_from_rows(rows: list[dict]) -> list[str]:
+    keys: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in row:
+            if key not in keys:
+                keys.append(key)
+    return keys
+
+
+def safe_sheet_title(title: str, existing: list[str]) -> str:
+    clean = re.sub(r"[\[\]:*?/\\]", "_", str(title or "Sheet")).strip() or "Sheet"
+    clean = clean[:31]
+    if clean not in existing:
+        return clean
+    for index in range(2, 1000):
+        suffix = f"_{index}"
+        candidate = f"{clean[:31 - len(suffix)]}{suffix}"
+        if candidate not in existing:
+            return candidate
+    raise ValueError("无法生成唯一工作表名称")
+
+
+def style_result_sheet(sheet) -> None:
+    header_fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+    sheet.freeze_panes = "A2"
+    for column_cells in sheet.columns:
+        max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+        sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(max_length + 2, 10), 28)
+
+
+def list_evaluation_result_files(scheme: str) -> list[dict]:
+    folder = PLANNING_STORE.scheme_dir(scheme)
+    if not folder.exists():
+        raise FileNotFoundError(f"方案不存在: {scheme}")
+    files = []
+    for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
+        if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
+            files.append({"name": path.name, "modified_at": path.stat().st_mtime})
+    return files
+
+
+def evaluation_result_path(scheme: str, filename: str) -> Path:
+    name = str(filename or "").strip()
+    if not RESULT_WORKBOOK_RE.fullmatch(name):
+        raise ValueError("结果文件名必须符合 xxxx_results.xlsx")
+    folder = PLANNING_STORE.scheme_dir(scheme)
+    path = (folder / name).resolve()
+    if folder not in path.parents or path.parent != folder:
+        raise ValueError("结果文件路径越界")
+    return path
+
+
+def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
+    payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme)
+    result_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
+    workbook = build_optimization_results_workbook(payload)
+    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+    workbook.save(tmp_path)
+    tmp_path.replace(result_path)
+    return result_path
+
+
+def handle_evaluation_results_api_path(
+    path: str,
+    method: str = "GET",
+    body: bytes = b"",
+    query: str = "",
+) -> tuple[int, dict[str, str], bytes]:
+    if path != "/api/evaluation/results":
+        return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
+    try:
+        if method == "GET":
+            scheme = parse_qs(query).get("scheme", [""])[0]
+            return _json_response({"results": list_evaluation_result_files(scheme)})
+
+        if method != "POST":
+            return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
+
+        payload = _read_json_body(body)
+        scheme = str(payload.get("scheme", ""))
+        action = str(payload.get("action", ""))
+        filename = str(payload.get("filename", ""))
+
+        if action == "delete":
+            result_path = evaluation_result_path(scheme, filename)
+            if result_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+                raise ValueError("默认结果文件不允许删除")
+            if result_path.exists():
+                result_path.unlink()
+            return _json_response({"selected": "", "results": list_evaluation_result_files(scheme)})
+
+        if action == "copy":
+            source_path = evaluation_result_path(scheme, filename)
+            if not source_path.exists():
+                raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
+            target_path = evaluation_result_path(scheme, str(payload.get("target_filename", "")))
+            if target_path.exists():
+                return _json_response(
+                    {"error": "exists", "message": f"复制失败，结果文件已存在: {target_path.name}"},
+                    HTTPStatus.CONFLICT,
+                )
+            shutil.copy2(source_path, target_path)
+            return _json_response({"selected": target_path.name, "results": list_evaluation_result_files(scheme)})
+
+        if action == "save":
+            if (filename or OPTIMIZATION_RESULT_WORKBOOK_NAME) == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+                raise ValueError("默认结果文件不允许修改")
+            result_path = save_evaluation_result_workbook(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
+            return _json_response({"selected": result_path.name, "results": list_evaluation_result_files(scheme)})
+
+        raise ValueError("未知结果文件操作")
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except ValueError as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
 
 class OptimizationRuntimeManager:
@@ -1412,6 +1623,8 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
     query_params = parse_qs(query)
     if path.startswith("/api/planning/"):
         return handle_planning_api_path(path, "GET", b"")
+    if path.startswith("/api/evaluation/"):
+        return handle_evaluation_results_api_path(path, "GET", b"", query)
     if path == "/api/optimization/status":
         scheme = query_params.get("scheme", [""])[0]
         return _json_response(OPTIMIZATION_RUNTIME.snapshot(scheme=scheme))
@@ -1543,6 +1756,10 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path.startswith("/api/planning/"):
                 status, headers, response_body = handle_planning_api_path(parsed.path, "POST", body)
+                self._send(status, headers, response_body)
+                return
+            if parsed.path.startswith("/api/evaluation/"):
+                status, headers, response_body = handle_evaluation_results_api_path(parsed.path, "POST", body)
                 self._send(status, headers, response_body)
                 return
             status, headers, response_body = handle_control_path(parsed.path, body)

@@ -1,9 +1,12 @@
 import json
 import shutil
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from openpyxl import Workbook, load_workbook
 
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
@@ -94,21 +97,23 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("color: #21d5ff", html)
         self.assertIn('class="feature-entry-grid"', html)
         self.assertIn('aria-label="规划功能快捷入口"', html)
-        self.assertEqual(html.count('class="feature-entry"'), 3)
-        self.assertEqual(html.count('class="feature-icon"'), 3)
+        self.assertEqual(html.count('class="feature-entry"'), 4)
+        self.assertEqual(html.count('class="feature-icon"'), 4)
         self.assertIn('class="energy-side energy-left"', html)
         self.assertIn('class="energy-side energy-right"', html)
         self.assertIn('<strong>参数维护</strong>', html)
         self.assertIn('<strong>算法启动</strong>', html)
-        self.assertIn('<strong>结果评估</strong>', html)
+        self.assertIn('<strong>方案评估</strong>', html)
+        self.assertIn('<strong>结果对比</strong>', html)
         self.assertNotIn("规划参数维护", html)
         self.assertNotIn("规划算法启动", html)
-        self.assertNotIn("规划结果评估", html)
+        self.assertNotIn("规划方案评估", html)
         self.assertIn('href="planning.html"', html)
         self.assertIn('href="optimize.html"', html)
-        self.assertIn('href="optimize.html#overviewResult"', html)
+        self.assertIn('href="evaluation.html"', html)
+        self.assertIn('href="comparison.html"', html)
         self.assertIn(".feature-entry-grid", html)
-        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", html)
+        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr))", html)
         self.assertIn("top: 50%", html)
         self.assertIn("transform: translate(-50%, -29%)", html)
         self.assertIn(".feature-icon svg", html)
@@ -454,6 +459,165 @@ class PowerPlanServerTest(unittest.TestCase):
         for field in ("frequency_max", "frequency_min"):
             self.assertIn(field, daily[0])
             self.assertIsInstance(daily[0][field], (int, float))
+
+    def test_completed_optimization_writes_result_workbook_and_overwrites_existing_file(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_optimization_results"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "optimization_results.xlsx"
+            result_path.write_text("old result", encoding="utf-8")
+
+            runtime = server.OptimizationRuntime()
+            runtime.apply("start", scheme="方案A")
+            runtime._started_monotonic = time.monotonic() - 40
+            payload = runtime.snapshot()
+
+            self.assertEqual(payload["status"], "已完成")
+            self.assertEqual(payload["result_file"], str(result_path))
+            self.assertTrue(result_path.exists())
+            workbook = load_workbook(result_path, data_only=True, read_only=True)
+            try:
+                self.assertEqual(
+                    workbook.sheetnames,
+                    ["总体指标", "规划结果", "规划年指标", "供能分析", "供能日曲线", "安全评估", "安全日曲线", "运行日志"],
+                )
+                self.assertEqual(workbook["总体指标"]["A1"].value, "指标")
+                self.assertEqual(workbook["总体指标"]["B1"].value, "数值")
+                self.assertEqual(workbook["规划结果"]["A1"].value, "设备类型")
+                self.assertEqual(workbook["规划结果"]["A2"].value, "柴发")
+                self.assertEqual(workbook["供能日曲线"].max_row, 366)
+                self.assertEqual(workbook["安全日曲线"].max_row, 366)
+                self.assertEqual(workbook["运行日志"]["A1"].value, "时间")
+                log_messages = [row[2] for row in workbook["运行日志"].iter_rows(min_row=2, values_only=True)]
+                self.assertIn("优化规划完成", log_messages)
+            finally:
+                workbook.close()
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_evaluation_results_api_manages_scheme_result_workbooks(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_results"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.OPTIMIZATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+
+            status, headers, body = server.handle_api_path("/api/evaluation/results?scheme=方案A")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body.decode("utf-8"))["results"], [])
+
+            source_path = planning_root / "方案A" / "optimization_results.xlsx"
+            create_workbook = Workbook()
+            create_workbook.active.title = "总体指标"
+            create_workbook.active.append(["指标", "数值"])
+            create_workbook.save(source_path)
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "copy",
+                        "filename": "optimization_results.xlsx",
+                        "target_filename": "custom_results.xlsx",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            copied = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(copied["selected"], "custom_results.xlsx")
+            self.assertTrue((planning_root / "方案A" / "custom_results.xlsx").exists())
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "copy",
+                        "filename": "optimization_results.xlsx",
+                        "target_filename": "custom_results.xlsx",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            duplicate = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 409)
+            self.assertEqual(duplicate["error"], "exists")
+            self.assertIn("复制失败", duplicate["message"])
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {"scheme": "方案A", "action": "delete", "filename": "optimization_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            protected_delete = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 400)
+            self.assertEqual(protected_delete["error"], "bad_request")
+            self.assertIn("默认结果文件不允许删除", protected_delete["message"])
+            self.assertTrue((planning_root / "方案A" / "optimization_results.xlsx").exists())
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {"scheme": "方案A", "action": "save", "filename": "optimization_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            protected_save = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 400)
+            self.assertEqual(protected_save["error"], "bad_request")
+            self.assertIn("默认结果文件不允许修改", protected_save["message"])
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {"scheme": "方案A", "action": "save", "filename": "custom_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            saved = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(saved["selected"], "custom_results.xlsx")
+            workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
+            try:
+                self.assertIn("总体指标", workbook.sheetnames)
+                self.assertIn("规划结果", workbook.sheetnames)
+            finally:
+                workbook.close()
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {"scheme": "方案A", "action": "delete", "filename": "custom_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            deleted = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertFalse((planning_root / "方案A" / "custom_results.xlsx").exists())
+            self.assertEqual([item["name"] for item in deleted["results"]], ["optimization_results.xlsx"])
+        finally:
+            server.PLANNING_STORE = original_store
+            server.OPTIMIZATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_snapshot_reads_summary_from_csv_files(self):
         payload = server.build_snapshot(force_reload=True)
@@ -861,6 +1025,50 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("refreshOptimizationStatus().catch(showError)", script)
         self.assertIn(".optimization-actions button.is-disabled", css := (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8"))
         self.assertIn(".optimization-actions button.is-active", css)
+
+    def test_evaluation_page_uses_optimization_layout_as_editable_base(self):
+        html = (WEB_ROOT / "evaluation.html").read_text(encoding="utf-8")
+        planning_html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
+        optimize_html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
+        index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
+
+        self.assertIn("assets/planning.css?v=20260510-dark-hud", html)
+        self.assertIn('<a class="active" href="evaluation.html">方案评估</a>', html)
+        self.assertIn('href="evaluation.html">方案评估</a>', planning_html)
+        self.assertIn('href="evaluation.html">方案评估</a>', optimize_html)
+        self.assertIn('href="evaluation.html"', index_html)
+        self.assertIn("<strong>方案评估</strong>", index_html)
+        self.assertIn('<aside class="scheme-rail">', html)
+        self.assertIn('id="schemeList"', html)
+        self.assertIn('class="optimization-panel"', html)
+        self.assertIn('id="startEvaluation"', html)
+        self.assertIn('id="stopEvaluation"', html)
+        self.assertIn('id="evaluationResultSelect"', html)
+        self.assertNotIn('id="addEvaluationResult"', html)
+        for control in ("deleteEvaluationResult", "copyEvaluationResult", "saveEvaluationResult"):
+            self.assertIn(f'id="{control}"', html)
+        self.assertNotIn("增加结果", html)
+        for label in ("删除结果", "复制结果", "保存结果"):
+            self.assertIn(label, html)
+        for label in ("当前状态", "启动时刻", "结束时刻", "综合评分", "风险等级"):
+            self.assertIn(label, html)
+        for tab in ("评估概览", "经济性评估", "安全性评估"):
+            self.assertIn(tab, html)
+        self.assertIn('id="evaluationLogs"', html)
+        self.assertIn("assets/evaluation.js", html)
+        self.assertIn("/api/optimization/status", script)
+        self.assertIn("/api/optimization/control", script)
+        self.assertIn("/api/evaluation/results", script)
+        self.assertIn("loadEvaluationResults", script)
+        self.assertIn("manageEvaluationResult", script)
+        self.assertIn("prompt(", script)
+        self.assertIn("复制失败", script)
+        self.assertIn("selectedResultIsDefault", script)
+        self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
+        self.assertIn("saveButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
+        self.assertIn("启动评估", html)
+        self.assertIn("停止评估", html)
 
     def test_optimization_page_has_draggable_result_and_log_resize_handles(self):
         html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
