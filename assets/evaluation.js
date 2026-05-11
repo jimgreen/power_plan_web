@@ -159,10 +159,14 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
 function renderEvaluationResults() {
   const select = document.getElementById("evaluationResultSelect");
   select.innerHTML = state.resultFiles.length
-    ? state.resultFiles.map((item) => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}</option>`).join("")
+    ? state.resultFiles.map((item) => `<option value="${escapeHtml(item.name)}">${escapeHtml(resultDisplayName(item.name))}</option>`).join("")
     : '<option value="">暂无结果文件</option>';
   select.value = state.selectedResultFile;
   updateEvaluationResultActions();
+}
+
+function resultDisplayName(filename) {
+  return String(filename || "").replace(/_results\.xlsx$/, "");
 }
 
 function selectedResultIsDefault() {
@@ -189,9 +193,9 @@ async function copyEvaluationResult() {
     alert("请先选择结果文件");
     return;
   }
-  const targetName = prompt("请输入新结果文件名，格式为 xxxx_results.xlsx", "");
+  const targetName = prompt("请输入新结果名称", "");
   if (targetName === null) return;
-  await manageEvaluationResult("copy", { target_filename: targetName.trim() });
+  await manageEvaluationResult("copy", { target_name: targetName.trim() });
 }
 
 async function manageEvaluationResult(action, extra = {}) {

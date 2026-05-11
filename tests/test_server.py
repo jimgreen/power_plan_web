@@ -529,7 +529,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         "scheme": "方案A",
                         "action": "copy",
                         "filename": "optimization_results.xlsx",
-                        "target_filename": "custom_results.xlsx",
+                        "target_name": "custom",
                     },
                     ensure_ascii=False,
                 ).encode("utf-8"),
@@ -547,7 +547,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         "scheme": "方案A",
                         "action": "copy",
                         "filename": "optimization_results.xlsx",
-                        "target_filename": "custom_results.xlsx",
+                        "target_name": "custom",
                     },
                     ensure_ascii=False,
                 ).encode("utf-8"),
@@ -1062,6 +1062,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/evaluation/results", script)
         self.assertIn("loadEvaluationResults", script)
         self.assertIn("manageEvaluationResult", script)
+        self.assertIn("resultDisplayName", script)
+        self.assertIn('value="${escapeHtml(item.name)}">${escapeHtml(resultDisplayName(item.name))}</option>', script)
+        self.assertIn("target_name", script)
         self.assertIn("prompt(", script)
         self.assertIn("复制失败", script)
         self.assertIn("selectedResultIsDefault", script)

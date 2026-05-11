@@ -818,6 +818,15 @@ def evaluation_result_path(scheme: str, filename: str) -> Path:
     return path
 
 
+def evaluation_result_filename_from_name(name: str) -> str:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("结果名称不能为空")
+    if clean_name.endswith(".xlsx"):
+        raise ValueError("结果名称只需输入 xxxx，不要输入扩展名")
+    return f"{clean_name}_results.xlsx"
+
+
 def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
     payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme)
     result_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
@@ -861,7 +870,8 @@ def handle_evaluation_results_api_path(
             source_path = evaluation_result_path(scheme, filename)
             if not source_path.exists():
                 raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
-            target_path = evaluation_result_path(scheme, str(payload.get("target_filename", "")))
+            target_filename = evaluation_result_filename_from_name(str(payload.get("target_name", "")))
+            target_path = evaluation_result_path(scheme, target_filename)
             if target_path.exists():
                 return _json_response(
                     {"error": "exists", "message": f"复制失败，结果文件已存在: {target_path.name}"},
