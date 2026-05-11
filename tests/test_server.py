@@ -13,6 +13,7 @@ WEB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WEB_ROOT))
 
 import server
+import estimate
 
 
 class FakeCursor:
@@ -347,6 +348,159 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(json.loads(body.decode("utf-8"))["error"], "bad_request")
         finally:
             server.OPTIMIZATION_RUNTIME = original_runtime
+
+    def test_estimate_dispatch_minimizes_diesel_for_8760_hours(self):
+        payload = server.planning_store.default_payload("方案A")
+        for index, row in enumerate(payload["time_series"]):
+            row["wind_speed"] = 8 if index % 2 == 0 else 0
+            row["solar_irradiance"] = 800 if 8 <= index % 24 <= 16 else 0
+            row["load"] = 100
+            row["temperature"] = 20
+        result_rows = [
+            {"设备类型": "柴发", "设计台数": 2, "单台容量": 100, "总容量": 200, "单位": "kW"},
+            {"设备类型": "风机", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+            {"设备类型": "光伏", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+            {"设备类型": "储能", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kWh"},
+        ]
+        events = []
+
+        result = estimate.run_estimation(payload, result_rows, log=events.append)
+
+        self.assertEqual(result["status"], "已完成")
+        self.assertEqual(result["progress"], 100)
+        self.assertEqual(len(result["dispatch_rows"]), 8760)
+        self.assertEqual(result["dispatch_rows"][0]["hour_index"], 1)
+        self.assertEqual(result["dispatch_rows"][-1]["hour_index"], 8760)
+        self.assertLess(result["totals"]["diesel_energy"], result["totals"]["load_energy"])
+        self.assertTrue(any("8760点优化调度" in item["message"] for item in events))
+        self.assertTrue(any(item.get("progress") == 100 for item in events))
+
+    def test_evaluation_api_uses_independent_runtime_and_estimate_script(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_runtime"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.EVALUATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            for row in payload["time_series"]:
+                row["wind_speed"] = 7
+                row["solar_irradiance"] = 500
+                row["load"] = 80
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "规划结果"
+            sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            sheet.append(["柴发", 2, 100, 200, "kW"])
+            sheet.append(["风机", 1, 100, 100, "kW"])
+            sheet.append(["光伏", 1, 100, 100, "kW"])
+            workbook.save(planning_root / "方案A" / "case_results.xlsx")
+
+            status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A")
+            initial = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(initial["status"], "待启动")
+
+            status, headers, body = server.handle_control_path(
+                "/api/evaluation/control",
+                json.dumps(
+                    {"action": "start", "scheme": "方案A", "filename": "case_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            started = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(started["state"]["status"], "运行中")
+            self.assertEqual(started["state"]["result_filename"], "case_results.xlsx")
+            self.assertTrue(any("启动方案评估" in item["message"] for item in started["state"]["logs"]))
+
+            for _ in range(50):
+                status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A")
+                state = json.loads(body.decode("utf-8"))
+                if state["status"] == "已完成":
+                    break
+                time.sleep(0.05)
+
+            self.assertEqual(state["status"], "已完成")
+            self.assertEqual(state["progress"], 100)
+            self.assertTrue(any("8760点优化调度完成" in item["message"] for item in state["logs"]))
+            self.assertEqual(len(state["results"]["curves"]["green_hourly"]), 8760)
+            workbook = load_workbook(planning_root / "方案A" / "case_results.xlsx", read_only=True, data_only=True)
+            try:
+                self.assertIn("调度结果", workbook.sheetnames)
+                self.assertEqual(workbook["调度结果"].max_row, 8761)
+            finally:
+                workbook.close()
+        finally:
+            server.PLANNING_STORE = original_store
+            server.EVALUATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_evaluation_status_is_scoped_by_result_file(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_result_switch"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.EVALUATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            for row in payload["time_series"]:
+                row["wind_speed"] = 7
+                row["solar_irradiance"] = 500
+                row["load"] = 80
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+
+            for filename, diesel_count in (("case_a_results.xlsx", 2), ("case_b_results.xlsx", 3)):
+                workbook = Workbook()
+                sheet = workbook.active
+                sheet.title = "规划结果"
+                sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+                sheet.append(["柴发", diesel_count, 100, diesel_count * 100, "kW"])
+                sheet.append(["风机", 1, 100, 100, "kW"])
+                sheet.append(["光伏", 1, 100, 100, "kW"])
+                workbook.save(planning_root / "方案A" / filename)
+
+            status, headers, body = server.handle_control_path(
+                "/api/evaluation/control",
+                json.dumps(
+                    {"action": "start", "scheme": "方案A", "filename": "case_a_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+
+            case_a = {}
+            for _ in range(50):
+                status, headers, body = server.handle_api_path(
+                    "/api/evaluation/status?scheme=方案A&filename=case_a_results.xlsx"
+                )
+                case_a = json.loads(body.decode("utf-8"))
+                if case_a["status"] == "已完成":
+                    break
+                time.sleep(0.05)
+
+            status, headers, body = server.handle_api_path(
+                "/api/evaluation/status?scheme=方案A&filename=case_b_results.xlsx"
+            )
+            case_b = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(case_a["status"], "已完成")
+            self.assertEqual(case_a["result_filename"], "case_a_results.xlsx")
+            self.assertTrue(any("8760点优化调度完成" in item["message"] for item in case_a["logs"]))
+            self.assertEqual(len(case_a["results"]["curves"]["green_hourly"]), 8760)
+            self.assertEqual(case_b["status"], "待启动")
+            self.assertEqual(case_b["result_filename"], "case_b_results.xlsx")
+            self.assertFalse(any("8760点优化调度完成" in item["message"] for item in case_b["logs"]))
+            self.assertEqual(case_b["results"]["curves"]["green_hourly"], [])
+        finally:
+            server.PLANNING_STORE = original_store
+            server.EVALUATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_optimization_overview_results_are_two_tables_with_ratio_disks(self):
         runtime = server.OptimizationRuntime()
@@ -1072,6 +1226,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/optimization/status", script)
         self.assertIn("/api/optimization/control", script)
+        self.assertNotIn("/api/evaluation/status", script)
+        self.assertNotIn("/api/evaluation/control", script)
         self.assertIn("startOptimization", script)
         self.assertIn("stopOptimization", script)
         self.assertIn("updateOptimizationActions", script)
@@ -1135,14 +1291,18 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn(tab, html)
         self.assertIn('id="evaluationLogs"', html)
         self.assertIn("assets/evaluation.js", html)
-        self.assertIn("/api/optimization/status", script)
-        self.assertIn("/api/optimization/control", script)
+        self.assertIn("/api/evaluation/status", script)
+        self.assertIn("/api/evaluation/control", script)
+        self.assertNotIn("/api/optimization/status", script)
+        self.assertNotIn("/api/optimization/control", script)
         self.assertIn("/api/evaluation/results", script)
         self.assertIn("loadEvaluationResults", script)
+        self.assertIn("refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError)", script)
         self.assertIn("manageEvaluationResult", script)
         self.assertIn("resultDisplayName", script)
         self.assertIn('value="${escapeHtml(item.name)}">${escapeHtml(resultDisplayName(item.name))}</option>', script)
         self.assertIn("target_name", script)
+        self.assertIn("filename=${encodeURIComponent(filename)}", script)
         self.assertIn("planning_result_rows", script)
         self.assertIn("renderEvaluationPlanningResultTable", script)
         self.assertIn('data-planning-count-index="${index}"', script)

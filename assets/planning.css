@@ -265,15 +265,42 @@ button:disabled {
 .evaluation-planning-result-table {
   min-height: 0;
   max-height: none;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .evaluation-planning-result-table table {
-  min-width: 520px;
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.evaluation-planning-result-table th,
+.evaluation-planning-result-table td {
+  padding-left: 8px;
+  padding-right: 8px;
+  white-space: nowrap;
+}
+
+.evaluation-planning-result-table th:nth-child(1),
+.evaluation-planning-result-table td:nth-child(1) {
+  width: 42%;
+}
+
+.evaluation-planning-result-table th:nth-child(2),
+.evaluation-planning-result-table td:nth-child(2) {
+  width: 30%;
+}
+
+.evaluation-planning-result-table th:nth-child(3),
+.evaluation-planning-result-table td:nth-child(3) {
+  width: 28%;
 }
 
 .evaluation-planning-result-table input {
-  width: 96px;
+  width: 100%;
+  min-width: 0;
+  max-width: 86px;
 }
 
 .optimization-panel {

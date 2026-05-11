@@ -73,7 +73,10 @@ document.addEventListener("DOMContentLoaded", () => {
     state.optimizationCommandHeight = null;
     lockOptimizationCommandHeight();
   });
-  loadSchemes().then(() => Promise.all([refreshOptimizationStatus(), loadEvaluationResults()])).catch(showError);
+  loadSchemes()
+    .then(() => loadEvaluationResults())
+    .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
+    .catch(showError);
 });
 
 async function api(path, options = {}) {
@@ -117,8 +120,9 @@ function renderSchemes() {
       state.planningResultRows = [];
       state.optimization = defaultOptimizationState(state.currentScheme);
       renderOptimization(state.optimization);
-      loadEvaluationResults().catch(showError);
-      refreshOptimizationStatus(state.currentScheme).catch(showError);
+      loadEvaluationResults()
+        .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
+        .catch(showError);
     });
   });
 }
@@ -138,7 +142,9 @@ function bindEvaluationResultActions() {
   document.getElementById("evaluationResultSelect").addEventListener("change", (event) => {
     state.selectedResultFile = event.target.value || "";
     updateEvaluationResultActions();
-    loadEvaluationResults(state.selectedResultFile).catch(showError);
+    loadEvaluationResults(state.selectedResultFile)
+      .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
+      .catch(showError);
   });
   document.getElementById("deleteEvaluationResult").addEventListener("click", () => manageEvaluationResult("delete"));
   document.getElementById("copyEvaluationResult").addEventListener("click", copyEvaluationResult);
@@ -192,8 +198,6 @@ function renderEvaluationPlanningResultTable() {
           <th>设备类型</th>
           <th>设计台数</th>
           <th>单台容量</th>
-          <th>总容量</th>
-          <th>单位</th>
         </tr>
       </thead>
       <tbody>
@@ -209,8 +213,6 @@ function renderEvaluationPlanningResultRow(row, index) {
       <td>${escapeHtml(row["设备类型"] ?? "")}</td>
       <td><input type="number" step="1" min="0" inputmode="numeric" pattern="[0-9]*" data-planning-count-index="${index}" value="${escapeHtml(row["设计台数"] ?? "")}"${disabled}></td>
       <td>${escapeHtml(row["单台容量"] ?? "")}</td>
-      <td>${escapeHtml(row["总容量"] ?? "")}</td>
-      <td>${escapeHtml(row["单位"] ?? "")}</td>
     </tr>`;
 }
 
@@ -327,9 +329,9 @@ async function controlOptimization(action) {
     return;
   }
   try {
-    const data = await api("/api/optimization/control", {
+    const data = await api("/api/evaluation/control", {
       method: "POST",
-      body: JSON.stringify({ action, scheme: state.currentScheme }),
+      body: JSON.stringify({ action, scheme: state.currentScheme, filename: state.selectedResultFile }),
     });
     state.optimization = data.state;
     renderOptimization(data.state);
@@ -344,16 +346,18 @@ async function controlOptimization(action) {
   }
 }
 
-async function refreshOptimizationStatus(scheme = state.currentScheme) {
-  const data = await api(optimizationStatusPath(scheme));
-  if (scheme !== state.currentScheme) return;
+async function refreshOptimizationStatus(scheme = state.currentScheme, filename = state.selectedResultFile) {
+  const data = await api(optimizationStatusPath(scheme, filename));
+  if (scheme !== state.currentScheme || filename !== state.selectedResultFile) return;
   state.optimization = data;
   renderOptimization(data);
   scheduleOptimizationPolling();
 }
 
-function optimizationStatusPath(scheme) {
-  return scheme ? `/api/optimization/status?scheme=${encodeURIComponent(scheme)}` : "/api/optimization/status";
+function optimizationStatusPath(scheme, filename = state.selectedResultFile) {
+  if (!scheme) return "/api/evaluation/status";
+  const filenameParam = filename ? `&filename=${encodeURIComponent(filename)}` : "";
+  return `/api/evaluation/status?scheme=${encodeURIComponent(scheme)}${filenameParam}`;
 }
 
 function scheduleOptimizationPolling() {
@@ -361,7 +365,7 @@ function scheduleOptimizationPolling() {
   const data = state.optimization || {};
   state.pollDelay = data.status === "运行中" ? 1000 : 4000;
   state.pollTimer = window.setInterval(() => {
-    refreshOptimizationStatus().catch(showError);
+    refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError);
   }, state.pollDelay);
 }
 

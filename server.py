@@ -33,6 +33,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+import estimate
 import planning_store
 
 
@@ -706,6 +707,51 @@ def export_optimization_results_workbook(payload: dict) -> Path:
     return result_path
 
 
+def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict]) -> Path:
+    scheme = str(payload.get("scheme") or "未选择方案")
+    filename = str(payload.get("result_filename") or "").strip()
+    result_path = evaluation_result_path(scheme, filename)
+    if result_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+        raise ValueError("默认结果文件不允许修改")
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = build_optimization_results_workbook(payload)
+    append_rows_sheet(
+        workbook,
+        "调度结果",
+        dispatch_rows,
+        [
+            "hour_index",
+            "datetime",
+            "load",
+            "wind_power",
+            "pv_power",
+            "storage_charge",
+            "storage_discharge",
+            "diesel_power",
+            "curtailed_power",
+            "unmet_load",
+            "storage_soc",
+        ],
+        {
+            "hour_index": "小时",
+            "datetime": "时间",
+            "load": "负荷",
+            "wind_power": "风电出力",
+            "pv_power": "光伏出力",
+            "storage_charge": "储能充电",
+            "storage_discharge": "储能放电",
+            "diesel_power": "柴发出力",
+            "curtailed_power": "弃电",
+            "unmet_load": "未供负荷",
+            "storage_soc": "储能SOC",
+        },
+    )
+    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+    workbook.save(tmp_path)
+    tmp_path.replace(result_path)
+    return result_path
+
+
 def build_optimization_results_workbook(payload: dict) -> Workbook:
     workbook = Workbook()
     workbook.remove(workbook.active)
@@ -919,12 +965,9 @@ def evaluation_result_filename_from_name(name: str) -> str:
 
 
 def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
-    payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme)
     result_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
-    workbook = build_optimization_results_workbook(payload)
-    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    workbook.save(tmp_path)
-    tmp_path.replace(result_path)
+    if not result_path.exists():
+        raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
     return result_path
 
 
@@ -1056,6 +1099,242 @@ class OptimizationRuntimeManager:
             if name not in self._runtimes:
                 self._runtimes[name] = OptimizationRuntime(scheme=name)
             return self._runtimes[name]
+
+    @staticmethod
+    def _scheme_name(scheme: str = "") -> str:
+        return str(scheme or "未选择方案").strip() or "未选择方案"
+
+
+class EvaluationRuntime:
+    """Independent runtime state for fixed-plan evaluation dispatch."""
+
+    def __init__(self, scheme: str = "") -> None:
+        self.status = "待启动"
+        self.scheme = str(scheme or "").strip()
+        self.start_time = ""
+        self.end_time = ""
+        self.progress = 0
+        self.result_filename = ""
+        self.result_file = ""
+        self._metrics: list[dict] = []
+        self._results: dict = {}
+        self._logs: list[dict[str, str]] = []
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop_requested = False
+        self._run_token = 0
+        self._append_log_unlocked("info", "方案评估待启动")
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return self._payload_unlocked()
+
+    def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
+        target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
+        if action == "start":
+            target_filename = selected_evaluation_result_filename(target_scheme, filename)
+            if not target_filename:
+                raise ValueError("请先选择结果文件")
+            target_path = evaluation_result_path(target_scheme, target_filename)
+            if not target_path.exists():
+                raise FileNotFoundError(f"结果文件不存在: {target_path.name}")
+            if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+                raise ValueError("默认结果文件不允许修改")
+
+            with self._lock:
+                if self.status == "运行中":
+                    if self.scheme == target_scheme:
+                        raise OptimizationStateError("running", f"方案“{target_scheme}”正在评估，无法再次启动")
+                    raise OptimizationStateError("running", f"方案“{self.scheme}”正在评估，无法启动方案“{target_scheme}”")
+                self.status = "运行中"
+                self.scheme = target_scheme
+                self.start_time = _now_text()
+                self.end_time = ""
+                self.progress = 0
+                self.result_filename = target_filename
+                self.result_file = str(target_path)
+                self._metrics = []
+                self._results = {}
+                self._stop_requested = False
+                self._run_token += 1
+                token = self._run_token
+                self._append_log_unlocked("ok", f"启动方案评估，方案：{self.scheme}，结果：{self.result_filename}")
+                self._append_log_unlocked("info", "后台评估程序已启动")
+                self._thread = threading.Thread(
+                    target=self._run_estimation,
+                    args=(token, target_scheme, target_filename),
+                    daemon=True,
+                )
+                self._thread.start()
+                return self._payload_unlocked()
+
+        if action == "stop":
+            with self._lock:
+                if self.status != "运行中" or self.scheme != target_scheme:
+                    raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行")
+                self._stop_requested = True
+                self.status = "已停止"
+                self.end_time = _now_text()
+                self._append_log_unlocked("warn", "停止方案评估")
+                return self._payload_unlocked()
+
+        raise ValueError(f"unknown evaluation action: {action}")
+
+    def _run_estimation(self, token: int, scheme: str, filename: str) -> None:
+        dispatch_rows: list[dict] = []
+        try:
+            self._append_log("info", "读取方案参数和当前规划结果", None, token)
+            scheme_payload = PLANNING_STORE.read_scheme(scheme)
+            planning_rows = read_evaluation_planning_result_rows(scheme, filename)
+            if not planning_rows:
+                raise ValueError("当前结果文件缺少规划结果")
+            result = estimate.run_estimation(
+                scheme_payload,
+                planning_rows,
+                log=lambda event: self._append_estimate_event(event, token),
+            )
+            dispatch_rows = result.get("dispatch_rows") if isinstance(result.get("dispatch_rows"), list) else []
+            with self._lock:
+                if token != self._run_token or self._stop_requested or self.status != "运行中":
+                    return
+                self.progress = 100
+                self._metrics = result.get("metrics") if isinstance(result.get("metrics"), list) else []
+                self._results = result.get("results") if isinstance(result.get("results"), dict) else {}
+                result_path = export_evaluation_results_workbook(self._payload_unlocked(), dispatch_rows)
+                self.result_file = str(result_path)
+                self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
+                self.status = "已完成"
+                self.end_time = _now_text()
+        except Exception as exc:
+            with self._lock:
+                if token != self._run_token:
+                    return
+                self.status = "失败"
+                self.end_time = _now_text()
+                self._append_log_unlocked("error", f"方案评估失败：{exc}")
+
+    def _append_estimate_event(self, event: dict, token: int) -> None:
+        level = str(event.get("level") or "info")
+        message = str(event.get("message") or "")
+        progress = event.get("progress")
+        self._append_log(level, message, progress if isinstance(progress, int) else None, token)
+
+    def _append_log(self, level: str, message: str, progress: int | None, token: int) -> None:
+        with self._lock:
+            if token != self._run_token:
+                return
+            if progress is not None:
+                self.progress = max(self.progress, min(100, max(0, int(progress))))
+            if message:
+                self._append_log_unlocked(level, message)
+
+    def _payload_unlocked(self) -> dict:
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "progress": self.progress,
+            "result_filename": self.result_filename,
+            "result_file": self.result_file,
+            "metrics": self._metrics_unlocked(),
+            "results": self._results if self._results else self._default_results_unlocked(),
+            "logs": list(self._logs),
+        }
+
+    def _metrics_unlocked(self) -> list[dict]:
+        base = [
+            {"label": "当前状态", "value": self.status, "unit": ""},
+            {"label": "启动时刻", "value": self.start_time or "-", "unit": ""},
+            {"label": "结束时刻", "value": self.end_time or "-", "unit": ""},
+        ]
+        existing_labels = {item["label"] for item in base}
+        for metric in self._metrics:
+            if not isinstance(metric, dict):
+                continue
+            label = metric.get("label", "")
+            if label in existing_labels:
+                continue
+            base.append(metric)
+            existing_labels.add(label)
+        return base
+
+    @staticmethod
+    def _default_results_unlocked() -> dict:
+        return {
+            "overview_tables": [
+                {"title": "规划结果", "rows": []},
+                {"title": "规划年指标", "rows": []},
+            ],
+            "overview_disks": [],
+            "green_table": [],
+            "safety_table": [],
+            "curves": {"green_daily": [], "green_hourly": [], "safety_daily": []},
+        }
+
+    def _append_log_unlocked(self, level: str, message: str) -> None:
+        self._logs.append({"time": _now_text(), "level": level, "message": message})
+        if len(self._logs) > 200:
+            del self._logs[:-200]
+
+
+class EvaluationRuntimeManager:
+    """Holds independent evaluation runtimes for multiple schemes."""
+
+    def __init__(self) -> None:
+        self._runtimes: dict[str, EvaluationRuntime] = {}
+        self._lock = threading.Lock()
+
+    def snapshot(self, scheme: str = "", filename: str = "") -> dict:
+        runtime = self._runtime_for_result(scheme, filename)
+        payload = runtime.snapshot()
+        payload["running_schemes"] = self.running_schemes()
+        return payload
+
+    def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
+        runtime = self._runtime_for_result(scheme, filename)
+        payload = runtime.apply(action, scheme=self._scheme_name(scheme), filename=filename)
+        payload["running_schemes"] = self.running_schemes()
+        return payload
+
+    def running_schemes(self) -> list[str]:
+        with self._lock:
+            runtimes = list(self._runtimes.items())
+        running = []
+        for key, runtime in runtimes:
+            if runtime.snapshot()["status"] == "运行中":
+                running.append(key.split("\0", 1)[0])
+        return sorted(set(running))
+
+    def _runtime_for_result(self, scheme: str = "", filename: str = "") -> EvaluationRuntime:
+        scheme_name = self._scheme_name(scheme)
+        result_filename = self._result_filename(scheme_name, filename)
+        key = f"{scheme_name}\0{result_filename}"
+        with self._lock:
+            if key not in self._runtimes:
+                runtime = EvaluationRuntime(scheme=scheme_name)
+                runtime.result_filename = result_filename
+                if result_filename:
+                    try:
+                        runtime.result_file = str(evaluation_result_path(scheme_name, result_filename))
+                    except ValueError:
+                        runtime.result_file = ""
+                self._runtimes[key] = runtime
+            return self._runtimes[key]
+
+    @staticmethod
+    def _result_filename(scheme: str, filename: str = "") -> str:
+        selected = str(filename or "").strip()
+        if selected:
+            return selected
+        try:
+            return selected_evaluation_result_filename(scheme)
+        except (FileNotFoundError, ValueError):
+            return ""
+
+    def _runtime_for_scheme(self, scheme: str = "") -> EvaluationRuntime:
+        runtime = self._runtime_for_result(scheme)
+        return runtime
 
     @staticmethod
     def _scheme_name(scheme: str = "") -> str:
@@ -1382,6 +1661,7 @@ def _load_initial_simu_runtime() -> SimuRuntime:
 
 SIMU_RUNTIME = _load_initial_simu_runtime()
 OPTIMIZATION_RUNTIME = OptimizationRuntimeManager()
+EVALUATION_RUNTIME = EvaluationRuntimeManager()
 DATA_SOURCE = CsvDataSource()
 PLANNING_STORE = planning_store.PlanningStore()
 USER_STORE = UserStore()
@@ -1762,6 +2042,10 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
     query_params = parse_qs(query)
     if path.startswith("/api/planning/"):
         return handle_planning_api_path(path, "GET", b"")
+    if path == "/api/evaluation/status":
+        scheme = query_params.get("scheme", [""])[0]
+        filename = query_params.get("filename", [""])[0]
+        return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename))
     if path.startswith("/api/evaluation/"):
         return handle_evaluation_results_api_path(path, "GET", b"", query)
     if path == "/api/optimization/status":
@@ -1786,6 +2070,20 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
             state = OPTIMIZATION_RUNTIME.apply(action, scheme=scheme)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return _json_response({"ok": True, "state": state})
+    if path == "/api/evaluation/control":
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            action = str(payload.get("action", ""))
+            scheme = str(payload.get("scheme", ""))
+            filename = str(payload.get("filename", ""))
+            state = EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
+        except OptimizationStateError as exc:
+            return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
         return _json_response({"ok": True, "state": state})
@@ -1895,6 +2193,10 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 return
             if parsed.path.startswith("/api/planning/"):
                 status, headers, response_body = handle_planning_api_path(parsed.path, "POST", body)
+                self._send(status, headers, response_body)
+                return
+            if parsed.path == "/api/evaluation/control":
+                status, headers, response_body = handle_control_path(parsed.path, body)
                 self._send(status, headers, response_body)
                 return
             if parsed.path.startswith("/api/evaluation/"):
