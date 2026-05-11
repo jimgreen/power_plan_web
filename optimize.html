@@ -65,13 +65,23 @@
         <div id="optimizationLogResizeHandle" class="optimization-log-resize-handle" role="separator" tabindex="0" aria-label="调整运行日志高度" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="520" aria-valuenow="0"></div>
 
         <section class="optimization-log-card">
-          <div class="optimization-log-title">运行日志</div>
-          <div id="optimizationLogs" class="optimization-logs" aria-live="polite"></div>
+          <div class="log-view-tabs" role="tablist" aria-label="优化运行信息切换">
+            <button id="optimizationLogViewToggle" class="log-view-tab active" data-log-view="logs" type="button" aria-selected="true">运行日志</button>
+            <button id="optimizationCurveViewToggle" class="log-view-tab" data-log-view="curves" type="button" aria-selected="false">曲线展示</button>
+          </div>
+          <div id="optimizationLogPanel" class="log-view-panel active" data-log-view-panel="logs">
+            <div id="optimizationLogs" class="optimization-logs" aria-live="polite"></div>
+          </div>
+          <div id="optimizationCurvePanel" class="log-view-panel optimization-curve-panel" data-log-view-panel="curves" hidden>
+            <aside id="optimizationCurveNameList" class="optimization-curve-name-list" aria-label="8760曲线列表"></aside>
+            <div id="optimizationCurveChart" class="optimization-curve-chart"></div>
+          </div>
         </section>
       </section>
     </section>
   </main>
   <script src="assets/auth.js?v=20260510-auth"></script>
+  <script src="assets/result_curves.js?v=20260512-log-curves"></script>
   <script src="assets/optimize.js?v=20260510-energy-safety-tabs"></script>
 </body>
 </html>

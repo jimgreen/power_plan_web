@@ -14,6 +14,9 @@ const state = {
   greenChartSize: null,
   safetyChartSize: null,
   resultChartResizeObserver: null,
+  optimizationCurveViewer: null,
+  curveDataKey: "",
+  activeLogView: "logs",
 };
 
 const optimizationResizeMinHeights = {
@@ -60,6 +63,15 @@ const resultColumnResizeConfig = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  state.optimizationCurveViewer = window.ResultCurveViewer
+    ? window.ResultCurveViewer.create({
+        listId: "optimizationCurveNameList",
+        chartId: "optimizationCurveChart",
+        emptyText: "暂无8760曲线",
+        promptText: "请选择8760曲线",
+      })
+    : null;
+  bindLogViewTabs();
   bindResultTabs();
   bindOptimizationActions();
   lockOptimizationCommandHeight();
@@ -110,7 +122,31 @@ function renderSchemes() {
       renderCurrentScheme();
       state.optimization = defaultOptimizationState(state.currentScheme);
       renderOptimization(state.optimization);
+      state.curveDataKey = "";
+      state.optimizationCurveViewer?.clear("正在加载8760曲线");
       refreshOptimizationStatus(state.currentScheme).catch(showError);
+    });
+  });
+}
+
+function bindLogViewTabs() {
+  const buttons = Array.from(document.querySelectorAll("[data-log-view]"));
+  const panels = Array.from(document.querySelectorAll("[data-log-view-panel]"));
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = button.dataset.logView || "logs";
+      state.activeLogView = target;
+      buttons.forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-selected", String(active));
+      });
+      panels.forEach((panel) => {
+        const active = panel.dataset.logViewPanel === target;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (target === "curves") loadOptimizationCurveData().catch(showError);
     });
   });
 }
@@ -201,7 +237,29 @@ function renderOptimization(data) {
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
+  if (state.activeLogView === "curves") loadOptimizationCurveData().catch(showError);
   window.requestAnimationFrame(lockOptimizationCommandHeight);
+}
+
+async function loadOptimizationCurveData() {
+  if (!state.currentScheme || !state.optimizationCurveViewer) {
+    state.optimizationCurveViewer?.clear("请先选择方案");
+    return;
+  }
+  const runKey = state.optimization?.end_time || state.optimization?.status || "";
+  const key = `${state.currentScheme}/optimization_results.xlsx/${runKey}`;
+  if (state.curveDataKey === key) return;
+  state.curveDataKey = key;
+  state.optimizationCurveViewer.clear("正在加载8760曲线");
+  const items = [{ scheme: state.currentScheme, filename: "optimization_results.xlsx" }];
+  try {
+    const data = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
+    if (key !== state.curveDataKey) return;
+    state.optimizationCurveViewer.setData(data);
+  } catch (error) {
+    state.curveDataKey = "";
+    state.optimizationCurveViewer.clear(error.payload?.message || error.message || "暂无8760曲线");
+  }
 }
 
 function updateOptimizationActions(data = state.optimization || {}) {
@@ -619,6 +677,7 @@ function formatSignedDeviation(value) {
 
 function renderOptimizationLogs(logs) {
   const box = document.getElementById("optimizationLogs");
+  if (!box) return;
   if (!logs.length) {
     box.innerHTML = '<div class="log-line">暂无运行日志</div>';
     return;

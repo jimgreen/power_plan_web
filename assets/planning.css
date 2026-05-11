@@ -200,10 +200,13 @@ button:disabled {
 }
 
 .evaluation-workspace {
-  grid-template-columns: 260px minmax(300px, 360px) minmax(0, 1fr);
+  grid-template-columns: 260px minmax(280px, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr);
+  grid-template-rows: minmax(0, var(--evaluation-upper-height, 1fr)) 14px minmax(180px, var(--optimization-log-height, 28vh));
 }
 
 .evaluation-result-rail {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   min-height: 0;
   display: grid;
@@ -211,6 +214,35 @@ button:disabled {
   gap: 14px;
   padding: 18px;
   overflow: hidden;
+}
+
+.evaluation-workspace > .scheme-rail {
+  grid-column: 1;
+  grid-row: 1 / 4;
+}
+
+.evaluation-workspace > .evaluation-main-resize-handle {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.evaluation-workspace > .optimization-panel {
+  grid-column: 4;
+  grid-row: 1;
+}
+
+.evaluation-log-resize-handle {
+  grid-column: 2 / 5;
+  grid-row: 2;
+}
+
+.evaluation-log-region {
+  grid-column: 2 / 5;
+  grid-row: 3;
+}
+
+.evaluation-workspace > .optimization-panel {
+  grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr));
 }
 
 .evaluation-result-actions {
@@ -556,27 +588,44 @@ button:disabled {
 
 .comparison-curve-name-list {
   min-height: 0;
-  display: grid;
-  align-content: start;
-  gap: 8px;
   overflow: auto;
 }
 
-.comparison-curve-name-list button {
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  background: #edf4f2;
+.comparison-curve-name-list ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.comparison-curve-name-item {
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 6px 8px 6px 14px;
+  border-left: 3px solid transparent;
+  border-radius: 4px;
   color: #24413d;
   font-size: 14px;
   font-weight: 800;
-  text-align: left;
+  line-height: 1.25;
+  cursor: pointer;
+  user-select: none;
 }
 
-.comparison-curve-name-list button.active {
-  background: #0d5c59;
-  color: #fff;
+.comparison-curve-name-item.active {
+  border-left-color: #0d5c59;
+  background: rgba(13, 92, 89, 0.12);
+  color: #102b2a;
+}
+
+.comparison-curve-name-item:hover,
+.comparison-curve-name-item:focus-visible {
+  outline: none;
+  border-left-color: #0d5c59;
+  background: rgba(13, 92, 89, 0.12);
+  color: #102b2a;
 }
 
 .comparison-curve-chart {
@@ -694,30 +743,31 @@ button:disabled {
   top: 10px;
   right: 10px;
   z-index: 6;
-  max-width: min(560px, calc(100% - 92px));
+  max-width: min(640px, calc(100% - 92px));
   max-height: calc(100% - 62px);
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
   overflow: auto;
   pointer-events: none;
 }
 
 .comparison-curve-stats section {
-  min-width: 180px;
+  min-width: 0;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 8px;
-  padding: 8px 10px;
+  grid-template-columns: minmax(120px, 1fr) repeat(4, auto);
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
   border: 1px solid rgba(34, 64, 72, 0.13);
   border-radius: 10px;
   background: rgba(248, 251, 250, 0.88);
   backdrop-filter: blur(4px);
+  white-space: nowrap;
 }
 
 .comparison-curve-stats strong {
-  grid-column: 1 / -1;
   min-width: 0;
   color: #102b2a;
   font-size: 13px;
@@ -988,8 +1038,9 @@ button:disabled {
 .ratio-disk-card {
   flex: 1 1 0;
   min-height: 172px;
+  container-type: size;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
   align-items: center;
   justify-items: center;
   gap: 8px;
@@ -1006,6 +1057,7 @@ button:disabled {
 .ratio-disk-info {
   min-width: 0;
   width: 100%;
+  align-self: end;
   text-align: center;
 }
 
@@ -1016,7 +1068,8 @@ button:disabled {
 }
 
 .ratio-disk {
-  width: clamp(96px, 7.4vw, 116px);
+  width: min(82cqw, 42cqh, 190px);
+  max-width: calc(100% - 8px);
   aspect-ratio: 1;
   display: grid;
   place-items: center;
@@ -1029,7 +1082,7 @@ button:disabled {
 
 .ratio-disk span {
   color: #102b2a;
-  font-size: 21px;
+  font-size: clamp(18px, 13cqw, 34px);
   font-weight: 900;
 }
 
@@ -1458,7 +1511,18 @@ button:disabled {
   touch-action: none;
 }
 
-.result-column-resize-handle::before {
+.evaluation-main-resize-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 10px;
+  border-radius: 999px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.result-column-resize-handle::before,
+.evaluation-main-resize-handle::before {
   content: "";
   width: 4px;
   height: 96px;
@@ -1468,11 +1532,15 @@ button:disabled {
 
 .result-column-resize-handle:hover::before,
 .result-column-resize-handle.dragging::before,
-.result-column-resize-handle:focus-visible::before {
+.result-column-resize-handle:focus-visible::before,
+.evaluation-main-resize-handle:hover::before,
+.evaluation-main-resize-handle.dragging::before,
+.evaluation-main-resize-handle:focus-visible::before {
   background: #0d5c59;
 }
 
-.result-column-resize-handle:focus-visible {
+.result-column-resize-handle:focus-visible,
+.evaluation-main-resize-handle:focus-visible {
   outline: 2px solid #72b7ad;
   outline-offset: 2px;
 }
@@ -1518,12 +1586,53 @@ button:disabled {
   overflow: hidden;
 }
 
+.log-view-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  margin-bottom: 10px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
 .optimization-log-title {
   flex: 0 0 auto;
   margin-bottom: 10px;
   color: #102b2a;
   font-size: 18px;
   font-weight: 900;
+}
+
+.log-view-tab {
+  flex: 0 0 auto;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 13px;
+  border-radius: 999px;
+  background: #e7f2ef;
+  color: #0d5c59;
+  font-weight: 800;
+}
+
+.log-view-tab.active {
+  background: #0d5c59;
+  color: #fff;
+}
+
+.log-view-panel {
+  min-width: 0;
+  min-height: 0;
+  display: none;
+}
+
+.log-view-panel.active {
+  flex: 1 1 auto;
+  display: flex;
+  overflow: hidden;
 }
 
 .optimization-logs {
@@ -1537,6 +1646,52 @@ button:disabled {
   color: #dff4ef;
   font-family: Consolas, "Microsoft YaHei", monospace;
   font-size: 13px;
+}
+
+.optimization-curve-panel {
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.optimization-curve-panel.active {
+  display: grid;
+}
+
+.optimization-curve-name-list {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid #d7e4e0;
+  border-radius: 12px;
+  background: #f8fbfa;
+}
+
+.optimization-curve-name-list ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.optimization-curve-chart {
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.optimization-curve-chart svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: block;
 }
 
 .log-line {
@@ -2380,6 +2535,9 @@ td input[type="checkbox"] {
   .result-column-resize-handle {
     display: none;
   }
+  .evaluation-main-resize-handle {
+    display: none;
+  }
   .optimization-command-row {
     align-items: flex-start;
     flex-direction: column;
@@ -2469,9 +2627,9 @@ body {
 .tab,
 .scheme-actions button,
 .evaluation-result-action-buttons button,
+.log-view-tab,
 .comparison-add-tab,
 .comparison-tab-head button,
-.comparison-curve-name-list button,
 .pager button,
 .add-row,
 .month-tab,
@@ -2498,9 +2656,9 @@ body {
 .month-tab.active,
 .summary-tab.active,
 .result-tab.active,
+.log-view-tab.active,
 .tab.active,
 .comparison-tab.active,
-.comparison-curve-name-list button.active,
 .curve-button.active,
 .curve-button[aria-pressed="true"] {
   border-color: rgba(108, 238, 255, 0.94);
@@ -2518,9 +2676,9 @@ body {
 .tab:hover,
 .scheme-actions button:hover:not(:disabled),
 .evaluation-result-action-buttons button:hover:not(:disabled),
+.log-view-tab:hover,
 .comparison-add-tab:hover:not(:disabled),
 .comparison-tab-head button:hover,
-.comparison-curve-name-list button:hover,
 .pager button:hover:not(:disabled),
 .add-row:hover,
 .month-tab:hover,
@@ -2810,6 +2968,23 @@ td input::placeholder,
   color: var(--hud-muted);
 }
 
+.comparison-curve-name-item {
+  color: var(--hud-muted-strong);
+}
+
+.comparison-curve-name-item.active {
+  border-left-color: var(--hud-cyan);
+  background: rgba(33, 213, 255, 0.12);
+  color: #ffffff;
+}
+
+.comparison-curve-name-item:hover,
+.comparison-curve-name-item:focus-visible {
+  border-left-color: var(--hud-cyan);
+  background: rgba(33, 213, 255, 0.12);
+  color: #ffffff;
+}
+
 .chart-hover-line,
 .chart-cursor line,
 .comparison-chart-hover-line {
@@ -2893,6 +3068,7 @@ td input::placeholder,
 .optimization-result-resize-handle::before,
 .optimization-log-resize-handle::before,
 .result-column-resize-handle::before,
+.evaluation-main-resize-handle::before,
 .comparison-table-column-resize-handle::before,
 .comparison-table-curve-resize-handle::before {
   background: rgba(33, 213, 255, 0.52);
@@ -2911,6 +3087,9 @@ td input::placeholder,
 .result-column-resize-handle:hover::before,
 .result-column-resize-handle.dragging::before,
 .result-column-resize-handle:focus-visible::before,
+.evaluation-main-resize-handle:hover::before,
+.evaluation-main-resize-handle.dragging::before,
+.evaluation-main-resize-handle:focus-visible::before,
 .comparison-table-column-resize-handle:hover::before,
 .comparison-table-column-resize-handle.dragging::before,
 .comparison-table-column-resize-handle:focus-visible::before,
@@ -2924,6 +3103,22 @@ td input::placeholder,
   border-color: rgba(20, 190, 255, 0.34);
   background: rgba(1, 12, 30, 0.92);
   color: #dff7ff;
+}
+
+.optimization-curve-name-list {
+  border-color: rgba(20, 190, 255, 0.34);
+  background: rgba(1, 12, 30, 0.82);
+}
+
+.optimization-curve-chart svg {
+  background:
+    linear-gradient(rgba(33, 213, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(33, 213, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(2, 16, 42, 0.96), rgba(5, 34, 70, 0.82));
+  background-size: 36px 36px, 36px 36px, 100% 100%;
+  border: 1px solid rgba(20, 190, 255, 0.34);
+  border-radius: 10px;
+  box-shadow: inset 0 0 24px rgba(24, 175, 255, 0.18);
 }
 
 .log-line {
@@ -2980,12 +3175,12 @@ body {
 .optimization-actions button,
 .tab,
 .result-tab,
+.log-view-tab,
 .summary-tab,
 .month-tab,
 .curve-button,
 .comparison-add-tab,
 .comparison-tab-head button,
-.comparison-curve-name-list button,
 .weather-import-bar button {
   font-size: 16px;
 }

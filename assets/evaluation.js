@@ -17,6 +17,10 @@ const state = {
   greenChartSize: null,
   safetyChartSize: null,
   resultChartResizeObserver: null,
+  evaluationCurveViewer: null,
+  evaluationResultRailWidth: null,
+  curveDataKey: "",
+  activeLogView: "logs",
 };
 
 const optimizationResizeMinHeights = {
@@ -63,15 +67,26 @@ const resultColumnResizeConfig = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  state.evaluationCurveViewer = window.ResultCurveViewer
+    ? window.ResultCurveViewer.create({
+        listId: "evaluationCurveNameList",
+        chartId: "evaluationCurveChart",
+        emptyText: "暂无8760曲线",
+        promptText: "请选择8760曲线",
+      })
+    : null;
+  bindLogViewTabs();
   bindResultTabs();
   bindOptimizationActions();
   bindEvaluationResultActions();
   lockOptimizationCommandHeight();
+  bindEvaluationMainResizeHandle();
   bindOptimizationResultResizeHandle();
   bindOptimizationLogResizeHandle();
   window.addEventListener("resize", () => {
     state.optimizationCommandHeight = null;
     lockOptimizationCommandHeight();
+    clampEvaluationMainWidth();
   });
   loadSchemes()
     .then(() => loadEvaluationResults())
@@ -99,6 +114,7 @@ async function loadSchemes() {
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
   renderSchemes();
   renderCurrentScheme();
+  renderEvaluationCurrentScheme();
 }
 
 function renderSchemes() {
@@ -115,11 +131,14 @@ function renderSchemes() {
       state.currentScheme = button.dataset.name || "";
       renderSchemes();
       renderCurrentScheme();
+      renderEvaluationCurrentScheme();
       state.resultFiles = [];
       state.selectedResultFile = "";
       state.planningResultRows = [];
       state.optimization = defaultOptimizationState(state.currentScheme);
       renderOptimization(state.optimization);
+      state.curveDataKey = "";
+      state.evaluationCurveViewer?.clear("正在加载8760曲线");
       loadEvaluationResults()
         .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
         .catch(showError);
@@ -133,6 +152,12 @@ function renderCurrentScheme() {
   window.requestAnimationFrame(lockOptimizationCommandHeight);
 }
 
+function renderEvaluationCurrentScheme() {
+  const current = document.getElementById("evaluationCurrentScheme");
+  if (!current) return;
+  current.textContent = `当前方案: ${state.currentScheme || "未选择方案"}`;
+}
+
 function bindOptimizationActions() {
   document.getElementById("startEvaluation").addEventListener("click", () => controlOptimization("start"));
   document.getElementById("stopEvaluation").addEventListener("click", () => controlOptimization("stop"));
@@ -141,6 +166,8 @@ function bindOptimizationActions() {
 function bindEvaluationResultActions() {
   document.getElementById("evaluationResultSelect").addEventListener("change", (event) => {
     state.selectedResultFile = event.target.value || "";
+    state.curveDataKey = "";
+    state.evaluationCurveViewer?.clear("正在加载8760曲线");
     updateEvaluationResultActions();
     loadEvaluationResults(state.selectedResultFile)
       .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
@@ -158,6 +185,8 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
     state.planningResultRows = [];
     renderEvaluationResults();
     renderEvaluationPlanningResultTable();
+    state.curveDataKey = "";
+    state.evaluationCurveViewer?.clear("请先选择方案");
     return;
   }
   const selectedParam = selected ? `&filename=${encodeURIComponent(selected)}` : "";
@@ -168,6 +197,29 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
   renderEvaluationPlanningResultTable();
+  if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
+}
+
+function bindLogViewTabs() {
+  const buttons = Array.from(document.querySelectorAll("[data-log-view]"));
+  const panels = Array.from(document.querySelectorAll("[data-log-view-panel]"));
+  buttons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = button.dataset.logView || "logs";
+      state.activeLogView = target;
+      buttons.forEach((item) => {
+        const active = item === button;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-selected", String(active));
+      });
+      panels.forEach((panel) => {
+        const active = panel.dataset.logViewPanel === target;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (target === "curves") loadEvaluationCurveData().catch(showError);
+    });
+  });
 }
 
 function renderEvaluationResults() {
@@ -296,8 +348,10 @@ async function manageEvaluationResult(action, extra = {}) {
     state.resultFiles = data.results || [];
     state.selectedResultFile = data.selected || state.selectedResultFile;
     state.planningResultRows = data.planning_result_rows || state.planningResultRows || [];
+    state.curveDataKey = "";
     renderEvaluationResults();
     renderEvaluationPlanningResultTable();
+    if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
     renderEvaluationMessage(action, data.selected);
   } catch (error) {
     const data = error.payload || {};
@@ -400,7 +454,29 @@ function renderOptimization(data) {
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
+  if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
   window.requestAnimationFrame(lockOptimizationCommandHeight);
+}
+
+async function loadEvaluationCurveData() {
+  if (!state.currentScheme || !state.selectedResultFile || !state.evaluationCurveViewer) {
+    state.evaluationCurveViewer?.clear("请先选择方案和结果");
+    return;
+  }
+  const runKey = state.optimization?.end_time || state.optimization?.status || "";
+  const key = `${state.currentScheme}/${state.selectedResultFile}/${runKey}`;
+  if (state.curveDataKey === key) return;
+  state.curveDataKey = key;
+  state.evaluationCurveViewer.clear("正在加载8760曲线");
+  const items = [{ scheme: state.currentScheme, filename: state.selectedResultFile }];
+  try {
+    const data = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
+    if (key !== state.curveDataKey) return;
+    state.evaluationCurveViewer.setData(data);
+  } catch (error) {
+    state.curveDataKey = "";
+    state.evaluationCurveViewer.clear(error.payload?.message || error.message || "暂无8760曲线");
+  }
 }
 
 function updateOptimizationActions(data = state.optimization || {}) {
@@ -833,6 +909,7 @@ function formatSignedDeviation(value) {
 
 function renderOptimizationLogs(logs) {
   const box = document.getElementById("evaluationLogs");
+  if (!box) return;
   if (!logs.length) {
     box.innerHTML = '<div class="log-line">暂无评估日志</div>';
     return;
@@ -1069,6 +1146,96 @@ function bindResultColumnResizeHandles() {
   });
 }
 
+function bindEvaluationMainResizeHandle() {
+  const handle = document.getElementById("evaluationMainResizeHandle");
+  if (!handle) return;
+
+  const applyWidth = (width) => setEvaluationResultRailWidth(width, handle);
+  const currentWidth = () => currentEvaluationResultRailWidth();
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = currentWidth();
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      applyWidth(startWidth + moveEvent.clientX - startX);
+    };
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const keySteps = {
+      ArrowLeft: -24,
+      ArrowRight: 24,
+      PageDown: -96,
+      PageUp: 96,
+    };
+    if (event.key in keySteps) {
+      event.preventDefault();
+      applyWidth(currentWidth() + keySteps[event.key]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyWidth(evaluationMainWidthBounds().min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyWidth(evaluationMainWidthBounds().max);
+    }
+  });
+
+  applyWidth(currentWidth());
+}
+
+function setEvaluationResultRailWidth(width, handle = document.getElementById("evaluationMainResizeHandle")) {
+  const bounds = evaluationMainWidthBounds();
+  const numericWidth = Number(width);
+  const safeWidth = Math.min(Math.max(Number.isFinite(numericWidth) ? numericWidth : bounds.min, bounds.min), bounds.max);
+  const roundedWidth = Math.round(safeWidth);
+  state.evaluationResultRailWidth = roundedWidth;
+  document.documentElement.style.setProperty("--evaluation-result-rail-width", `${roundedWidth}px`);
+  handle?.setAttribute("aria-valuenow", String(roundedWidth));
+  handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+}
+
+function currentEvaluationResultRailWidth() {
+  const rail = document.querySelector(".evaluation-result-rail");
+  return state.evaluationResultRailWidth || rail?.getBoundingClientRect().width || 360;
+}
+
+function clampEvaluationMainWidth() {
+  if (!state.evaluationResultRailWidth) return;
+  setEvaluationResultRailWidth(state.evaluationResultRailWidth);
+}
+
+function evaluationMainWidthBounds() {
+  const workspace = document.querySelector(".evaluation-workspace");
+  if (!workspace) return { min: 280, max: 620 };
+  const schemeRail = workspace.querySelector(".scheme-rail");
+  const handle = document.getElementById("evaluationMainResizeHandle");
+  const style = window.getComputedStyle(workspace);
+  const gap = cssNumber(style.columnGap || style.gap);
+  const schemeWidth = schemeRail?.getBoundingClientRect().width || 260;
+  const handleWidth = handle?.getBoundingClientRect().width || 10;
+  const minRightWidth = 420;
+  const max = workspace.clientWidth - schemeWidth - handleWidth - minRightWidth - gap * 3;
+  return {
+    min: 280,
+    max: Math.max(280, Math.min(680, max)),
+  };
+}
+
 function setResultColumnTableWidth(kind, width, handle) {
   const config = resultColumnResizeConfig[kind];
   if (!config) return;
@@ -1158,9 +1325,9 @@ function bindOptimizationLogResizeHandle() {
 
   const applyHeight = (height) => {
     const safeHeight = clampOptimizationLogHeight(height);
-    const pairedResultHeight = Math.max(optimizationResizeMinHeights.result, optimizationResizableContentHeight() - safeHeight);
     setOptimizationLogHeight(safeHeight, handle);
-    setOptimizationResultHeight(pairedResultHeight);
+    setEvaluationUpperHeight(Math.max(optimizationResizeMinHeights.result, evaluationWorkspaceContentHeight() - safeHeight));
+    setOptimizationResultHeight(Math.max(optimizationResizeMinHeights.result, optimizationMainContentHeight() - currentOptimizationCommandHeight()));
   };
 
   handle.addEventListener("pointerdown", (event) => {
@@ -1225,6 +1392,10 @@ function setOptimizationLogHeight(height, handle = document.getElementById("opti
   handle?.setAttribute("aria-valuenow", String(roundedHeight));
 }
 
+function setEvaluationUpperHeight(height) {
+  document.documentElement.style.setProperty("--evaluation-upper-height", `${Math.round(height)}px`);
+}
+
 function setOptimizationCommandHeight(height) {
   const roundedHeight = Math.round(height);
   state.optimizationCommandHeight = roundedHeight;
@@ -1251,7 +1422,7 @@ function optimizationResultHeightBounds() {
 }
 
 function optimizationLogHeightBounds() {
-  const availableHeight = optimizationResizableContentHeight();
+  const availableHeight = evaluationWorkspaceContentHeight();
   const maxLogHeight = availableHeight - optimizationResizeMinHeights.result;
   return {
     min: optimizationResizeMinHeights.log,
@@ -1273,33 +1444,51 @@ function optimizationResizableContentHeight() {
   const commandHeight = state.optimizationCommandHeight || lockOptimizationCommandHeight();
   return Math.max(
     optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
-    optimizationCardsContentHeight() - commandHeight,
+    optimizationMainContentHeight() - commandHeight,
   );
 }
 
 function optimizationTopMiddleContentHeight() {
-  const currentLogHeight = currentOptimizationLogHeight();
   return Math.max(
     optimizationResizeMinHeights.command + optimizationResizeMinHeights.result,
-    optimizationCardsContentHeight() - currentLogHeight,
+    optimizationMainContentHeight(),
   );
 }
 
 function optimizationCardsContentHeight() {
+  return optimizationMainContentHeight();
+}
+
+function optimizationMainContentHeight() {
   const panel = document.querySelector(".optimization-panel");
   if (!panel) return Math.max(optimizationResizeMinHeights.command + optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
   const style = window.getComputedStyle(panel);
   const paddingY = cssNumber(style.paddingTop) + cssNumber(style.paddingBottom);
   const rowGap = cssNumber(style.rowGap || style.gap);
   const resultHandle = document.getElementById("optimizationResultResizeHandle");
-  const logHandle = document.getElementById("optimizationLogResizeHandle");
-  const handleHeights =
-    (resultHandle?.getBoundingClientRect().height || 14) +
-    (logHandle?.getBoundingClientRect().height || 14);
+  const handleHeights = resultHandle?.getBoundingClientRect().height || 14;
   return Math.max(
-    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
-    panel.clientHeight - paddingY - rowGap * 4 - handleHeights,
+    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result,
+    panel.clientHeight - paddingY - rowGap * 2 - handleHeights,
   );
+}
+
+function evaluationWorkspaceContentHeight() {
+  const workspace = document.querySelector(".evaluation-workspace");
+  if (!workspace) return Math.max(optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
+  const style = window.getComputedStyle(workspace);
+  const paddingY = cssNumber(style.paddingTop) + cssNumber(style.paddingBottom);
+  const rowGap = cssNumber(style.rowGap || style.gap);
+  const logHandle = document.getElementById("optimizationLogResizeHandle");
+  const handleHeight = logHandle?.getBoundingClientRect().height || 14;
+  return Math.max(
+    optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
+    workspace.clientHeight - paddingY - rowGap * 2 - handleHeight,
+  );
+}
+
+function currentOptimizationCommandHeight() {
+  return state.optimizationCommandHeight || lockOptimizationCommandHeight();
 }
 
 function currentOptimizationLogHeight() {

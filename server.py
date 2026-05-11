@@ -479,6 +479,7 @@ class OptimizationRuntime:
             storage_energy_kwh,
             storage_charge_energy_kwh,
         )
+        green_hourly = self._green_hourly_curve_unlocked(green_daily)
         safety_daily = self._safety_daily_frequency_curve_unlocked()
         highest_frequency = max(point["frequency_max"] for point in safety_daily)
         lowest_frequency = min(point["frequency_min"] for point in safety_daily)
@@ -587,6 +588,7 @@ class OptimizationRuntime:
                     {"label": "总体", "value": green_ratio},
                 ],
                 "green_daily": green_daily,
+                "green_hourly": green_hourly,
                 "safety": [
                     {"label": "备用", "value": reserve_margin},
                     {"label": "频率", "value": round(frequency_margin * 10, 2)},
@@ -671,6 +673,46 @@ class OptimizationRuntime:
             )
         return points
 
+    def _green_hourly_curve_unlocked(self, daily_points: list[dict[str, float | int]]) -> list[dict[str, float | int | str]]:
+        rows: list[dict[str, float | int | str]] = []
+        hour_index = 1
+        for day_point in daily_points:
+            day = int(day_point.get("day") or 1)
+            for hour in range(24):
+                load_shape = 0.85 + 0.28 * math.sin((hour - 7) / 24 * 2 * math.pi) + 0.12 * math.sin((hour - 18) / 24 * 4 * math.pi)
+                wind_shape = 0.9 + 0.18 * math.sin((hour + 3) / 24 * 2 * math.pi)
+                daylight = max(0.0, math.sin((hour - 6) / 12 * math.pi))
+                storage_discharge_shape = 1.0 + 0.35 * math.sin((hour - 17) / 24 * 2 * math.pi)
+                storage_charge_shape = 0.35 + daylight
+
+                load = max(0.0, float(day_point.get("load_energy", 0.0)) * load_shape / 24)
+                wind_power = max(0.0, float(day_point.get("wind_energy", 0.0)) * wind_shape / 24)
+                pv_power = max(0.0, float(day_point.get("pv_energy", 0.0)) * daylight / 7.6)
+                storage_discharge = max(0.0, float(day_point.get("storage_discharge_energy", 0.0)) * storage_discharge_shape / 24)
+                storage_charge = max(0.0, float(day_point.get("storage_charge_energy", 0.0)) * storage_charge_shape / 24)
+                diesel_power = max(0.0, float(day_point.get("diesel_energy", 0.0)) * (1.0 + 0.16 * math.sin((hour + 9) / 24 * 2 * math.pi)) / 24)
+                renewable_surplus = max(0.0, wind_power + pv_power + storage_discharge + diesel_power - load - storage_charge)
+                curtailed_power = min(renewable_surplus, max(0.0, float(day_point.get("wind_energy", 0.0)) + float(day_point.get("pv_energy", 0.0))) / 24)
+                unmet_load = max(0.0, load + storage_charge - wind_power - pv_power - storage_discharge - diesel_power)
+                storage_soc = max(0.0, min(100.0, 52.0 + 30.0 * math.sin((day + hour / 24) / 365 * 2 * math.pi) + 12.0 * math.sin((hour - 5) / 24 * 2 * math.pi)))
+                rows.append(
+                    {
+                        "hour_index": hour_index,
+                        "datetime": f"D{day:03d} H{hour + 1:02d}",
+                        "load": round(load, 4),
+                        "wind_power": round(wind_power, 4),
+                        "pv_power": round(pv_power, 4),
+                        "storage_charge": round(storage_charge, 4),
+                        "storage_discharge": round(storage_discharge, 4),
+                        "diesel_power": round(diesel_power, 4),
+                        "curtailed_power": round(curtailed_power, 4),
+                        "unmet_load": round(unmet_load, 4),
+                        "storage_soc": round(storage_soc, 4),
+                    }
+                )
+                hour_index += 1
+        return rows[:8760]
+
     def _append_log_unlocked(self, level: str, message: str) -> None:
         self._logs.append({"time": _now_text(), "level": level, "message": message})
         if len(self._logs) > 120:
@@ -715,37 +757,6 @@ def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict])
         raise ValueError("默认结果文件不允许修改")
     result_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = build_optimization_results_workbook(payload)
-    append_rows_sheet(
-        workbook,
-        "调度结果",
-        dispatch_rows,
-        [
-            "hour_index",
-            "datetime",
-            "load",
-            "wind_power",
-            "pv_power",
-            "storage_charge",
-            "storage_discharge",
-            "diesel_power",
-            "curtailed_power",
-            "unmet_load",
-            "storage_soc",
-        ],
-        {
-            "hour_index": "小时",
-            "datetime": "时间",
-            "load": "负荷",
-            "wind_power": "风电出力",
-            "pv_power": "光伏出力",
-            "storage_charge": "储能充电",
-            "storage_discharge": "储能放电",
-            "diesel_power": "柴发出力",
-            "curtailed_power": "弃电",
-            "unmet_load": "未供负荷",
-            "storage_soc": "储能SOC",
-        },
-    )
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
     workbook.save(tmp_path)
     tmp_path.replace(result_path)
@@ -785,8 +796,43 @@ def build_optimization_results_workbook(payload: dict) -> Workbook:
     append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
     append_rows_sheet(workbook, "安全评估", results.get("safety_table", []))
     append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
+    append_dispatch_rows_sheet(workbook, curves.get("green_hourly", []))
     append_rows_sheet(workbook, "运行日志", logs, ["time", "level", "message"], {"time": "时间", "level": "级别", "message": "消息"})
     return workbook
+
+
+def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) -> None:
+    append_rows_sheet(
+        workbook,
+        "调度结果",
+        dispatch_rows,
+        [
+            "hour_index",
+            "datetime",
+            "load",
+            "wind_power",
+            "pv_power",
+            "storage_charge",
+            "storage_discharge",
+            "diesel_power",
+            "curtailed_power",
+            "unmet_load",
+            "storage_soc",
+        ],
+        {
+            "hour_index": "小时",
+            "datetime": "时间",
+            "load": "负荷",
+            "wind_power": "风电出力",
+            "pv_power": "光伏出力",
+            "storage_charge": "储能充电",
+            "storage_discharge": "储能放电",
+            "diesel_power": "柴发出力",
+            "curtailed_power": "弃电",
+            "unmet_load": "未供负荷",
+            "storage_soc": "储能SOC",
+        },
+    )
 
 
 def append_rows_sheet(

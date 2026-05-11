@@ -6,7 +6,7 @@ const state = {
   activeTabId: "tab-1",
   draggingTabId: "",
   comparison: { items: [], tables: { capacity: [], energy: [], safety: [] }, curves: [], series: {} },
-  selectedCurve: "",
+  selectedCurves: [],
   tableHeight: null,
   tableColumnWidths: [1, 1, 1],
   hoverIndex: null,
@@ -80,7 +80,8 @@ function renderComparisonTabs() {
   document.getElementById("addComparisonTab").disabled = state.tabs.length >= MAX_TABS;
 
   container.querySelectorAll("[data-comparison-tab]").forEach((element) => {
-    element.addEventListener("click", () => {
+    element.addEventListener("click", (event) => {
+      if (event.target.closest("select")) return;
       state.activeTabId = element.dataset.comparisonTab || state.activeTabId;
       renderComparisonTabs();
     });
@@ -96,6 +97,11 @@ function renderComparisonTabs() {
       event.preventDefault();
       moveComparisonTab(state.draggingTabId, element.dataset.comparisonTab || "");
     });
+  });
+
+  container.querySelectorAll(".comparison-tab-selectors select").forEach((select) => {
+    select.addEventListener("click", (event) => event.stopPropagation());
+    select.addEventListener("mousedown", (event) => event.stopPropagation());
   });
 
   container.querySelectorAll("[data-close-comparison-tab]").forEach((button) => {
@@ -182,8 +188,9 @@ async function refreshComparisonData() {
   } else {
     state.comparison = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
   }
-  if (!state.selectedCurve || !state.comparison.curves.includes(state.selectedCurve)) {
-    state.selectedCurve = state.comparison.curves[0] || "";
+  state.selectedCurves = state.selectedCurves.filter((name) => state.comparison.curves.includes(name));
+  if (!state.selectedCurves.length && state.comparison.curves.length) {
+    state.selectedCurves = [state.comparison.curves[0]];
   }
   state.hoverIndex = null;
   renderComparisonTables();
@@ -216,21 +223,55 @@ function renderCurveNameList() {
     return;
   }
   target.innerHTML = state.comparison.curves
-    .map((name) => `<button type="button" class="${name === state.selectedCurve ? "active" : ""}" data-curve-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`)
+    .map(
+      (name) =>
+        `<li class="comparison-curve-name-item${state.selectedCurves.includes(name) ? " active" : ""}" data-curve-name="${escapeHtml(name)}" role="option" aria-selected="${state.selectedCurves.includes(name) ? "true" : "false"}" tabindex="0">${escapeHtml(name)}</li>`
+    )
     .join("");
+  target.innerHTML = `<ul aria-multiselectable="true">${target.innerHTML}</ul>`;
   target.querySelectorAll("[data-curve-name]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.selectedCurve = button.dataset.curveName || "";
-      renderCurveNameList();
-      renderComparisonCurveChart();
+      toggleSelectedCurve(button.dataset.curveName || "");
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        toggleSelectedCurve(button.dataset.curveName || "");
+      }
     });
   });
 }
 
+function toggleSelectedCurve(name) {
+  if (!name) return;
+  if (state.selectedCurves.includes(name)) {
+    state.selectedCurves = state.selectedCurves.filter((item) => item !== name);
+  } else {
+    state.selectedCurves = [...state.selectedCurves, name];
+  }
+  renderCurveNameList();
+  renderComparisonCurveChart();
+}
+
+function selectedCurveNames() {
+  return state.selectedCurves.filter((name) => state.comparison.curves.includes(name));
+}
+
+function selectedCurveSeries() {
+  return selectedCurveNames().flatMap((curveName) =>
+    (state.comparison.series?.[curveName] || []).map((item) => ({
+      ...item,
+      curveName,
+      displayLabel: `${curveName} / ${item.label}`,
+    }))
+  );
+}
+
 function renderComparisonCurveChart() {
   const target = document.getElementById("comparisonCurveChart");
-  const series = state.comparison.series?.[state.selectedCurve] || [];
-  if (!state.selectedCurve || !series.length) {
+  const curveNames = selectedCurveNames();
+  const series = selectedCurveSeries();
+  if (!curveNames.length || !series.length) {
     target.innerHTML = '<div class="empty-summary">请选择8760曲线</div>';
     return;
   }
@@ -246,7 +287,7 @@ function renderComparisonCurveChart() {
   const maxPoints = Math.max(...series.map((item) => item.points.length), 1);
   const xAt = (index, total) => margin.left + (total <= 1 ? plotWidth / 2 : (index / (total - 1)) * plotWidth);
   const yAt = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
-  const colors = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90"];
+  const colors = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90", "#b38cff", "#5ee7df", "#ff9f43", "#ff6bcb"];
   const yTicks = [0, 0.5, 1].map((ratio) => ({
     ratio,
     value: minY + ySpan * ratio,
@@ -254,10 +295,10 @@ function renderComparisonCurveChart() {
   }));
   target.innerHTML = `
     <div class="comparison-curve-legend">${series
-      .map((item, index) => `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(item.label)}</span>`)
+      .map((item, index) => `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(item.displayLabel)}</span>`)
       .join("")}</div>
     <div class="comparison-chart-frame" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
-      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(state.selectedCurve)}曲线对比">
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(curveNames.join('、'))}曲线对比">
         <line class="comparison-chart-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
         <line class="comparison-chart-axis" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
         ${yTicks.map((tick) => renderYAxisGrid(tick.y, margin.left, width - margin.right)).join("")}
@@ -303,7 +344,7 @@ function renderComparisonCurveStats(series) {
     const max = values.length ? Math.max(...values) : 0;
     const sum = values.reduce((total, value) => total + value, 0);
     const average = values.length ? sum / values.length : 0;
-    return `<section><strong>${escapeHtml(item.label)}</strong><span>最小 ${escapeHtml(formatAxis(min))}</span><span>最大 ${escapeHtml(formatAxis(max))}</span><span>平均 ${escapeHtml(formatAxis(average))}</span><span>合计 ${escapeHtml(formatAxis(sum))}</span></section>`;
+    return `<section><strong>${escapeHtml(item.displayLabel)}</strong><span>最小 ${escapeHtml(formatAxis(min))}</span><span>最大 ${escapeHtml(formatAxis(max))}</span><span>平均 ${escapeHtml(formatAxis(average))}</span><span>合计 ${escapeHtml(formatAxis(sum))}</span></section>`;
   }).join("")}</div>`;
 }
 
@@ -356,10 +397,10 @@ function renderComparisonChartHover(chart, event, pointIndex) {
   const rows = chart.series.map((item) => {
     const index = Math.min(Math.max(pointIndex, 0), item.points.length - 1);
     const point = item.points[index] || {};
-    return { label: item.label, x: point.x ?? index + 1, y: point.y };
+    return { label: item.displayLabel || item.label, x: point.x ?? index + 1, y: point.y };
   });
   tooltip.innerHTML = `
-    <h3>${escapeHtml(state.selectedCurve)} / ${escapeHtml(rows[0]?.x ?? "")}</h3>
+    <h3>${escapeHtml(rows[0]?.x ?? "")}</h3>
     ${rows.map((row) => `<div><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(formatAxis(row.y))}</strong></div>`).join("")}`;
   tooltip.hidden = false;
   const bounds = chartTarget.getBoundingClientRect();

@@ -32,7 +32,7 @@
       </aside>
 
       <aside class="evaluation-result-rail">
-        <div class="scheme-list-title">结果文件</div>
+        <div id="evaluationCurrentScheme" class="scheme-list-title">当前方案: 未选择方案</div>
         <div class="evaluation-result-actions" aria-label="结果文件管理">
           <select id="evaluationResultSelect" aria-label="结果文件列表"></select>
           <div class="evaluation-result-action-buttons">
@@ -46,6 +46,8 @@
           <div id="evaluationPlanningResultTable" class="data-table evaluation-planning-result-table"></div>
         </section>
       </aside>
+
+      <div id="evaluationMainResizeHandle" class="evaluation-main-resize-handle" role="separator" tabindex="0" aria-label="调整结果显示和评估面板宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="620" aria-valuenow="360"></div>
 
       <section class="optimization-panel">
         <section class="optimization-command-card">
@@ -78,16 +80,27 @@
           <div id="safetyResult" class="result-panel" data-result-panel="safety" role="tabpanel" hidden></div>
         </section>
 
-        <div id="optimizationLogResizeHandle" class="optimization-log-resize-handle" role="separator" tabindex="0" aria-label="调整评估日志高度" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="520" aria-valuenow="0"></div>
+      </section>
 
-        <section class="optimization-log-card">
-          <div class="optimization-log-title">评估日志</div>
+      <div id="optimizationLogResizeHandle" class="optimization-log-resize-handle evaluation-log-resize-handle" role="separator" tabindex="0" aria-label="调整评估日志高度" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="520" aria-valuenow="0"></div>
+
+      <section class="evaluation-log-region optimization-log-card">
+        <div class="log-view-tabs" role="tablist" aria-label="评估运行信息切换">
+          <button id="evaluationLogViewToggle" class="log-view-tab active" data-log-view="logs" type="button" aria-selected="true">评估日志</button>
+          <button id="evaluationCurveViewToggle" class="log-view-tab" data-log-view="curves" type="button" aria-selected="false">曲线展示</button>
+        </div>
+        <div id="evaluationLogPanel" class="log-view-panel active" data-log-view-panel="logs">
           <div id="evaluationLogs" class="optimization-logs" aria-live="polite"></div>
-        </section>
+        </div>
+        <div id="evaluationCurvePanel" class="log-view-panel optimization-curve-panel" data-log-view-panel="curves" hidden>
+          <aside id="evaluationCurveNameList" class="optimization-curve-name-list" aria-label="8760曲线列表"></aside>
+          <div id="evaluationCurveChart" class="optimization-curve-chart"></div>
+        </div>
       </section>
     </section>
   </main>
   <script src="assets/auth.js?v=20260510-auth"></script>
+  <script src="assets/result_curves.js?v=20260512-log-curves"></script>
   <script src="assets/evaluation.js?v=20260511-evaluation-base"></script>
 </body>
 </html>
