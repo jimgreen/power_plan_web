@@ -29,7 +29,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, unquote, urlparse
 from urllib.request import urlopen
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -48,6 +48,8 @@ OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 OPTIMIZATION_RESULT_WORKBOOK_NAME = "optimization_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
+PLANNING_RESULT_SHEET_NAME = "规划结果"
+PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
 AMAP_WEB_SERVICE_KEY = os.environ.get("POWER_PLAN_AMAP_KEY") or os.environ.get("AMAP_WEB_SERVICE_KEY") or os.environ.get("AMAP_KEY")
 NASA_POWER_PARAMETERS = {
     "wind_speed": "WS10M",
@@ -807,6 +809,15 @@ def list_evaluation_result_files(scheme: str) -> list[dict]:
     return files
 
 
+def selected_evaluation_result_filename(scheme: str, filename: str = "") -> str:
+    files = list_evaluation_result_files(scheme)
+    names = [item["name"] for item in files]
+    selected = str(filename or "").strip()
+    if selected and selected in names:
+        return selected
+    return names[0] if names else ""
+
+
 def evaluation_result_path(scheme: str, filename: str) -> Path:
     name = str(filename or "").strip()
     if not RESULT_WORKBOOK_RE.fullmatch(name):
@@ -816,6 +827,86 @@ def evaluation_result_path(scheme: str, filename: str) -> Path:
     if folder not in path.parents or path.parent != folder:
         raise ValueError("结果文件路径越界")
     return path
+
+
+def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dict]:
+    if not filename:
+        return []
+    result_path = evaluation_result_path(scheme, filename)
+    if not result_path.exists():
+        return []
+    workbook = load_workbook(result_path, read_only=True, data_only=True)
+    try:
+        if PLANNING_RESULT_SHEET_NAME not in workbook.sheetnames:
+            return []
+        sheet = workbook[PLANNING_RESULT_SHEET_NAME]
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return []
+        headers = [str(value or "").strip() for value in rows[0]]
+        result_rows = []
+        for row in rows[1:]:
+            item = {}
+            for index, header in enumerate(headers):
+                if header:
+                    item[header] = row[index] if index < len(row) else ""
+            if any(value not in (None, "") for value in item.values()):
+                result_rows.append(item)
+        return result_rows
+    finally:
+        workbook.close()
+
+
+def write_evaluation_planning_counts(scheme: str, filename: str, planning_rows: list[dict]) -> list[dict]:
+    result_path = evaluation_result_path(scheme, filename)
+    if not result_path.exists():
+        raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+
+    counts_by_device: dict[str, object] = {}
+    for row in planning_rows if isinstance(planning_rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        device_type = str(row.get("设备类型", "")).strip()
+        if not device_type or "设计台数" not in row:
+            continue
+        counts_by_device[device_type] = row.get("设计台数")
+
+    workbook = load_workbook(result_path)
+    try:
+        if PLANNING_RESULT_SHEET_NAME not in workbook.sheetnames:
+            sheet = workbook.create_sheet(PLANNING_RESULT_SHEET_NAME)
+            sheet.append(PLANNING_RESULT_HEADERS)
+        else:
+            sheet = workbook[PLANNING_RESULT_SHEET_NAME]
+            if sheet.max_row < 1:
+                sheet.append(PLANNING_RESULT_HEADERS)
+
+        headers = [str(cell.value or "").strip() for cell in sheet[1]]
+        if "设备类型" not in headers or "设计台数" not in headers:
+            raise ValueError("规划结果工作表缺少设备类型或设计台数列")
+        device_column = headers.index("设备类型") + 1
+        count_column = headers.index("设计台数") + 1
+
+        for row_index in range(2, sheet.max_row + 1):
+            device_type = str(sheet.cell(row=row_index, column=device_column).value or "").strip()
+            if device_type in counts_by_device:
+                sheet.cell(row=row_index, column=count_column).value = normalize_planning_count(counts_by_device[device_type])
+
+        tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+        workbook.save(tmp_path)
+        tmp_path.replace(result_path)
+    finally:
+        workbook.close()
+    return read_evaluation_planning_result_rows(scheme, filename)
+
+
+def normalize_planning_count(value):
+    if value in (None, ""):
+        return ""
+    text = str(value).strip()
+    if not re.fullmatch(r"\d+", text):
+        raise ValueError("设计台数必须为非负整数")
+    return int(text)
 
 
 def evaluation_result_filename_from_name(name: str) -> str:
@@ -848,7 +939,15 @@ def handle_evaluation_results_api_path(
     try:
         if method == "GET":
             scheme = parse_qs(query).get("scheme", [""])[0]
-            return _json_response({"results": list_evaluation_result_files(scheme)})
+            filename = parse_qs(query).get("filename", [""])[0]
+            selected = selected_evaluation_result_filename(scheme, filename)
+            return _json_response(
+                {
+                    "selected": selected,
+                    "results": list_evaluation_result_files(scheme),
+                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, selected),
+                }
+            )
 
         if method != "POST":
             return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
@@ -864,7 +963,14 @@ def handle_evaluation_results_api_path(
                 raise ValueError("默认结果文件不允许删除")
             if result_path.exists():
                 result_path.unlink()
-            return _json_response({"selected": "", "results": list_evaluation_result_files(scheme)})
+            selected = selected_evaluation_result_filename(scheme)
+            return _json_response(
+                {
+                    "selected": selected,
+                    "results": list_evaluation_result_files(scheme),
+                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, selected),
+                }
+            )
 
         if action == "copy":
             source_path = evaluation_result_path(scheme, filename)
@@ -878,13 +984,36 @@ def handle_evaluation_results_api_path(
                     HTTPStatus.CONFLICT,
                 )
             shutil.copy2(source_path, target_path)
-            return _json_response({"selected": target_path.name, "results": list_evaluation_result_files(scheme)})
+            return _json_response(
+                {
+                    "selected": target_path.name,
+                    "results": list_evaluation_result_files(scheme),
+                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, target_path.name),
+                }
+            )
 
         if action == "save":
             if (filename or OPTIMIZATION_RESULT_WORKBOOK_NAME) == OPTIMIZATION_RESULT_WORKBOOK_NAME:
                 raise ValueError("默认结果文件不允许修改")
-            result_path = save_evaluation_result_workbook(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
-            return _json_response({"selected": result_path.name, "results": list_evaluation_result_files(scheme)})
+            planning_rows = payload.get("planning_result_rows")
+            if isinstance(planning_rows, list):
+                planning_result_rows = write_evaluation_planning_counts(
+                    scheme,
+                    filename or OPTIMIZATION_RESULT_WORKBOOK_NAME,
+                    planning_rows,
+                )
+                selected = filename or OPTIMIZATION_RESULT_WORKBOOK_NAME
+            else:
+                result_path = save_evaluation_result_workbook(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
+                selected = result_path.name
+                planning_result_rows = read_evaluation_planning_result_rows(scheme, selected)
+            return _json_response(
+                {
+                    "selected": selected,
+                    "results": list_evaluation_result_files(scheme),
+                    "planning_result_rows": planning_result_rows,
+                }
+            )
 
         raise ValueError("未知结果文件操作")
     except FileNotFoundError as exc:

@@ -25,20 +25,32 @@
       </div>
     </header>
 
-    <section class="workspace optimization-workspace">
+    <section class="workspace optimization-workspace evaluation-workspace">
       <aside class="scheme-rail">
         <div class="scheme-list-title">方案列表</div>
         <div id="schemeList" class="scheme-list"></div>
+      </aside>
+
+      <aside class="evaluation-result-rail">
+        <div class="scheme-list-title">结果文件</div>
+        <div class="evaluation-result-actions" aria-label="结果文件管理">
+          <select id="evaluationResultSelect" aria-label="结果文件列表"></select>
+          <div class="evaluation-result-action-buttons">
+            <button id="deleteEvaluationResult" type="button">删除结果</button>
+            <button id="copyEvaluationResult" type="button">复制结果</button>
+            <button id="saveEvaluationResult" type="button">保存结果</button>
+          </div>
+        </div>
+        <section class="evaluation-planning-result-panel" aria-label="当前规划结果">
+          <div class="evaluation-planning-result-title">当前规划结果</div>
+          <div id="evaluationPlanningResultTable" class="data-table evaluation-planning-result-table"></div>
+        </section>
       </aside>
 
       <section class="optimization-panel">
         <section class="optimization-command-card">
           <div class="optimization-command-row">
             <div class="optimization-actions" aria-label="方案评估操作">
-              <select id="evaluationResultSelect" aria-label="结果文件列表"></select>
-              <button id="deleteEvaluationResult" type="button">删除结果</button>
-              <button id="copyEvaluationResult" type="button">复制结果</button>
-              <button id="saveEvaluationResult" type="button">保存结果</button>
               <button id="startEvaluation" class="primary" type="button">启动评估</button>
               <button id="stopEvaluation" class="danger" type="button">停止评估</button>
             </div>

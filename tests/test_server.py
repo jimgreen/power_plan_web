@@ -116,6 +116,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr))", html)
         self.assertIn("top: 50%", html)
         self.assertIn("transform: translate(-50%, -29%)", html)
+        feature_text_css = html.split(".feature-entry strong {", 1)[1].split("}", 1)[0]
+        self.assertIn("white-space: nowrap", feature_text_css)
+        self.assertIn("font-size: clamp(22px, min(2.05vw, 5.8vh), 38px)", feature_text_css)
+        self.assertIn("max-width: 100%", feature_text_css)
         self.assertIn(".feature-icon svg", html)
         self.assertNotIn("hot-nav", html)
         self.assertNotIn("quick-links", html)
@@ -519,7 +523,25 @@ class PowerPlanServerTest(unittest.TestCase):
             create_workbook = Workbook()
             create_workbook.active.title = "总体指标"
             create_workbook.active.append(["指标", "数值"])
+            planning_sheet = create_workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["柴发", 2, 320, 640, "kW"])
+            planning_sheet.append(["储能", 4, 250, 1000, "kWh"])
             create_workbook.save(source_path)
+
+            status, headers, body = server.handle_api_path(
+                "/api/evaluation/results?scheme=方案A&filename=optimization_results.xlsx"
+            )
+            listed = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(listed["selected"], "optimization_results.xlsx")
+            self.assertEqual(
+                listed["planning_result_rows"],
+                [
+                    {"设备类型": "柴发", "设计台数": 2, "单台容量": 320, "总容量": 640, "单位": "kW"},
+                    {"设备类型": "储能", "设计台数": 4, "单台容量": 250, "总容量": 1000, "单位": "kWh"},
+                ],
+            )
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -601,6 +623,59 @@ class PowerPlanServerTest(unittest.TestCase):
                 self.assertIn("规划结果", workbook.sheetnames)
             finally:
                 workbook.close()
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "save",
+                        "filename": "custom_results.xlsx",
+                        "planning_result_rows": [
+                            {"设备类型": "柴发", "设计台数": 5},
+                            {"设备类型": "储能", "设计台数": 7},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            saved_with_counts = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(saved_with_counts["selected"], "custom_results.xlsx")
+            saved_counts = {row["设备类型"]: row["设计台数"] for row in saved_with_counts["planning_result_rows"]}
+            self.assertEqual(saved_counts["柴发"], 5)
+            self.assertEqual(saved_counts["储能"], 7)
+            workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
+            try:
+                workbook_counts = {
+                    row[0]: row[1]
+                    for row in workbook["规划结果"].iter_rows(min_row=2, values_only=True)
+                    if row and row[0]
+                }
+                self.assertEqual(workbook_counts["柴发"], 5)
+                self.assertEqual(workbook_counts["储能"], 7)
+            finally:
+                workbook.close()
+
+            for invalid_count in (-1, 1.5, "2.2"):
+                status, headers, body = server.handle_evaluation_results_api_path(
+                    "/api/evaluation/results",
+                    "POST",
+                    json.dumps(
+                        {
+                            "scheme": "方案A",
+                            "action": "save",
+                            "filename": "custom_results.xlsx",
+                            "planning_result_rows": [{"设备类型": "柴发", "设计台数": invalid_count}],
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+                invalid = json.loads(body.decode("utf-8"))
+                self.assertEqual(status, 400)
+                self.assertEqual(invalid["error"], "bad_request")
+                self.assertIn("设计台数必须为非负整数", invalid["message"])
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -1045,6 +1120,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="startEvaluation"', html)
         self.assertIn('id="stopEvaluation"', html)
         self.assertIn('id="evaluationResultSelect"', html)
+        self.assertIn('class="evaluation-result-rail"', html)
+        self.assertIn('id="evaluationPlanningResultTable"', html)
+        self.assertIn("当前规划结果", html)
         self.assertNotIn('id="addEvaluationResult"', html)
         for control in ("deleteEvaluationResult", "copyEvaluationResult", "saveEvaluationResult"):
             self.assertIn(f'id="{control}"', html)
@@ -1065,6 +1143,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("resultDisplayName", script)
         self.assertIn('value="${escapeHtml(item.name)}">${escapeHtml(resultDisplayName(item.name))}</option>', script)
         self.assertIn("target_name", script)
+        self.assertIn("planning_result_rows", script)
+        self.assertIn("renderEvaluationPlanningResultTable", script)
+        self.assertIn('data-planning-count-index="${index}"', script)
+        self.assertIn('pattern="[0-9]*"', script)
+        self.assertIn('inputmode="numeric"', script)
+        self.assertIn("validatePlanningCountInput", script)
+        self.assertIn("collectPlanningResultRows", script)
+        self.assertIn("设计台数", script)
         self.assertIn("prompt(", script)
         self.assertIn("复制失败", script)
         self.assertIn("selectedResultIsDefault", script)

@@ -13,6 +13,7 @@ const state = {
   safetyDailyPoints: [],
   resultFiles: [],
   selectedResultFile: "",
+  planningResultRows: [],
   greenChartSize: null,
   safetyChartSize: null,
   resultChartResizeObserver: null,
@@ -113,6 +114,7 @@ function renderSchemes() {
       renderCurrentScheme();
       state.resultFiles = [];
       state.selectedResultFile = "";
+      state.planningResultRows = [];
       state.optimization = defaultOptimizationState(state.currentScheme);
       renderOptimization(state.optimization);
       loadEvaluationResults().catch(showError);
@@ -136,24 +138,30 @@ function bindEvaluationResultActions() {
   document.getElementById("evaluationResultSelect").addEventListener("change", (event) => {
     state.selectedResultFile = event.target.value || "";
     updateEvaluationResultActions();
+    loadEvaluationResults(state.selectedResultFile).catch(showError);
   });
   document.getElementById("deleteEvaluationResult").addEventListener("click", () => manageEvaluationResult("delete"));
   document.getElementById("copyEvaluationResult").addEventListener("click", copyEvaluationResult);
-  document.getElementById("saveEvaluationResult").addEventListener("click", () => manageEvaluationResult("save"));
+  document.getElementById("saveEvaluationResult").addEventListener("click", saveEvaluationResult);
 }
 
 async function loadEvaluationResults(selected = state.selectedResultFile) {
   if (!state.currentScheme) {
     state.resultFiles = [];
     state.selectedResultFile = "";
+    state.planningResultRows = [];
     renderEvaluationResults();
+    renderEvaluationPlanningResultTable();
     return;
   }
-  const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(state.currentScheme)}`);
+  const selectedParam = selected ? `&filename=${encodeURIComponent(selected)}` : "";
+  const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(state.currentScheme)}${selectedParam}`);
   state.resultFiles = data.results || [];
   const names = state.resultFiles.map((item) => item.name);
-  state.selectedResultFile = names.includes(selected) ? selected : names[0] || "";
+  state.selectedResultFile = data.selected || (names.includes(selected) ? selected : names[0] || "");
+  state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
+  renderEvaluationPlanningResultTable();
 }
 
 function renderEvaluationResults() {
@@ -167,6 +175,69 @@ function renderEvaluationResults() {
 
 function resultDisplayName(filename) {
   return String(filename || "").replace(/_results\.xlsx$/, "");
+}
+
+function renderEvaluationPlanningResultTable() {
+  const container = document.getElementById("evaluationPlanningResultTable");
+  if (!container) return;
+  const rows = Array.isArray(state.planningResultRows) ? state.planningResultRows : [];
+  if (!rows.length) {
+    container.innerHTML = '<div class="empty-summary">暂无规划结果</div>';
+    return;
+  }
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>设备类型</th>
+          <th>设计台数</th>
+          <th>单台容量</th>
+          <th>总容量</th>
+          <th>单位</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(renderEvaluationPlanningResultRow).join("")}
+      </tbody>
+    </table>`;
+}
+
+function renderEvaluationPlanningResultRow(row, index) {
+  const disabled = selectedResultIsDefault() ? " disabled" : "";
+  return `
+    <tr>
+      <td>${escapeHtml(row["设备类型"] ?? "")}</td>
+      <td><input type="number" step="1" min="0" inputmode="numeric" pattern="[0-9]*" data-planning-count-index="${index}" value="${escapeHtml(row["设计台数"] ?? "")}"${disabled}></td>
+      <td>${escapeHtml(row["单台容量"] ?? "")}</td>
+      <td>${escapeHtml(row["总容量"] ?? "")}</td>
+      <td>${escapeHtml(row["单位"] ?? "")}</td>
+    </tr>`;
+}
+
+async function saveEvaluationResult() {
+  if (!validatePlanningCountInput()) return;
+  await manageEvaluationResult("save", { planning_result_rows: collectPlanningResultRows() });
+}
+
+function validatePlanningCountInput() {
+  for (const input of document.querySelectorAll("[data-planning-count-index]")) {
+    if (!/^\d+$/.test(input.value)) {
+      alert("设计台数必须为非负整数");
+      input.focus();
+      return false;
+    }
+  }
+  return true;
+}
+
+function collectPlanningResultRows() {
+  const rows = (Array.isArray(state.planningResultRows) ? state.planningResultRows : []).map((row) => ({ ...row }));
+  document.querySelectorAll("[data-planning-count-index]").forEach((input) => {
+    const index = Number(input.dataset.planningCountIndex);
+    if (!Number.isInteger(index) || !rows[index]) return;
+    rows[index]["设计台数"] = Number.parseInt(input.value, 10);
+  });
+  return rows;
 }
 
 function selectedResultIsDefault() {
@@ -185,6 +256,9 @@ function updateEvaluationResultActions() {
   [deleteButton, copyButton, saveButton].forEach((button) => {
     button.classList.toggle("is-disabled", button.disabled);
     button.setAttribute("aria-disabled", String(button.disabled));
+  });
+  document.querySelectorAll("[data-planning-count-index]").forEach((input) => {
+    input.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection;
   });
 }
 
@@ -219,7 +293,9 @@ async function manageEvaluationResult(action, extra = {}) {
     });
     state.resultFiles = data.results || [];
     state.selectedResultFile = data.selected || state.selectedResultFile;
+    state.planningResultRows = data.planning_result_rows || state.planningResultRows || [];
     renderEvaluationResults();
+    renderEvaluationPlanningResultTable();
     renderEvaluationMessage(action, data.selected);
   } catch (error) {
     const data = error.payload || {};

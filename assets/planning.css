@@ -194,6 +194,88 @@ button:disabled {
   grid-template-columns: 260px minmax(0, 1fr);
 }
 
+.evaluation-workspace {
+  grid-template-columns: 260px minmax(300px, 360px) minmax(0, 1fr);
+}
+
+.evaluation-result-rail {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.evaluation-result-actions {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.evaluation-result-actions select {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(34, 64, 72, 0.18);
+  border-radius: 12px;
+  background: #f8fbfa;
+  color: #24413d;
+  font-weight: 800;
+}
+
+.evaluation-result-action-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.evaluation-result-action-buttons button {
+  min-width: 0;
+  padding: 10px 8px;
+  border-radius: 12px;
+  background: #edf4f2;
+  color: #24413d;
+  font-weight: 800;
+  transition: background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+}
+
+.evaluation-result-action-buttons button.is-disabled {
+  opacity: 0.42;
+  filter: grayscale(0.25);
+  box-shadow: none;
+}
+
+.evaluation-planning-result-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.evaluation-planning-result-title {
+  color: #102b2a;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.evaluation-planning-result-table {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.evaluation-planning-result-table table {
+  min-width: 520px;
+}
+
+.evaluation-planning-result-table input {
+  width: 96px;
+}
+
 .optimization-panel {
   min-width: 0;
   min-height: 0;
@@ -1862,6 +1944,7 @@ body {
 .primary,
 .tab,
 .scheme-actions button,
+.evaluation-result-action-buttons button,
 .pager button,
 .add-row,
 .month-tab,
@@ -1905,6 +1988,7 @@ body {
 .main-nav button:hover:not(:disabled),
 .tab:hover,
 .scheme-actions button:hover:not(:disabled),
+.evaluation-result-action-buttons button:hover:not(:disabled),
 .pager button:hover:not(:disabled),
 .add-row:hover,
 .month-tab:hover,
@@ -1939,6 +2023,8 @@ body {
 .summary-rail,
 .editor-panel,
 .optimization-panel,
+.evaluation-result-rail,
+.evaluation-planning-result-panel,
 .chart-card,
 .table-card,
 .device-card,
@@ -1973,6 +2059,7 @@ body {
 .rail-title,
 .scheme-list-title,
 .optimization-log-title,
+.evaluation-planning-result-title,
 .panel-heading h1,
 .panel-heading h2,
 h1,
@@ -2080,6 +2167,7 @@ td {
 td input,
 td select,
 .weather-import-bar input,
+.evaluation-result-actions select,
 .coordinate-search-row input {
   border-color: rgba(20, 190, 255, 0.32);
   background: rgba(1, 14, 42, 0.82);
@@ -2090,6 +2178,7 @@ td select,
 td input:focus,
 td select:focus,
 .weather-import-bar input:focus,
+.evaluation-result-actions select:focus,
 .coordinate-search-row input:focus {
   outline: 2px solid rgba(33, 213, 255, 0.66);
   background: rgba(3, 28, 68, 0.94);
@@ -2097,6 +2186,7 @@ td select:focus,
 
 td input::placeholder,
 .weather-import-bar input::placeholder,
+.evaluation-result-actions select::placeholder,
 .coordinate-search-row input::placeholder {
   color: rgba(189, 234, 255, 0.52);
 }
