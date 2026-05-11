@@ -4,6 +4,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from urllib.parse import quote
 from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
@@ -85,6 +86,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('<link rel="icon" href="data:,">', html)
         self.assertIn(".screen::before", html)
         self.assertIn("filter: saturate(1.08) brightness(0.74) contrast(1.08)", html)
+        self.assertIn('class="home-title"', html)
+        self.assertIn("考察站风-光-氢-储-柴联合规划系统</h1>", html)
+        home_title_css = html.split(".home-title {", 1)[1].split("}", 1)[0]
+        self.assertIn("z-index: 6", home_title_css)
+        self.assertIn("text-shadow:", home_title_css)
+        self.assertIn("color: #ffffff", home_title_css)
+        home_user_status_css = html.split(".home-user-status {", 1)[1].split("}", 1)[0]
+        self.assertIn("border: 0", home_user_status_css)
+        self.assertIn("background:", home_user_status_css)
         self.assertIn(".energy-side", html)
         self.assertIn(".energy-left", html)
         self.assertIn(".energy-right", html)
@@ -119,8 +129,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("transform: translate(-50%, -29%)", html)
         feature_text_css = html.split(".feature-entry strong {", 1)[1].split("}", 1)[0]
         self.assertIn("white-space: nowrap", feature_text_css)
-        self.assertIn("font-size: clamp(22px, min(2.05vw, 5.8vh), 38px)", feature_text_css)
+        self.assertIn("font-size: clamp(16px, min(1.55vw, 4.2vh), 30px)", feature_text_css)
         self.assertIn("max-width: 100%", feature_text_css)
+        self.assertNotIn("text-overflow: ellipsis", feature_text_css)
+        self.assertNotIn("overflow: hidden", feature_text_css)
         self.assertIn(".feature-icon svg", html)
         self.assertNotIn("hot-nav", html)
         self.assertNotIn("quick-links", html)
@@ -170,6 +182,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("data-admin-only", optimize_html)
         self.assertIn("data-admin-only", index_html)
         self.assertIn(".user-status", css)
+        user_status_css = css.split(".user-status {", 1)[1].split("}", 1)[0]
+        self.assertIn("border: 0", user_status_css)
         self.assertIn(".auth-card", css)
         self.assertIn("font-size: 17px", css)
 
@@ -848,6 +862,54 @@ class PowerPlanServerTest(unittest.TestCase):
             server.OPTIMIZATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
+    def test_comparison_data_api_reads_selected_result_workbooks(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_comparison_data"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            planning_sheet = workbook.active
+            planning_sheet.title = "规划结果"
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["柴发", 2, 100, 200, "kW"])
+            planning_sheet.append(["风机", 1, 50, 50, "kW"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            green_sheet.append(["柴油消耗", 12.5, "吨"])
+            green_sheet.append(["绿电占比", 85, "%"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            safety_sheet.append(["最大未供负荷", 0, "kW"])
+            dispatch_sheet = workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "时间", "负荷", "风电出力", "光伏出力"])
+            for hour in range(1, 8761):
+                dispatch_sheet.append([hour, f"H{hour:04d}", 80 + hour % 3, 20 + hour % 5, 30 + hour % 7])
+            workbook.save(result_path)
+
+            status, headers, body = server.handle_api_path(
+                "/api/comparison/data?items="
+                + quote(json.dumps([{"scheme": "方案A", "filename": "case_results.xlsx"}], ensure_ascii=False))
+            )
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["items"][0]["scheme"], "方案A")
+            self.assertEqual(payload["items"][0]["result_display_name"], "case")
+            self.assertEqual(payload["tables"]["capacity"][0]["设备类型"], "柴发")
+            self.assertEqual(payload["tables"]["energy"][0]["指标"], "柴油消耗")
+            self.assertEqual(payload["tables"]["safety"][0]["指标"], "最大未供负荷")
+            self.assertIn("负荷", payload["curves"])
+            self.assertIn("风电出力", payload["curves"])
+            self.assertEqual(len(payload["series"]["负荷"][0]["points"]), 8760)
+            self.assertEqual(payload["series"]["负荷"][0]["label"], "方案A / case")
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
     def test_snapshot_reads_summary_from_csv_files(self):
         payload = server.build_snapshot(force_reload=True)
 
@@ -1318,6 +1380,96 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("saveButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
         self.assertIn("启动评估", html)
         self.assertIn("停止评估", html)
+
+    def test_comparison_page_has_tabs_tables_curves_and_result_selectors(self):
+        html = (WEB_ROOT / "comparison.html").read_text(encoding="utf-8")
+        planning_html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
+        optimize_html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
+        evaluation_html = (WEB_ROOT / "evaluation.html").read_text(encoding="utf-8")
+        index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "assets" / "comparison.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+
+        self.assertIn("assets/planning.css?v=20260510-dark-hud", html)
+        self.assertIn('<a class="active" href="comparison.html">结果对比</a>', html)
+        self.assertIn('href="comparison.html">结果对比</a>', planning_html)
+        self.assertIn('href="comparison.html">结果对比</a>', optimize_html)
+        self.assertIn('href="comparison.html">结果对比</a>', evaluation_html)
+        self.assertIn('href="comparison.html"', index_html)
+        self.assertIn("comparison-tab-bar", html)
+        self.assertIn("comparisonTabs", html)
+        self.assertIn("comparison-table-grid", html)
+        for table_id in ("capacityComparisonTable", "energyComparisonTable", "safetyComparisonTable"):
+            self.assertIn(table_id, html)
+        for title in ("规划容量对比", "供能指标对比", "安全指标对比"):
+            self.assertIn(title, html)
+        self.assertIn("capacityEnergyResizeHandle", html)
+        self.assertIn("energySafetyResizeHandle", html)
+        self.assertIn('data-comparison-table-column-resize="capacity-energy"', html)
+        self.assertIn('data-comparison-table-column-resize="energy-safety"', html)
+        self.assertIn("comparisonTableCurveResizeHandle", html)
+        self.assertIn("curveNameList", html)
+        self.assertIn("comparisonCurveChart", html)
+        self.assertIn("assets/comparison.js", html)
+
+        self.assertIn("/api/planning/schemes", script)
+        self.assertIn("/api/evaluation/results", script)
+        self.assertIn("/api/comparison/data", script)
+        self.assertIn("MAX_TABS = 4", script)
+        self.assertIn("addComparisonTab", script)
+        self.assertIn("renderAddComparisonTab", script)
+        self.assertIn(".join(\"\") + renderAddComparisonTab()", script)
+        self.assertIn('closest("#addComparisonTab")', script)
+        self.assertIn("draggable=\"true\"", script)
+        self.assertIn("data-close-comparison-tab", script)
+        self.assertIn("bindComparisonTableCurveResizeHandle", script)
+        self.assertIn("bindComparisonTableColumnResizeHandles", script)
+        self.assertIn("data-comparison-table-column-resize", script)
+        self.assertIn("--comparison-capacity-table-width", script)
+        self.assertIn("--comparison-energy-table-width", script)
+        self.assertIn("--comparison-safety-table-width", script)
+        self.assertIn("curveNameList", script)
+        self.assertIn("renderComparisonCurveChart", script)
+        self.assertIn('preserveAspectRatio="none"', script)
+        self.assertIn("comparison-chart-hover-capture", script)
+        self.assertIn("comparisonChartTooltip", script)
+        self.assertIn("bindComparisonChartHover", script)
+        self.assertIn("renderComparisonChartHover", script)
+        self.assertIn("renderComparisonAxisLabels", script)
+        self.assertIn("renderComparisonCurveStats", script)
+        self.assertIn("comparison-chart-x-axis", script)
+        self.assertIn("comparison-chart-y-axis", script)
+        self.assertIn("comparison-curve-stats", script)
+        self.assertIn("平均", script)
+        self.assertIn("合计", script)
+        self.assertIn("mouseleave", script)
+        self.assertIn("loadResultFilesForTab", script)
+        self.assertIn("schemeSelect", script)
+        self.assertIn("resultSelect", script)
+        self.assertIn("comparison-table-curve-resize-handle", css)
+        self.assertIn(".comparison-table-column-resize-handle", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--comparison-capacity-table-width, 1fr)) 10px minmax(0, var(--comparison-energy-table-width, 1fr)) 10px minmax(0, var(--comparison-safety-table-width, 1fr))", css)
+        comparison_table_css = css.split(".comparison-table table {", 1)[1].split("}", 1)[0]
+        self.assertIn("table-layout: fixed", comparison_table_css)
+        self.assertIn("min-width: 0", comparison_table_css)
+        self.assertIn(".comparison-curve-board", css)
+        comparison_curve_chart_css = css.split(".comparison-curve-chart {", 1)[1].split("}", 1)[0]
+        self.assertIn("width: 100%", comparison_curve_chart_css)
+        comparison_curve_svg_css = css.split(".comparison-curve-chart svg {", 1)[1].split("}", 1)[0]
+        self.assertIn("width: 100%", comparison_curve_svg_css)
+        self.assertIn("height: 100%", comparison_curve_svg_css)
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr)", comparison_curve_chart_css)
+        self.assertIn(".comparison-chart-hover-line", css)
+        self.assertIn(".comparison-chart-hover-capture", css)
+        self.assertIn(".comparison-chart-tooltip", css)
+        self.assertIn(".comparison-chart-x-axis", css)
+        self.assertIn(".comparison-chart-y-axis", css)
+        self.assertIn(".comparison-curve-stats", css)
+        comparison_curve_stats_css = css.split(".comparison-curve-stats {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: absolute", comparison_curve_stats_css)
+        self.assertIn("right:", comparison_curve_stats_css)
+        self.assertIn("top:", comparison_curve_stats_css)
+        self.assertNotIn("<text class=\"comparison-chart-label\"", script)
 
     def test_optimization_page_has_draggable_result_and_log_resize_handles(self):
         html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")

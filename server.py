@@ -903,6 +903,174 @@ def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dic
         workbook.close()
 
 
+def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], bytes]:
+    if path != "/api/comparison/data":
+        return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
+    try:
+        items_text = parse_qs(query).get("items", ["[]"])[0]
+        items = json.loads(items_text or "[]")
+        if not isinstance(items, list):
+            raise ValueError("对比项必须为列表")
+        return _json_response(build_comparison_payload(items[:4]))
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+
+def build_comparison_payload(items: list[dict]) -> dict:
+    selected_items: list[dict] = []
+    capacity_tables: list[list[dict]] = []
+    energy_tables: list[list[dict]] = []
+    safety_tables: list[list[dict]] = []
+    curve_names: list[str] = []
+    curve_series: dict[str, list[dict]] = {}
+
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        scheme = str(item.get("scheme", "")).strip()
+        filename = str(item.get("filename", "")).strip()
+        if not scheme or not filename:
+            continue
+        result_path = evaluation_result_path(scheme, filename)
+        if not result_path.exists():
+            raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+        result_display_name = result_display_name_from_filename(filename)
+        label = f"{scheme} / {result_display_name}"
+        workbook_data = read_comparison_workbook(result_path)
+        selected_items.append(
+            {
+                "id": f"item-{index + 1}",
+                "scheme": scheme,
+                "filename": filename,
+                "result_display_name": result_display_name,
+                "label": label,
+            }
+        )
+        capacity_tables.append(workbook_data["capacity"])
+        energy_tables.append(workbook_data["energy"])
+        safety_tables.append(workbook_data["safety"])
+        for name in workbook_data["curves"]:
+            if name not in curve_names:
+                curve_names.append(name)
+            curve_series.setdefault(name, []).append(
+                {
+                    "label": label,
+                    "scheme": scheme,
+                    "filename": filename,
+                    "points": workbook_data["curves"][name],
+                }
+            )
+
+    return {
+        "items": selected_items,
+        "tables": {
+            "capacity": merge_comparison_rows(capacity_tables, selected_items, "设备类型"),
+            "energy": merge_comparison_rows(energy_tables, selected_items, "指标"),
+            "safety": merge_comparison_rows(safety_tables, selected_items, "指标"),
+        },
+        "curves": curve_names,
+        "series": curve_series,
+    }
+
+
+def read_comparison_workbook(path: Path) -> dict:
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        return {
+            "capacity": read_named_sheet_rows(workbook, "规划结果"),
+            "energy": read_named_sheet_rows(workbook, "供能分析"),
+            "safety": read_named_sheet_rows(workbook, "安全评估"),
+            "curves": read_dispatch_curves(workbook),
+        }
+    finally:
+        workbook.close()
+
+
+def read_named_sheet_rows(workbook, sheet_name: str) -> list[dict]:
+    if sheet_name not in workbook.sheetnames:
+        return []
+    sheet = workbook[sheet_name]
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [str(value or "").strip() for value in rows[0]]
+    result_rows = []
+    for row in rows[1:]:
+        item = {}
+        for index, header in enumerate(headers):
+            if header:
+                item[header] = row[index] if index < len(row) else ""
+        if any(value not in (None, "") for value in item.values()):
+            result_rows.append(item)
+    return result_rows
+
+
+def read_dispatch_curves(workbook) -> dict[str, list[dict]]:
+    if "调度结果" not in workbook.sheetnames:
+        return {}
+    sheet = workbook["调度结果"]
+    rows_iter = sheet.iter_rows(values_only=True)
+    headers = [str(value or "").strip() for value in next(rows_iter, [])]
+    curves: dict[str, list[dict]] = {}
+    for header in headers:
+        if header and header not in {"小时", "hour_index", "时间", "datetime"}:
+            curves[header] = []
+    for row_index, row in enumerate(rows_iter, start=1):
+        if row_index > 8760:
+            break
+        x_value = row[0] if len(row) > 0 and row[0] not in (None, "") else row_index
+        for column_index, header in enumerate(headers):
+            if header not in curves:
+                continue
+            value = row[column_index] if column_index < len(row) else None
+            number = _numeric_or_none(value)
+            if number is not None:
+                curves[header].append({"x": x_value, "y": number})
+    return curves
+
+
+def merge_comparison_rows(tables: list[list[dict]], items: list[dict], key_field: str) -> list[dict]:
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for item, rows in zip(items, tables):
+        value_field = "总容量" if key_field == "设备类型" else "数值"
+        unit_field = "单位"
+        label = item["label"]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get(key_field, "")).strip()
+            if not key:
+                continue
+            if key not in merged:
+                merged[key] = {key_field: key, "单位": row.get(unit_field, "")}
+                order.append(key)
+            if not merged[key].get("单位") and row.get(unit_field, ""):
+                merged[key]["单位"] = row.get(unit_field, "")
+            merged[key][label] = row.get(value_field, "")
+    return [merged[key] for key in order]
+
+
+def result_display_name_from_filename(filename: str) -> str:
+    return re.sub(r"_results\.xlsx$", "", str(filename or ""))
+
+
+def _numeric_or_none(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+            return None
+        return value
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def write_evaluation_planning_counts(scheme: str, filename: str, planning_rows: list[dict]) -> list[dict]:
     result_path = evaluation_result_path(scheme, filename)
     if not result_path.exists():
@@ -2042,6 +2210,8 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
     query_params = parse_qs(query)
     if path.startswith("/api/planning/"):
         return handle_planning_api_path(path, "GET", b"")
+    if path.startswith("/api/comparison/"):
+        return handle_comparison_data_api_path(path, query)
     if path == "/api/evaluation/status":
         scheme = query_params.get("scheme", [""])[0]
         filename = query_params.get("filename", [""])[0]

@@ -9,6 +9,7 @@
   --summary-histogram-svg-height: min(32vh, 360px);
   --optimization-result-height: 1fr;
   --optimization-log-height: 24vh;
+  --comparison-table-height: clamp(240px, 36vh, 480px);
 }
 
 body {
@@ -113,6 +114,10 @@ button:disabled {
 .summary-rail,
 .editor-panel,
 .optimization-panel,
+.comparison-panel,
+.comparison-tab-bar,
+.comparison-table-card,
+.comparison-curve-board,
 .chart-card,
 .table-card,
 .device-card,
@@ -301,6 +306,498 @@ button:disabled {
   width: 100%;
   min-width: 0;
   max-width: 86px;
+}
+
+.comparison-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.comparison-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(220px, var(--comparison-table-height, 36vh)) 14px minmax(220px, 1fr);
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.comparison-tab-bar {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.comparison-tabs {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.comparison-tab {
+  flex: 0 0 min(356px, 45vw);
+  min-width: 270px;
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(34, 64, 72, 0.13);
+  border-radius: 12px;
+  background: #f8fbfa;
+  cursor: grab;
+}
+
+.comparison-tab:active {
+  cursor: grabbing;
+}
+
+.comparison-tab.active {
+  border-color: #0d5c59;
+  box-shadow: 0 10px 24px rgba(13, 92, 89, 0.16);
+}
+
+.comparison-tab-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comparison-tab-head strong {
+  min-width: 0;
+  color: #102b2a;
+  font-size: 15px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-tab-head button {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 8px;
+  background: #edf4f2;
+  color: #24413d;
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.comparison-tab-selectors {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.comparison-tab-selectors select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(34, 64, 72, 0.18);
+  border-radius: 10px;
+  background: #fff;
+  color: #24413d;
+  font-weight: 800;
+}
+
+.comparison-add-tab {
+  flex: 0 0 auto;
+  align-self: stretch;
+  min-width: 92px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: #edf4f2;
+  color: #24413d;
+  font-weight: 900;
+}
+
+.comparison-table-grid {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, var(--comparison-capacity-table-width, 1fr)) 10px minmax(0, var(--comparison-energy-table-width, 1fr)) 10px minmax(0, var(--comparison-safety-table-width, 1fr));
+  gap: 10px;
+  overflow: hidden;
+}
+
+.comparison-table-card {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.comparison-table-card h2 {
+  margin: 0;
+  color: #102b2a;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.comparison-table {
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+
+.comparison-table table {
+  table-layout: fixed;
+  min-width: 0;
+}
+
+.comparison-table th,
+.comparison-table td {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.comparison-table-curve-resize-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 14px;
+  border-radius: 999px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.comparison-table-column-resize-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 10px;
+  border-radius: 999px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.comparison-table-column-resize-handle::before {
+  content: "";
+  width: 4px;
+  height: 96px;
+  border-radius: 999px;
+  background: #9db4ae;
+}
+
+.comparison-table-column-resize-handle:hover::before,
+.comparison-table-column-resize-handle.dragging::before,
+.comparison-table-column-resize-handle:focus-visible::before {
+  background: #0d5c59;
+}
+
+.comparison-table-column-resize-handle:focus-visible {
+  outline: 2px solid #72b7ad;
+  outline-offset: 2px;
+}
+
+.comparison-table-curve-resize-handle::before {
+  content: "";
+  width: 96px;
+  height: 4px;
+  border-radius: 999px;
+  background: #9db4ae;
+}
+
+.comparison-table-curve-resize-handle:hover::before,
+.comparison-table-curve-resize-handle.dragging::before,
+.comparison-table-curve-resize-handle:focus-visible::before {
+  background: #0d5c59;
+}
+
+.comparison-table-curve-resize-handle:focus-visible {
+  outline: 2px solid #72b7ad;
+  outline-offset: 2px;
+}
+
+.comparison-curve-board {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.comparison-curve-list-panel,
+.comparison-curve-chart-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.comparison-curve-title {
+  color: #102b2a;
+  font-size: 17px;
+  font-weight: 900;
+}
+
+.comparison-curve-name-list {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  overflow: auto;
+}
+
+.comparison-curve-name-list button {
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: #edf4f2;
+  color: #24413d;
+  font-size: 14px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.comparison-curve-name-list button.active {
+  background: #0d5c59;
+  color: #fff;
+}
+
+.comparison-curve-chart {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.comparison-chart-frame {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.comparison-curve-chart svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: block;
+}
+
+.comparison-curve-legend {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  color: #405b58;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.comparison-curve-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-curve-legend i {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.comparison-chart-axis {
+  stroke: #224048;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.comparison-chart-grid {
+  stroke: #c8d8d3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.comparison-series-line {
+  fill: none;
+  stroke-width: 2.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.comparison-chart-x-axis,
+.comparison-chart-y-axis {
+  position: absolute;
+  color: #5a716e;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.comparison-chart-x-axis {
+  left: var(--comparison-chart-left, 5.4%);
+  right: var(--comparison-chart-right, 2.2%);
+  bottom: 4px;
+  height: 18px;
+}
+
+.comparison-chart-x-axis span {
+  position: absolute;
+  bottom: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.comparison-chart-y-axis {
+  top: var(--comparison-chart-top, 5%);
+  bottom: var(--comparison-chart-bottom, 8%);
+  left: 6px;
+  width: calc(var(--comparison-chart-left, 5.4%) - 10px);
+  min-width: 48px;
+}
+
+.comparison-chart-y-axis span {
+  position: absolute;
+  right: 0;
+  transform: translateY(50%);
+  white-space: nowrap;
+}
+
+.comparison-curve-stats {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  max-width: min(560px, calc(100% - 92px));
+  max-height: calc(100% - 62px);
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  overflow: auto;
+  pointer-events: none;
+}
+
+.comparison-curve-stats section {
+  min-width: 180px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(34, 64, 72, 0.13);
+  border-radius: 10px;
+  background: rgba(248, 251, 250, 0.88);
+  backdrop-filter: blur(4px);
+}
+
+.comparison-curve-stats strong {
+  grid-column: 1 / -1;
+  min-width: 0;
+  color: #102b2a;
+  font-size: 13px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-curve-stats span {
+  min-width: 0;
+  color: #405b58;
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-chart-hover-line {
+  stroke: #102b2a;
+  stroke-width: 1.3;
+  stroke-dasharray: 5 5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.comparison-chart-hover-capture {
+  fill: transparent;
+  cursor: crosshair;
+  pointer-events: all;
+}
+
+.comparison-chart-tooltip {
+  position: absolute;
+  z-index: 8;
+  min-width: 190px;
+  max-width: min(340px, calc(100% - 20px));
+  padding: 10px 12px;
+  border: 1px solid rgba(16, 43, 42, 0.18);
+  border-radius: 10px;
+  background: rgba(16, 43, 42, 0.94);
+  color: #effcf9;
+  box-shadow: 0 12px 30px rgba(16, 43, 42, 0.22);
+  pointer-events: none;
+}
+
+.comparison-chart-tooltip[hidden] {
+  display: none;
+}
+
+.comparison-chart-tooltip h3 {
+  margin: 0 0 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.comparison-chart-tooltip div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 3px 0;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.comparison-chart-tooltip span {
+  min-width: 0;
+  color: #b9d8d2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comparison-chart-tooltip strong {
+  color: #fff;
+  font-weight: 900;
+  white-space: nowrap;
 }
 
 .optimization-panel {
@@ -1972,6 +2469,9 @@ body {
 .tab,
 .scheme-actions button,
 .evaluation-result-action-buttons button,
+.comparison-add-tab,
+.comparison-tab-head button,
+.comparison-curve-name-list button,
 .pager button,
 .add-row,
 .month-tab,
@@ -1999,6 +2499,8 @@ body {
 .summary-tab.active,
 .result-tab.active,
 .tab.active,
+.comparison-tab.active,
+.comparison-curve-name-list button.active,
 .curve-button.active,
 .curve-button[aria-pressed="true"] {
   border-color: rgba(108, 238, 255, 0.94);
@@ -2016,6 +2518,9 @@ body {
 .tab:hover,
 .scheme-actions button:hover:not(:disabled),
 .evaluation-result-action-buttons button:hover:not(:disabled),
+.comparison-add-tab:hover:not(:disabled),
+.comparison-tab-head button:hover,
+.comparison-curve-name-list button:hover,
 .pager button:hover:not(:disabled),
 .add-row:hover,
 .month-tab:hover,
@@ -2052,6 +2557,12 @@ body {
 .optimization-panel,
 .evaluation-result-rail,
 .evaluation-planning-result-panel,
+.comparison-panel,
+.comparison-tab-bar,
+.comparison-tab,
+.comparison-table-card,
+.comparison-curve-board,
+.comparison-curve-stats section,
 .chart-card,
 .table-card,
 .device-card,
@@ -2087,6 +2598,10 @@ body {
 .scheme-list-title,
 .optimization-log-title,
 .evaluation-planning-result-title,
+.comparison-tab-head strong,
+.comparison-table-card h2,
+.comparison-curve-title,
+.comparison-curve-stats strong,
 .panel-heading h1,
 .panel-heading h2,
 h1,
@@ -2163,6 +2678,7 @@ h2,
 }
 
 .data-table,
+.comparison-table,
 .optimization-overview-table,
 .green-result-table,
 .safety-result-table,
@@ -2195,6 +2711,7 @@ td input,
 td select,
 .weather-import-bar input,
 .evaluation-result-actions select,
+.comparison-tab-selectors select,
 .coordinate-search-row input {
   border-color: rgba(20, 190, 255, 0.32);
   background: rgba(1, 14, 42, 0.82);
@@ -2206,6 +2723,7 @@ td input:focus,
 td select:focus,
 .weather-import-bar input:focus,
 .evaluation-result-actions select:focus,
+.comparison-tab-selectors select:focus,
 .coordinate-search-row input:focus {
   outline: 2px solid rgba(33, 213, 255, 0.66);
   background: rgba(3, 28, 68, 0.94);
@@ -2214,6 +2732,7 @@ td select:focus,
 td input::placeholder,
 .weather-import-bar input::placeholder,
 .evaluation-result-actions select::placeholder,
+.comparison-tab-selectors select::placeholder,
 .coordinate-search-row input::placeholder {
   color: rgba(189, 234, 255, 0.52);
 }
@@ -2223,7 +2742,8 @@ td input::placeholder,
 }
 
 .time-chart,
-.map-picker-canvas {
+.map-picker-canvas,
+.comparison-curve-chart svg {
   background:
     linear-gradient(rgba(33, 213, 255, 0.07) 1px, transparent 1px),
     linear-gradient(90deg, rgba(33, 213, 255, 0.07) 1px, transparent 1px),
@@ -2237,7 +2757,8 @@ td input::placeholder,
 .time-chart text,
 .histogram-svg text,
 .green-chart-svg text,
-.safety-chart-svg text {
+.safety-chart-svg text,
+.comparison-curve-chart text {
   fill: #bdeaff;
 }
 
@@ -2259,14 +2780,16 @@ td input::placeholder,
 .green-axis-line,
 .green-zero-line,
 .safety-axis-line,
-.safety-center-line {
+.safety-center-line,
+.comparison-chart-axis {
   stroke: rgba(189, 234, 255, 0.76);
 }
 
 .green-grid-line,
 .green-x-tick,
 .safety-grid-line,
-.safety-x-tick {
+.safety-x-tick,
+.comparison-chart-grid {
   stroke: rgba(116, 207, 239, 0.26);
 }
 
@@ -2275,13 +2798,21 @@ td input::placeholder,
 .safety-tick-label,
 .safety-x-label,
 .green-chart-legend,
-.safety-chart-legend {
+.safety-chart-legend,
+.comparison-chart-x-axis,
+.comparison-chart-y-axis,
+.comparison-curve-legend {
   color: var(--hud-muted-strong);
   fill: var(--hud-muted-strong);
 }
 
+.comparison-curve-stats span {
+  color: var(--hud-muted);
+}
+
 .chart-hover-line,
-.chart-cursor line {
+.chart-cursor line,
+.comparison-chart-hover-line {
   stroke: var(--hud-yellow);
 }
 
@@ -2290,7 +2821,8 @@ td input::placeholder,
 }
 
 .chart-tip,
-.chart-hover-tooltip {
+.chart-hover-tooltip,
+.comparison-chart-tooltip {
   border: 1px solid rgba(33, 213, 255, 0.52);
   background: rgba(2, 13, 32, 0.94);
   color: var(--hud-text);
@@ -2298,11 +2830,14 @@ td input::placeholder,
 }
 
 .chart-hover-tooltip h3,
-.chart-hover-tooltip strong {
+.chart-hover-tooltip strong,
+.comparison-chart-tooltip h3,
+.comparison-chart-tooltip strong {
   color: #ffffff;
 }
 
-.chart-hover-tooltip span {
+.chart-hover-tooltip span,
+.comparison-chart-tooltip span {
   color: var(--hud-muted);
 }
 
@@ -2357,7 +2892,9 @@ td input::placeholder,
 .time-resize-handle::before,
 .optimization-result-resize-handle::before,
 .optimization-log-resize-handle::before,
-.result-column-resize-handle::before {
+.result-column-resize-handle::before,
+.comparison-table-column-resize-handle::before,
+.comparison-table-curve-resize-handle::before {
   background: rgba(33, 213, 255, 0.52);
   box-shadow: 0 0 12px rgba(33, 213, 255, 0.56);
 }
@@ -2373,7 +2910,13 @@ td input::placeholder,
 .optimization-log-resize-handle:focus-visible::before,
 .result-column-resize-handle:hover::before,
 .result-column-resize-handle.dragging::before,
-.result-column-resize-handle:focus-visible::before {
+.result-column-resize-handle:focus-visible::before,
+.comparison-table-column-resize-handle:hover::before,
+.comparison-table-column-resize-handle.dragging::before,
+.comparison-table-column-resize-handle:focus-visible::before,
+.comparison-table-curve-resize-handle:hover::before,
+.comparison-table-curve-resize-handle.dragging::before,
+.comparison-table-curve-resize-handle:focus-visible::before {
   background: var(--hud-cyan);
 }
 
@@ -2440,6 +2983,9 @@ body {
 .summary-tab,
 .month-tab,
 .curve-button,
+.comparison-add-tab,
+.comparison-tab-head button,
+.comparison-curve-name-list button,
 .weather-import-bar button {
   font-size: 16px;
 }
@@ -2475,10 +3021,13 @@ td {
   gap: 8px;
   max-width: 360px;
   padding: 8px 10px;
-  border: 1px solid rgba(20, 190, 255, 0.48);
+  border: 0;
   border-radius: 8px;
-  background: linear-gradient(180deg, rgba(5, 34, 70, 0.66), rgba(4, 19, 42, 0.62));
+  background:
+    radial-gradient(circle at 50% 0%, rgba(33, 213, 255, 0.14), transparent 66%),
+    linear-gradient(180deg, rgba(5, 34, 70, 0.42), rgba(4, 19, 42, 0.3));
   color: var(--hud-muted-strong);
+  box-shadow: inset 0 0 14px rgba(24, 175, 255, 0.1);
   font-size: 15px;
   font-weight: 800;
   white-space: nowrap;
