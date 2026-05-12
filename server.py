@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 from http.cookies import SimpleCookie
 import csv
 import hashlib
@@ -22,6 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from io import BytesIO, StringIO
 from pathlib import Path
 import sys
 from contextlib import closing
@@ -34,6 +37,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 import estimate
+import plan_optimizer
 import planning_store
 
 
@@ -51,6 +55,16 @@ OPTIMIZATION_RESULT_WORKBOOK_NAME = "optimization_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
 PLANNING_RESULT_SHEET_NAME = "规划结果"
 PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
+TIME_SERIES_IMPORT_ROW_COUNT = 8760
+TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
+    "wind_speed": ("风速", ["wind_speed", "wind", "风速", "风速(m/s)", "风速ms", "ws10m"]),
+    "solar_irradiance": ("太阳辐射", ["solar_irradiance", "solar", "irradiance", "太阳辐射", "太阳辐照", "太阳辐射(w/m2)", "太阳辐照(w/m2)", "allsky_sfc_sw_dwn"]),
+    "temperature": ("室温", ["temperature", "temp", "室温", "温度", "环境温度", "气温", "t2m"]),
+    "load": ("负荷", ["load", "负荷", "负荷功率", "负荷总功率", "负荷(kW)", "负荷kw"]),
+}
+TIME_SERIES_IMPORT_OPTIONAL_COLUMNS = {
+    "datetime": ["datetime", "time", "时间", "日期时间", "时刻"],
+}
 AMAP_WEB_SERVICE_KEY = os.environ.get("POWER_PLAN_AMAP_KEY") or os.environ.get("AMAP_WEB_SERVICE_KEY") or os.environ.get("AMAP_KEY")
 NASA_POWER_PARAMETERS = {
     "wind_speed": "WS10M",
@@ -362,21 +376,24 @@ class OptimizationRuntime:
         self._started_monotonic = 0.0
         self._last_progress_log = -1
         self.result_file = ""
+        self._metrics: list[dict] = []
+        self._results: dict = {}
         self._results_exported = False
         self._logs: list[dict[str, str]] = []
         self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop_requested = False
+        self._run_token = 0
         self._append_log_unlocked("info", "优化规划待启动")
 
     def snapshot(self) -> dict:
         with self._lock:
-            self._advance_locked()
             return self._payload_unlocked()
 
     def apply(self, action: str, scheme: str = "") -> dict:
-        with self._lock:
-            self._advance_locked()
-            target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
-            if action == "start":
+        target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
+        if action == "start":
+            with self._lock:
                 if self.status == "运行中":
                     if self.scheme == target_scheme:
                         raise OptimizationStateError("running", f"方案“{target_scheme}”正在运行，无法再次启动")
@@ -389,18 +406,33 @@ class OptimizationRuntime:
                 self._started_monotonic = time.monotonic()
                 self._last_progress_log = -1
                 self.result_file = ""
+                self._metrics = []
+                self._results = {}
                 self._results_exported = False
+                self._stop_requested = False
+                self._run_token += 1
+                token = self._run_token
                 self._append_log_unlocked("ok", f"启动优化规划，方案：{self.scheme}")
                 self._append_log_unlocked("info", "后台优化规划程序已启动")
-            elif action == "stop":
+                self._thread = threading.Thread(
+                    target=self._run_optimization,
+                    args=(token, target_scheme),
+                    daemon=True,
+                )
+                self._thread.start()
+                return self._payload_unlocked()
+
+        if action == "stop":
+            with self._lock:
                 if self.status != "运行中" or self.scheme != target_scheme:
                     raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行")
+                self._stop_requested = True
                 self.status = "已停止"
                 self.end_time = _now_text()
                 self._append_log_unlocked("warn", "停止优化规划")
-            else:
-                raise ValueError(f"unknown optimization action: {action}")
-            return self._payload_unlocked()
+                return self._payload_unlocked()
+
+        raise ValueError(f"unknown optimization action: {action}")
 
     def _advance_locked(self) -> None:
         if self.status != "运行中":
@@ -426,24 +458,89 @@ class OptimizationRuntime:
             "progress": self.progress,
             "result_file": self.result_file,
             "metrics": self._metrics_unlocked(),
-            "results": self._results_unlocked(),
+            "results": self._results if self._results else self._default_results_unlocked(),
             "logs": list(self._logs),
         }
 
     def _metrics_unlocked(self) -> list[dict]:
-        if self.status == "待启动":
-            cost: float | str = "-"
-            green_ratio: float | str = "-"
-        else:
-            cost = round(max(0.42, 0.78 - self.progress * 0.002), 3)
-            green_ratio = round(min(92.0, 52.0 + self.progress * 0.34), 1)
-        return [
+        base = [
             {"label": "当前状态", "value": self.status, "unit": ""},
             {"label": "启动时刻", "value": self.start_time or "-", "unit": ""},
             {"label": "结束时刻", "value": self.end_time or "-", "unit": ""},
-            {"label": "度电成本", "value": cost, "unit": "元/kWh"},
-            {"label": "绿电占比", "value": green_ratio, "unit": "%"},
         ]
+        existing_labels = {item["label"] for item in base}
+        for metric in self._metrics:
+            if not isinstance(metric, dict):
+                continue
+            label = metric.get("label", "")
+            if label in existing_labels:
+                continue
+            base.append(metric)
+            existing_labels.add(label)
+        if "度电成本" not in existing_labels:
+            base.append({"label": "度电成本", "value": "-", "unit": "元/kWh"})
+        if "绿电占比" not in existing_labels:
+            base.append({"label": "绿电占比", "value": "-", "unit": "%"})
+        return base
+
+    @staticmethod
+    def _default_results_unlocked() -> dict:
+        return {
+            "overview_tables": [
+                {"title": "规划结果", "rows": []},
+                {"title": "规划年指标", "rows": []},
+            ],
+            "overview_disks": [],
+            "overview": [],
+            "green": [],
+            "green_table": [],
+            "safety": [],
+            "safety_table": [],
+            "curves": {"green_daily": [], "green_monthly": [], "green_hourly": [], "safety_daily": []},
+        }
+
+    def _run_optimization(self, token: int, scheme: str) -> None:
+        try:
+            self._append_log("info", "读取方案参数和8760时序数据", None, token)
+            scheme_payload = PLANNING_STORE.read_scheme(scheme)
+            result = plan_optimizer.run_optimization(
+                scheme_payload,
+                log=lambda event: self._append_optimizer_event(event, token),
+            )
+            with self._lock:
+                if token != self._run_token or self._stop_requested or self.status != "运行中":
+                    return
+                self.progress = 100
+                self._metrics = result.get("metrics") if isinstance(result.get("metrics"), list) else []
+                self._results = result.get("results") if isinstance(result.get("results"), dict) else {}
+                self.status = "已完成"
+                self.end_time = _now_text()
+                result_path = export_optimization_results_workbook(self._payload_unlocked())
+                self.result_file = str(result_path)
+                self._results_exported = True
+                self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
+        except Exception as exc:
+            with self._lock:
+                if token != self._run_token:
+                    return
+                self.status = "失败"
+                self.end_time = _now_text()
+                self._append_log_unlocked("error", f"优化规划失败：{exc}")
+
+    def _append_optimizer_event(self, event: dict, token: int) -> None:
+        level = str(event.get("level") or "info")
+        message = str(event.get("message") or "")
+        progress = event.get("progress")
+        self._append_log(level, message, progress if isinstance(progress, int) else None, token)
+
+    def _append_log(self, level: str, message: str, progress: int | None, token: int) -> None:
+        with self._lock:
+            if token != self._run_token:
+                return
+            if progress is not None:
+                self.progress = max(self.progress, min(100, max(0, int(progress))))
+            if message:
+                self._append_log_unlocked(level, message)
 
     def _results_unlocked(self) -> dict:
         cost = round(max(0.42, 0.78 - self.progress * 0.002), 3)
@@ -469,7 +566,7 @@ class OptimizationRuntime:
         fuel_cell_energy_kwh = fuel_cell_energy * 1000
         hydrogen_production_nm3 = hydrogen_production * 10000
         hydrogen_production_energy_kwh = hydrogen_production_nm3 / 0.2
-        green_daily = self._green_daily_curve_unlocked(
+        seed_green_daily = self._green_daily_curve_unlocked(
             load_energy_kwh,
             diesel_energy_kwh,
             wind_energy_kwh,
@@ -479,7 +576,17 @@ class OptimizationRuntime:
             storage_energy_kwh,
             storage_charge_energy_kwh,
         )
-        green_hourly = self._green_hourly_curve_unlocked(green_daily)
+        green_hourly = self._green_hourly_curve_unlocked(seed_green_daily)
+        green_daily = estimate.aggregate_daily(green_hourly)
+        green_monthly = estimate.aggregate_monthly(green_daily)
+        energy_totals = self._energy_totals_from_daily_unlocked(green_daily)
+        energy_totals["hydrogen_production"] = hydrogen_production_nm3
+        energy_totals["diesel_consumption"] = round(diesel_energy * 0.24, 1)
+        annual_energy_rows = estimate.annual_energy_rows(
+            energy_totals,
+            energy_totals["renewable_ratio"],
+            energy_totals["renewable_curtailed_rate"],
+        )
         safety_daily = self._safety_daily_frequency_curve_unlocked()
         highest_frequency = max(point["frequency_max"] for point in safety_daily)
         lowest_frequency = min(point["frequency_min"] for point in safety_daily)
@@ -516,6 +623,7 @@ class OptimizationRuntime:
                         {"指标": "储能总电量", "数值": storage_energy, "单位": "MWh"},
                         {"指标": "制氢总量", "数值": hydrogen_production, "单位": "万Nm3"},
                         {"指标": "燃料电池发电量", "数值": fuel_cell_energy, "单位": "MWh"},
+                        *annual_energy_rows,
                         {"指标": "总成本", "数值": round(3280 - self.progress * 3.2, 1), "单位": "万元"},
                         {"指标": "绿电占比", "数值": green_ratio, "单位": "%"},
                         {"指标": "频率风险点", "数值": max(0, 6 - self.progress // 18), "单位": "个"},
@@ -551,13 +659,14 @@ class OptimizationRuntime:
                 {"指标": "弃电率", "数值": round(max(1.0, 9.0 - self.progress * 0.04), 1), "单位": "%", "说明": "新能源未利用电量占比"},
             ],
             "green_table": [
+                *annual_energy_rows,
                 {"指标": "负荷总电量", "数值": round(load_energy_kwh, 1), "单位": "kWh"},
                 {"指标": "柴发总电量", "数值": round(diesel_energy_kwh, 1), "单位": "kWh"},
                 {"指标": "风机总发电量", "数值": round(wind_energy_kwh, 1), "单位": "kWh"},
                 {"指标": "光伏总发电量", "数值": round(pv_energy_kwh, 1), "单位": "kWh"},
                 {"指标": "电储总发电量", "数值": round(storage_energy_kwh, 1), "单位": "kWh"},
                 {"指标": "氢储总发电量", "数值": round(fuel_cell_energy_kwh, 1), "单位": "kWh"},
-                {"指标": "新能源总弃电量", "数值": curtailed_ratio, "单位": "%"},
+                {"指标": "新能源弃电率", "数值": energy_totals["renewable_curtailed_rate"], "单位": "%"},
                 {"指标": "柴油消耗", "数值": round(diesel_energy * 0.24, 1), "单位": "吨"},
                 {"指标": "制氢总量", "数值": round(hydrogen_production_nm3, 1), "单位": "Nm3"},
             ],
@@ -588,6 +697,7 @@ class OptimizationRuntime:
                     {"label": "总体", "value": green_ratio},
                 ],
                 "green_daily": green_daily,
+                "green_monthly": green_monthly,
                 "green_hourly": green_hourly,
                 "safety": [
                     {"label": "备用", "value": reserve_margin},
@@ -597,6 +707,15 @@ class OptimizationRuntime:
                 "safety_daily": safety_daily,
             },
         }
+
+    @staticmethod
+    def _energy_totals_from_daily_unlocked(daily_rows: list[dict[str, float | int]]) -> dict[str, float]:
+        totals = {
+            field: round(sum(float(row.get(field, 0.0) or 0.0) for row in daily_rows), 4)
+            for field in estimate.ENERGY_AGGREGATE_FIELDS
+        }
+        estimate.add_energy_ratios(totals)
+        return totals
 
     def _green_daily_curve_unlocked(
         self,
@@ -695,19 +814,45 @@ class OptimizationRuntime:
                 curtailed_power = min(renewable_surplus, max(0.0, float(day_point.get("wind_energy", 0.0)) + float(day_point.get("pv_energy", 0.0))) / 24)
                 unmet_load = max(0.0, load + storage_charge - wind_power - pv_power - storage_discharge - diesel_power)
                 storage_soc = max(0.0, min(100.0, 52.0 + 30.0 * math.sin((day + hour / 24) / 365 * 2 * math.pi) + 12.0 * math.sin((hour - 5) / 24 * 2 * math.pi)))
+                wind_speed = max(0.0, 7.5 + 2.2 * math.sin((day + hour / 24) / 365 * 2 * math.pi) + 1.1 * math.sin((hour + 2) / 24 * 2 * math.pi))
+                solar_irradiance = max(0.0, daylight * (780.0 + 120.0 * math.sin((day - 80) / 365 * 2 * math.pi)))
+                temperature = -5.0 + 18.0 * math.sin((day - 80) / 365 * 2 * math.pi) + 4.0 * math.sin((hour - 14) / 24 * 2 * math.pi)
+                wind_available = wind_power + curtailed_power * 0.55
+                pv_available = pv_power + curtailed_power * 0.45
+                wind_curtailed_power = max(0.0, wind_available - wind_power)
+                pv_curtailed_power = max(0.0, pv_available - pv_power)
+                renewable_available = wind_available + pv_available
+                renewable_power = wind_power + pv_power
+                renewable_curtailed_power = wind_curtailed_power + pv_curtailed_power
                 rows.append(
                     {
                         "hour_index": hour_index,
                         "datetime": f"D{day:03d} H{hour + 1:02d}",
+                        "wind_speed": round(wind_speed, 4),
+                        "solar_irradiance": round(solar_irradiance, 4),
+                        "temperature": round(temperature, 4),
                         "load": round(load, 4),
+                        "diesel_power": round(diesel_power, 4),
+                        "wind_available": round(wind_available, 4),
                         "wind_power": round(wind_power, 4),
+                        "pv_available": round(pv_available, 4),
                         "pv_power": round(pv_power, 4),
+                        "renewable_available": round(renewable_available, 4),
+                        "renewable_ratio": round(renewable_power / load * 100 if load else 0.0, 4),
+                        "storage_power": round(storage_discharge - storage_charge, 4),
+                        "storage_soc": round(storage_soc, 4),
+                        "hydrogen_production_power": 0,
+                        "hydrogen_storage": 0,
+                        "fuel_cell_power": 0,
+                        "wind_curtailed_power": round(wind_curtailed_power, 4),
+                        "pv_curtailed_power": round(pv_curtailed_power, 4),
+                        "curtailed_power": round(renewable_curtailed_power, 4),
+                        "renewable_curtailed_rate": round(renewable_curtailed_power / renewable_available * 100 if renewable_available else 0.0, 4),
+                        "unmet_load": round(unmet_load, 4),
+                        "diesel_on": 1 if diesel_power > 0 else 0,
+                        "electrolyzer_on": 0,
                         "storage_charge": round(storage_charge, 4),
                         "storage_discharge": round(storage_discharge, 4),
-                        "diesel_power": round(diesel_power, 4),
-                        "curtailed_power": round(curtailed_power, 4),
-                        "unmet_load": round(unmet_load, 4),
-                        "storage_soc": round(storage_soc, 4),
                     }
                 )
                 hour_index += 1
@@ -794,6 +939,7 @@ def build_optimization_results_workbook(payload: dict) -> Workbook:
         append_rows_sheet(workbook, str(table.get("title", "结果表")), table.get("rows", []))
     append_rows_sheet(workbook, "供能分析", results.get("green_table", []))
     append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
+    append_rows_sheet(workbook, "供能月曲线", curves.get("green_monthly", []))
     append_rows_sheet(workbook, "安全评估", results.get("safety_table", []))
     append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
     append_dispatch_rows_sheet(workbook, curves.get("green_hourly", []))
@@ -809,28 +955,60 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
         [
             "hour_index",
             "datetime",
+            "wind_speed",
+            "solar_irradiance",
+            "temperature",
             "load",
-            "wind_power",
-            "pv_power",
-            "storage_charge",
-            "storage_discharge",
             "diesel_power",
+            "wind_available",
+            "wind_power",
+            "pv_available",
+            "pv_power",
+            "renewable_available",
+            "renewable_ratio",
+            "renewable_curtailed_rate",
+            "storage_power",
+            "storage_soc",
+            "hydrogen_production_power",
+            "hydrogen_storage",
+            "fuel_cell_power",
+            "wind_curtailed_power",
+            "pv_curtailed_power",
             "curtailed_power",
             "unmet_load",
-            "storage_soc",
+            "diesel_on",
+            "electrolyzer_on",
+            "storage_charge",
+            "storage_discharge",
         ],
         {
             "hour_index": "小时",
             "datetime": "时间",
-            "load": "负荷",
-            "wind_power": "风电出力",
-            "pv_power": "光伏出力",
+            "wind_speed": "风速",
+            "solar_irradiance": "太阳辐射",
+            "temperature": "环境温度",
+            "load": "负荷总功率",
+            "diesel_power": "柴发总功率",
+            "wind_available": "风力最大可发",
+            "wind_power": "风机总功率",
+            "pv_available": "光伏最大可发",
+            "pv_power": "光伏总功率",
+            "renewable_available": "新能源最大可发",
+            "renewable_ratio": "新能源占比",
+            "renewable_curtailed_rate": "新能源弃电率",
+            "storage_power": "电储能总功率",
+            "storage_soc": "电储电量",
+            "hydrogen_production_power": "电制氢总功率",
+            "hydrogen_storage": "储氢罐氢储量",
+            "fuel_cell_power": "燃料电池总功率",
+            "wind_curtailed_power": "弃风总功率",
+            "pv_curtailed_power": "弃光总功率",
+            "curtailed_power": "新能源弃电总功率",
+            "unmet_load": "切负荷功率",
+            "diesel_on": "柴发启停",
+            "electrolyzer_on": "制氢启停",
             "storage_charge": "储能充电",
             "storage_discharge": "储能放电",
-            "diesel_power": "柴发出力",
-            "curtailed_power": "弃电",
-            "unmet_load": "未供负荷",
-            "storage_soc": "储能SOC",
         },
     )
 
@@ -1483,7 +1661,7 @@ class EvaluationRuntime:
             "overview_disks": [],
             "green_table": [],
             "safety_table": [],
-            "curves": {"green_daily": [], "green_hourly": [], "safety_daily": []},
+            "curves": {"green_daily": [], "green_monthly": [], "green_hourly": [], "safety_daily": []},
         }
 
     def _append_log_unlocked(self, level: str, message: str) -> None:
@@ -2195,9 +2373,278 @@ def power_hour_key_to_datetime(key: str) -> str:
     return f"{key[0:4]}-{key[4:6]}-{key[6:8]} {key[8:10]}:00"
 
 
+def import_time_series_file(filename: str, content: bytes) -> dict:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix == ".csv":
+        headers, rows = read_time_series_csv(content)
+    elif suffix == ".xlsx":
+        headers, rows = read_time_series_xlsx(content)
+    else:
+        raise ValueError("导入文件仅支持 .csv 或 .xlsx 格式")
+    return normalize_imported_time_series(headers, rows, filename)
+
+
+def read_time_series_csv(content: bytes) -> tuple[list[str], list[dict[str, object]]]:
+    text = decode_csv_text(content)
+    reader = csv.DictReader(StringIO(text))
+    headers = [str(header or "").strip() for header in (reader.fieldnames or [])]
+    rows = [row for row in reader if any(str(value or "").strip() for value in row.values())]
+    return headers, rows
+
+
+def read_time_series_xlsx(content: bytes) -> tuple[list[str], list[dict[str, object]]]:
+    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    try:
+        sheet = workbook.active
+        row_iter = sheet.iter_rows(values_only=True)
+        headers = [str(value or "").strip() for value in next(row_iter, ())]
+        rows = []
+        for values in row_iter:
+            if not any(value not in ("", None) for value in values):
+                continue
+            rows.append({headers[index]: value if index < len(values) else "" for index, value in enumerate(values) if index < len(headers)})
+        return headers, rows
+    finally:
+        workbook.close()
+
+
+def decode_csv_text(content: bytes) -> str:
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return content.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("CSV文件编码无法识别，请使用 UTF-8 或 GBK 编码")
+
+
+def normalize_imported_time_series(headers: list[str], raw_rows: list[dict[str, object]], filename: str) -> dict:
+    column_map = match_time_series_import_columns(headers)
+    if len(raw_rows) < TIME_SERIES_IMPORT_ROW_COUNT:
+        raise ValueError(f"时序数据行数不足8760，当前为{len(raw_rows)}")
+    imported_rows = []
+    for index, raw_row in enumerate(raw_rows[:TIME_SERIES_IMPORT_ROW_COUNT], start=1):
+        item = {
+            "hour_index": index,
+            "datetime": imported_datetime(raw_row, column_map.get("datetime"), index),
+        }
+        for key in TIME_SERIES_IMPORT_REQUIRED_COLUMNS:
+            item[key] = imported_numeric_value(raw_row.get(column_map[key]), key, index)
+        imported_rows.append(item)
+    message = f"已从{filename}导入8760行时序数据"
+    if len(raw_rows) > TIME_SERIES_IMPORT_ROW_COUNT:
+        message += f"，文件共有{len(raw_rows)}行，已使用前8760行"
+    return {"time_series": imported_rows, "time_series_count": len(imported_rows), "message": message}
+
+
+def match_time_series_import_columns(headers: list[str]) -> dict[str, str]:
+    normalized_headers = {normalize_import_header(header): header for header in headers if str(header or "").strip()}
+    column_map: dict[str, str] = {}
+    missing = []
+    for key, (display_name, aliases) in TIME_SERIES_IMPORT_REQUIRED_COLUMNS.items():
+        matched = next((normalized_headers[normalize_import_header(alias)] for alias in aliases if normalize_import_header(alias) in normalized_headers), "")
+        if matched:
+            column_map[key] = matched
+        else:
+            missing.append(display_name)
+    for key, aliases in TIME_SERIES_IMPORT_OPTIONAL_COLUMNS.items():
+        matched = next((normalized_headers[normalize_import_header(alias)] for alias in aliases if normalize_import_header(alias) in normalized_headers), "")
+        if matched:
+            column_map[key] = matched
+    if missing:
+        raise ValueError(f"导入失败，找不到对应的列：{', '.join(missing)}")
+    return column_map
+
+
+def normalize_import_header(value: object) -> str:
+    text = str(value or "").strip().lower()
+    return re.sub(r"[\s_\-（）()［\]\[\]/\\:：,，。.%％]+", "", text)
+
+
+def imported_datetime(raw_row: dict[str, object], column: str | None, index: int) -> str:
+    if column:
+        value = raw_row.get(column)
+        if value not in ("", None):
+            if isinstance(value, datetime):
+                return value.isoformat(sep=" ", timespec="minutes")
+            return str(value)
+    return f"H{index:04d}"
+
+
+def imported_numeric_value(value: object, key: str, row_index: int) -> float | int:
+    if value in ("", None):
+        label = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[key][0]
+        raise ValueError(f"导入失败，第{row_index}行{label}为空")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        label = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[key][0]
+        raise ValueError(f"导入失败，第{row_index}行{label}不是数值") from exc
+    if not math.isfinite(number):
+        label = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[key][0]
+        raise ValueError(f"导入失败，第{row_index}行{label}不是有效数值")
+    return int(number) if number.is_integer() else number
+
+
+def generate_load_curve(mode: str, minimum: object, maximum: object, average: object) -> dict:
+    mode_key = str(mode or "random").strip() or "random"
+    if mode_key not in {"random", "pattern1", "pattern2", "pattern3"}:
+        raise ValueError("负荷生成模式必须为随机曲线、模式1、模式2或模式3")
+    min_value = load_curve_number(minimum, "负荷最小值")
+    max_value = load_curve_number(maximum, "负荷最大值")
+    avg_value = load_curve_number(average, "负荷平均值")
+    if min_value < 0 or max_value < 0 or avg_value < 0:
+        raise ValueError("负荷最大值、负荷最小值、负荷平均值必须为非负数")
+    if max_value < min_value:
+        raise ValueError("负荷最大值不能小于负荷最小值")
+    if max_value == min_value:
+        if avg_value != min_value:
+            raise ValueError("最大值等于最小值时，平均值必须与其相等")
+        values = [round_load_value(min_value) for _ in range(TIME_SERIES_IMPORT_ROW_COUNT)]
+    else:
+        low_mean = min_value + (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
+        high_mean = max_value - (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
+        if avg_value < low_mean or avg_value > high_mean:
+            raise ValueError("平均值必须介于最小值和最大值之间，并能同时满足最大/最小约束")
+        shape = normalized_load_shape(mode_key)
+        adjusted_shape = adjust_shape_mean(shape, (avg_value - min_value) / (max_value - min_value))
+        values = [round_load_value(min_value + (max_value - min_value) * value) for value in adjusted_shape]
+    rows = [{"hour_index": index + 1, "load": value} for index, value in enumerate(values)]
+    return {
+        "mode": mode_key,
+        "load_curve": rows,
+        "load_curve_count": len(rows),
+        "statistics": {
+            "max": round_load_value(max(values)),
+            "min": round_load_value(min(values)),
+            "average": round_load_value(sum(values) / len(values)),
+        },
+    }
+
+
+def load_curve_number(value: object, label: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label}必须为数值") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{label}必须为有效数值")
+    return number
+
+
+def normalized_load_shape(mode: str) -> list[float]:
+    if mode == "random":
+        raw = deterministic_random_shape()
+    else:
+        raw = standard_load_shape(mode)
+    minimum = min(raw)
+    maximum = max(raw)
+    span = maximum - minimum
+    if span <= 0:
+        return [0.5 for _ in raw]
+    return [(value - minimum) / span for value in raw]
+
+
+def deterministic_random_shape() -> list[float]:
+    seed = 2463534242
+    values = []
+    previous = 0.5
+    for hour in range(TIME_SERIES_IMPORT_ROW_COUNT):
+        seed ^= (seed << 13) & 0xFFFFFFFF
+        seed ^= seed >> 17
+        seed ^= (seed << 5) & 0xFFFFFFFF
+        random_value = (seed & 0xFFFFFFFF) / 0xFFFFFFFF
+        previous = previous * 0.72 + random_value * 0.28
+        daily = 0.5 + 0.28 * math.sin((hour % 24 - 7) / 24 * 2 * math.pi)
+        values.append(previous * 0.65 + daily * 0.35 + hour * 1e-9)
+    return values
+
+
+def standard_load_shape(mode: str) -> list[float]:
+    values = []
+    for hour in range(TIME_SERIES_IMPORT_ROW_COUNT):
+        day = hour // 24
+        hour_of_day = hour % 24
+        season = math.sin((day - 20) / 365 * 2 * math.pi)
+        weekday_factor = 1.0 if day % 7 < 5 else 0.88
+        morning_peak = math.exp(-((hour_of_day - 8) / 3.0) ** 2)
+        evening_peak = math.exp(-((hour_of_day - 19) / 3.5) ** 2)
+        noon_peak = math.exp(-((hour_of_day - 13) / 4.0) ** 2)
+        night_valley = math.exp(-((hour_of_day - 3) / 4.0) ** 2)
+        if mode == "pattern1":
+            value = (0.56 + 0.20 * morning_peak + 0.34 * evening_peak - 0.10 * night_valley + 0.09 * season) * weekday_factor
+        elif mode == "pattern2":
+            value = (0.66 + 0.24 * noon_peak - 0.08 * night_valley + 0.05 * season) * (0.96 + 0.04 * weekday_factor)
+        else:
+            winter_summer = abs(season)
+            value = 0.50 + 0.24 * morning_peak + 0.22 * noon_peak + 0.22 * evening_peak + 0.18 * winter_summer - 0.12 * night_valley
+        values.append(value + hour * 1e-9)
+    return values
+
+
+def adjust_shape_mean(shape: list[float], target_mean: float) -> list[float]:
+    current_mean = sum(shape) / len(shape)
+    if abs(current_mean - target_mean) < 1e-10:
+        return shape
+    if target_mean < current_mean:
+        low, high = 1.0, 2.0
+        while mean_power(shape, high) > target_mean:
+            high *= 2
+        for _ in range(80):
+            mid = (low + high) / 2
+            if mean_power(shape, mid) > target_mean:
+                low = mid
+            else:
+                high = mid
+        power = high
+        return [value**power for value in shape]
+    low, high = 1.0, 2.0
+    while mean_inverse_power(shape, high) < target_mean:
+        high *= 2
+    for _ in range(80):
+        mid = (low + high) / 2
+        if mean_inverse_power(shape, mid) < target_mean:
+            low = mid
+        else:
+            high = mid
+    power = high
+    return [1 - (1 - value) ** power for value in shape]
+
+
+def mean_power(shape: list[float], power: float) -> float:
+    return sum(value**power for value in shape) / len(shape)
+
+
+def mean_inverse_power(shape: list[float], power: float) -> float:
+    return sum(1 - (1 - value) ** power for value in shape) / len(shape)
+
+
+def round_load_value(value: float) -> float | int:
+    rounded = round(float(value), 6)
+    return int(rounded) if rounded.is_integer() else rounded
+
+
 def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
     prefix = "/api/planning/schemes"
     try:
+        if path == "/api/planning/time-series/import" and method == "POST":
+            payload = _read_json_body(body)
+            filename = str(payload.get("filename", ""))
+            content_base64 = str(payload.get("content_base64", ""))
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("导入失败，文件内容无法解析") from exc
+            return _json_response(import_time_series_file(filename, content))
+        if path == "/api/planning/load-curve/generate" and method == "POST":
+            payload = _read_json_body(body)
+            return _json_response(
+                generate_load_curve(
+                    str(payload.get("mode", "random")),
+                    payload.get("min"),
+                    payload.get("max"),
+                    payload.get("average"),
+                )
+            )
         if path == "/api/planning/map-config" and method == "GET":
             return _json_response({"amap_key": AMAP_WEB_SERVICE_KEY, "preferred_provider": "amap" if AMAP_WEB_SERVICE_KEY else "manual"})
         if path == "/api/planning/weather-history" and method == "POST":

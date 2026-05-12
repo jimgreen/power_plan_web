@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260510-dark-hud">
+  <link rel="stylesheet" href="assets/planning.css?v=20260513-import-modal">
 </head>
 <body>
   <main class="planning-shell">
@@ -57,6 +57,8 @@
         <section id="timeTab" class="tab-panel active">
           <div class="chart-card">
             <div class="weather-import-bar" aria-label="历史气象数据获取">
+              <button id="importTimeSeriesFile" type="button">导入曲线</button>
+              <button id="openLoadGenerator" type="button">负荷生成</button>
               <button id="openCoordinatePicker" type="button">坐标选择</button>
               <label>纬度<input id="weatherLatitude" type="number" min="-90" max="90" step="0.000001" placeholder="-90 到 90"></label>
               <label>经度<input id="weatherLongitude" type="number" min="-180" max="180" step="0.000001" placeholder="-180 到 180"></label>
@@ -74,6 +76,57 @@
             </div>
             <svg id="timeChart" class="time-chart" role="img" aria-label="风光温荷时序曲线"></svg>
             <div id="chartTip" class="chart-tip" hidden></div>
+          </div>
+
+          <div id="timeSeriesImportModal" class="map-picker-modal" hidden>
+            <div class="map-picker-dialog time-series-import-dialog" role="dialog" aria-modal="true" aria-labelledby="timeSeriesImportTitle" aria-describedby="timeSeriesImportHint">
+              <div class="map-picker-head">
+                <h2 id="timeSeriesImportTitle">导入曲线</h2>
+                <button id="closeTimeSeriesImport" type="button" aria-label="关闭导入曲线">关闭</button>
+              </div>
+              <div class="time-series-import-toolbar">
+                <button id="openTimeSeriesImportFile" type="button">打开文件</button>
+                <input id="timeSeriesImportFile" type="file" accept=".csv,.xlsx" hidden>
+                <span id="timeSeriesImportHint" role="status" aria-live="polite">请选择包含风速、太阳辐射、室温、负荷的 Excel 或 CSV 文件。</span>
+              </div>
+              <div id="timeSeriesImportPreview" class="data-table time-series-import-preview">
+                <div class="empty-summary">打开文件后，在这里预览8760点曲线。</div>
+              </div>
+              <div class="map-picker-foot">
+                <span id="timeSeriesImportSummary">未选择文件</span>
+                <button id="confirmTimeSeriesImport" class="primary" type="button">确定</button>
+                <button id="cancelTimeSeriesImport" type="button">取消</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="loadGeneratorModal" class="map-picker-modal" hidden>
+            <div class="map-picker-dialog load-generator-dialog" role="dialog" aria-modal="true" aria-labelledby="loadGeneratorTitle" aria-describedby="loadGeneratorHint">
+              <div class="map-picker-head">
+                <h2 id="loadGeneratorTitle">负荷生成</h2>
+                <button id="closeLoadGenerator" type="button" aria-label="关闭负荷生成">关闭</button>
+              </div>
+              <div class="load-generator-grid">
+                <label>指定模式
+                  <select id="loadGeneratorMode">
+                    <option value="random">随机曲线</option>
+                    <option value="pattern1">模式1</option>
+                    <option value="pattern2">模式2</option>
+                    <option value="pattern3">模式3</option>
+                  </select>
+                </label>
+                <label>负荷最大值<input id="loadGeneratorMax" type="number" min="0" step="any"></label>
+                <label>负荷最小值<input id="loadGeneratorMin" type="number" min="0" step="any"></label>
+                <label>负荷平均值<input id="loadGeneratorAverage" type="number" min="0" step="any"></label>
+              </div>
+              <svg id="loadGeneratorPreview" class="load-generator-preview" role="img" aria-label="生成负荷曲线预览"></svg>
+              <div class="map-picker-foot">
+                <span id="loadGeneratorHint">输入最大值、最小值、平均值，并选择生成模式。</span>
+                <button id="generateLoadCurve" type="button">生成负荷曲线</button>
+                <button id="confirmLoadGenerator" class="primary" type="button">确定</button>
+                <button id="cancelLoadGenerator" type="button">取消</button>
+              </div>
+            </div>
           </div>
 
           <div id="mapPickerModal" class="map-picker-modal" hidden>
@@ -160,6 +213,6 @@
     </section>
   </main>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/planning.js?v=20260510-labels"></script>
+  <script src="assets/planning.js?v=20260513-import-modal"></script>
 </body>
 </html>

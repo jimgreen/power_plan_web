@@ -11,17 +11,20 @@ const state = {
   chartMeta: null,
   timeChartManualHeight: null,
   layoutObserver: null,
+  pendingTimeSeriesImport: null,
+  pendingLoadCurve: null,
+  originalLoadCurve: null,
 };
 
 const deviceSpecs = [
-  ["diesel_generators", "柴发", ["name", "capacity", "cost", "design_life_years", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper"]],
-  ["wind_turbines", "风机", ["name", "capacity", "cost", "design_life_years", "cut_in_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper"]],
-  ["photovoltaics", "光伏", ["name", "capacity", "cost", "design_life_years", "generation_efficiency", "quantity_lower", "quantity_upper"]],
-  ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "design_life_years", "quantity_lower", "quantity_upper"]],
-  ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "cost", "design_life_years", "quantity_lower", "quantity_upper"]],
-  ["hydrogen_electrolyzers", "电制氢", ["name", "power_capacity", "cost", "design_life_years", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper"]],
-  ["hydrogen_tanks", "储氢罐", ["name", "hydrogen_tank_capacity", "cost", "design_life_years", "quantity_lower", "quantity_upper"]],
-  ["fuel_cells", "燃料电池", ["name", "power_capacity", "cost", "design_life_years", "hydrogen_to_electric_efficiency", "quantity_lower", "quantity_upper"]],
+  ["diesel_generators", "柴发", ["name", "capacity", "cost", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["wind_turbines", "风机", ["name", "capacity", "cost", "cut_in_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["photovoltaics", "光伏", ["name", "capacity", "cost", "generation_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["hydrogen_electrolyzers", "电制氢", ["name", "power_capacity", "power_lower", "cost", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["hydrogen_tanks", "储氢罐", ["name", "hydrogen_tank_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["fuel_cells", "燃料电池", ["name", "power_capacity", "cost", "hydrogen_to_electric_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
 ];
 
 const summarySeries = [
@@ -32,7 +35,6 @@ const summarySeries = [
 ];
 
 const planningParameterSpecs = [
-  ["design_life_years", "设计使用年限(年)", "number", { min: 1, integer: true, defaultValue: 20 }],
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
   ["planning_load_factor", "规划负荷系数(0.1-10.0)", "number", { min: 0.1, max: 10, defaultValue: 1 }],
   ["green_power_ratio_lower", "绿电电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
@@ -40,7 +42,7 @@ const planningParameterSpecs = [
   ["load_disturbance_factor", "负荷扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: false }],
   ["frequency_security_upper", "频率安全上限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.5 }],
-  ["frequency_security_lower", "频率安全下限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.0 }],
+  ["frequency_security_lower", "频率安全下限(0.9-1.0)", "number", { min: 0.9, max: 1, defaultValue: 1.0 }],
   ["post_disturbance_power_balance_enabled", "是否考虑扰动后功率平衡", "boolean", { defaultValue: false }],
   ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: false }],
   ["load_disturbance_enabled", "是否考虑负荷扰动", "boolean", { defaultValue: false }],
@@ -73,10 +75,10 @@ const labels = {
   name: "名称",
   solar_irradiance: "太阳辐照",
   temperature: "温度",
-  capacity: "容量",
-  power_capacity: "功率容量",
-  battery_capacity: "电池容量",
-  hydrogen_tank_capacity: "储氢罐容量",
+  capacity: "功率容量(kW)",
+  power_capacity: "功率容量(kW)",
+  battery_capacity: "电池容量(kWh)",
+  hydrogen_tank_capacity: "氢储容量(Nm3)",
   quantity_lower: "数据下限(台)",
   quantity_upper: "数据上限(台)",
   design_life_years: "设计年限(年）",
@@ -93,6 +95,23 @@ const labels = {
 
 const deviceFieldDefaults = {
   design_life_years: 20,
+};
+
+const deviceFieldRules = {
+  quantity_lower: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数据上下限必须为非负整数" },
+  quantity_upper: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数据上下限必须为非负整数" },
+  design_life_years: { integer: true, positive: true, attrs: ['min="1"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "设计年限(年）必须为正整数" },
+  cost: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "成本(万元/台)必须为非负浮点数" },
+  capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
+  power_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
+  battery_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电池容量(kWh)必须为正实数" },
+  hydrogen_tank_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢储容量(Nm3)必须为正实数" },
+  electric_to_hydrogen_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电-氢效率(Nm3/kWh)必须为正实数" },
+  hydrogen_to_electric_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢-电效率(kWh/Nm3)必须为正实数" },
+  fuel_rate: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "油耗率(kg/kWh)必须为正实数" },
+  power_lower: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率下限(kW)必须为非负实数" },
+  cut_in_wind_speed: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "切入风速(m/s)必须为非负实数" },
+  cut_out_wind_speed: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "切出风速(m/s)必须为非负实数" },
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -145,6 +164,17 @@ function bindActions() {
   document.getElementById("renameScheme").addEventListener("click", renameScheme);
   document.getElementById("saveScheme").addEventListener("click", saveScheme);
   document.getElementById("deleteScheme").addEventListener("click", deleteScheme);
+  document.getElementById("importTimeSeriesFile").addEventListener("click", importTimeSeriesFile);
+  document.getElementById("openTimeSeriesImportFile").addEventListener("click", openTimeSeriesImportFile);
+  document.getElementById("timeSeriesImportFile").addEventListener("change", onTimeSeriesImportFileChange);
+  document.getElementById("closeTimeSeriesImport").addEventListener("click", closeTimeSeriesImport);
+  document.getElementById("confirmTimeSeriesImport").addEventListener("click", confirmImportedTimeSeries);
+  document.getElementById("cancelTimeSeriesImport").addEventListener("click", cancelTimeSeriesImport);
+  document.getElementById("openLoadGenerator").addEventListener("click", openLoadGenerator);
+  document.getElementById("closeLoadGenerator").addEventListener("click", closeLoadGenerator);
+  document.getElementById("generateLoadCurve").addEventListener("click", generateLoadCurve);
+  document.getElementById("confirmLoadGenerator").addEventListener("click", confirmGeneratedLoadCurve);
+  document.getElementById("cancelLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("geocodePlace").addEventListener("click", geocodePlace);
   document.getElementById("fetchWeatherHistory").addEventListener("click", fetchWeatherHistory);
   document.getElementById("openCoordinatePicker").addEventListener("click", openCoordinatePicker);
@@ -515,12 +545,347 @@ async function fetchWeatherHistory() {
   renderTimeTable();
   renderLimitSummary();
   renderSummary();
-  setWeatherImportStatus(`${year}年气象已更新`, "ok");
+  setWeatherImportStatus(`${year}年气象已更新（纬度：${latitude.toFixed(3)}，经度：${longitude.toFixed(3)}）`, "ok");
+}
+
+function importTimeSeriesFile() {
+  openTimeSeriesImportModal();
+}
+
+function openTimeSeriesImportFile() {
+  if (!state.currentScheme || !state.payload) {
+    setTimeSeriesImportHint("请先选择方案", "error");
+    return;
+  }
+  const input = document.getElementById("timeSeriesImportFile");
+  input.value = "";
+  input.click();
+}
+
+async function onTimeSeriesImportFileChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  setTimeSeriesImportHint(`正在解析导入文件：${file.name}`);
+  setTimeSeriesImportSummary("正在解析...");
+  try {
+    const content_base64 = await arrayBufferToBase64(await file.arrayBuffer());
+    const result = await api("/api/planning/time-series/import", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, content_base64 }),
+    });
+    const rows = result.time_series || [];
+    state.pendingTimeSeriesImport = rows;
+    renderTimeSeriesImportPreview(rows);
+    setTimeSeriesImportHint(result.message || "导入文件解析成功，请确认后保存。", "ok");
+    setTimeSeriesImportSummary(`已解析：${file.name}，共${rows.length}行`);
+  } catch (error) {
+    state.pendingTimeSeriesImport = null;
+    renderTimeSeriesImportPreview([]);
+    setTimeSeriesImportHint(`导入失败：${error.message || String(error)}`, "error");
+    setTimeSeriesImportSummary("导入失败");
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function confirmImportedTimeSeries() {
+  const rows = state.pendingTimeSeriesImport;
+  if (!Array.isArray(rows) || rows.length !== 8760) {
+    setTimeSeriesImportHint("请先打开并成功解析8760行曲线文件", "error");
+    return;
+  }
+  const previousRows = state.payload.time_series;
+  const previousCount = state.payload.time_series_count;
+  const previousLoaded = isTimeSeriesLoaded();
+  applyImportedTimeSeries(rows, "导入曲线已写入当前方案", false);
+  setTimeSeriesImportHint("正在保存到后台...");
+  try {
+    state.payload = normalizePayload(await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}`, {
+      method: "PUT",
+      body: JSON.stringify(state.payload),
+    }));
+    state.pendingTimeSeriesImport = null;
+    renderAll();
+    closeTimeSeriesImport();
+    setWeatherImportStatus("导入曲线已保存到后台", "ok");
+  } catch (error) {
+    if (previousRows === undefined) {
+      delete state.payload.time_series;
+    } else {
+      state.payload.time_series = previousRows;
+    }
+    state.payload.time_series_count = previousCount;
+    setTimeSeriesLoaded(previousLoaded);
+    renderChart();
+    renderMonthTabs();
+    renderTimeTable();
+    renderLimitSummary();
+    renderSummary();
+    setTimeSeriesImportHint(`保存失败：${error.message || String(error)}`, "error");
+  }
+}
+
+function cancelTimeSeriesImport() {
+  state.pendingTimeSeriesImport = null;
+  renderTimeSeriesImportPreview([]);
+  closeTimeSeriesImport();
+  setWeatherImportStatus("导入曲线已取消");
+}
+
+function closeTimeSeriesImport() {
+  hideModal(document.getElementById("timeSeriesImportModal"));
+}
+
+function applyImportedTimeSeries(rows, message, updateStatus = true) {
+  if (!Array.isArray(rows) || rows.length !== 8760) {
+    setWeatherImportStatus(`导入失败：时序数据行数应为8760，当前为${Array.isArray(rows) ? rows.length : 0}`, "error");
+    return;
+  }
+  state.payload.time_series = rows;
+  state.payload.time_series_count = rows.length;
+  state.month = 0;
+  setTimeSeriesLoaded(true);
+  renderChart();
+  renderMonthTabs();
+  renderTimeTable();
+  renderLimitSummary();
+  renderSummary();
+  if (updateStatus) setWeatherImportStatus(`${message}，请保存方案`, "ok");
+}
+
+function renderTimeSeriesImportPreview(rows) {
+  const host = document.getElementById("timeSeriesImportPreview");
+  if (!host) return;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    host.innerHTML = "<div class=\"empty-summary\">打开文件后，在这里预览8760点曲线。</div>";
+    return;
+  }
+  const tableRows = rows
+    .map((row, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(row.datetime || "")}</td><td>${escapeHtml(formatNumber(row.wind_speed))}</td><td>${escapeHtml(formatNumber(row.solar_irradiance))}</td><td>${escapeHtml(formatNumber(row.temperature))}</td><td>${escapeHtml(formatNumber(row.load))}</td></tr>`)
+    .join("");
+  host.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th><th>风速</th><th>太阳辐射</th><th>室温</th><th>负荷</th></tr></thead><tbody>${tableRows}</tbody></table>`;
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    const chunk = bytes.subarray(index, index + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+function showModalInBody(modal) {
+  if (!modal) return;
+  if (modal.parentElement !== document.body) {
+    document.body.appendChild(modal);
+  }
+  modal.hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function hideModal(modal) {
+  if (!modal) return;
+  modal.hidden = true;
+  if (!document.querySelector(".map-picker-modal:not([hidden])")) {
+    document.body.classList.remove("modal-open");
+  }
+}
+
+function setTimeSeriesImportHint(message, level = "") {
+  const hint = document.getElementById("timeSeriesImportHint");
+  if (!hint) return;
+  hint.textContent = message;
+  hint.classList.toggle("error", level === "error");
+  hint.classList.toggle("ok", level === "ok");
+}
+
+function setTimeSeriesImportSummary(message) {
+  const summary = document.getElementById("timeSeriesImportSummary");
+  if (summary) summary.textContent = message;
+}
+
+function openTimeSeriesImportModal() {
+  if (!state.currentScheme || !state.payload) {
+    setWeatherImportStatus("请先选择方案", "error");
+    return;
+  }
+  state.pendingTimeSeriesImport = null;
+  const input = document.getElementById("timeSeriesImportFile");
+  if (input) input.value = "";
+  renderTimeSeriesImportPreview([]);
+  setTimeSeriesImportHint("请选择包含风速、太阳辐射、室温、负荷的 Excel 或 CSV 文件。");
+  setTimeSeriesImportSummary("未选择文件");
+  showModalInBody(document.getElementById("timeSeriesImportModal"));
+}
+
+function openLoadGenerator() {
+  if (!state.currentScheme || !state.payload) {
+    setWeatherImportStatus("请先选择方案", "error");
+    return;
+  }
+  prefillLoadGeneratorValues();
+  state.originalLoadCurve = currentLoadCurveRows();
+  state.pendingLoadCurve = null;
+  showModalInBody(document.getElementById("loadGeneratorModal"));
+  setLoadGeneratorHint("输入最大值、最小值、平均值，并选择生成模式。");
+  renderLoadGeneratorPreview(state.originalLoadCurve, []);
+}
+
+function closeLoadGenerator() {
+  hideModal(document.getElementById("loadGeneratorModal"));
+}
+
+function cancelLoadGenerator() {
+  state.pendingLoadCurve = null;
+  state.originalLoadCurve = null;
+  closeLoadGenerator();
+  setWeatherImportStatus("负荷生成已取消");
+}
+
+function prefillLoadGeneratorValues() {
+  const rows = isTimeSeriesLoaded() ? state.payload.time_series || [] : [];
+  const values = rows.map((row) => Number(row.load)).filter(Number.isFinite);
+  const max = values.length ? Math.max(...values) : 100;
+  const min = values.length ? Math.min(...values) : 20;
+  const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 60;
+  document.getElementById("loadGeneratorMax").value = roundUiNumber(max);
+  document.getElementById("loadGeneratorMin").value = roundUiNumber(min);
+  document.getElementById("loadGeneratorAverage").value = roundUiNumber(average);
+}
+
+async function generateLoadCurve() {
+  if (!state.currentScheme || !state.payload) {
+    setLoadGeneratorHint("请先选择方案", "error");
+    return;
+  }
+  const mode = document.getElementById("loadGeneratorMode").value;
+  const max = Number(document.getElementById("loadGeneratorMax").value);
+  const min = Number(document.getElementById("loadGeneratorMin").value);
+  const average = Number(document.getElementById("loadGeneratorAverage").value);
+  setLoadGeneratorHint("正在生成负荷曲线...");
+  const result = await api("/api/planning/load-curve/generate", {
+    method: "POST",
+    body: JSON.stringify({ mode, max, min, average }),
+  }).catch((error) => {
+    setLoadGeneratorHint(error.message || String(error), "error");
+    setWeatherImportStatus(`负荷生成失败：${error.message || String(error)}`, "error");
+    return null;
+  });
+  if (!result) return;
+  state.pendingLoadCurve = result.load_curve || [];
+  renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
+  setLoadGeneratorHint("负荷曲线已生成，请检查预览后点击确定。", "ok");
+}
+
+async function confirmGeneratedLoadCurve() {
+  if (!Array.isArray(state.pendingLoadCurve) || state.pendingLoadCurve.length !== 8760) {
+    setLoadGeneratorHint("请先生成负荷曲线", "error");
+    return;
+  }
+  await ensureTimeSeriesLoaded().catch((error) => {
+    setLoadGeneratorHint(error.message || String(error), "error");
+    return false;
+  });
+  if (!isTimeSeriesLoaded()) return;
+  applyGeneratedLoadCurve(state.pendingLoadCurve);
+  state.pendingLoadCurve = null;
+  state.originalLoadCurve = null;
+  closeLoadGenerator();
+  setWeatherImportStatus("负荷曲线已确认，请保存方案", "ok");
+}
+
+function applyGeneratedLoadCurve(rows) {
+  if (!Array.isArray(rows) || rows.length !== 8760) {
+    setLoadGeneratorHint(`负荷曲线应为8760点，当前为${Array.isArray(rows) ? rows.length : 0}`, "error");
+    return;
+  }
+  if (!Array.isArray(state.payload.time_series) || state.payload.time_series.length !== 8760) {
+    setLoadGeneratorHint("当前时序表不是8760行，未更新负荷", "error");
+    return;
+  }
+  state.payload.time_series = state.payload.time_series.map((row, index) => {
+    const curve = rows[index];
+    return { ...row, load: curve.load };
+  });
+  setTimeSeriesLoaded(true);
+  selectCurve("load");
+  renderChart();
+  renderTimeTable();
+  renderLimitSummary();
+  renderSummary();
+}
+
+function setLoadGeneratorHint(message, level = "") {
+  const hint = document.getElementById("loadGeneratorHint");
+  if (!hint) return;
+  hint.textContent = message;
+  hint.classList.toggle("error", level === "error");
+  hint.classList.toggle("ok", level === "ok");
+}
+
+function currentLoadCurveRows() {
+  if (!isTimeSeriesLoaded()) return [];
+  return (state.payload.time_series || []).map((row, index) => ({
+    hour_index: index + 1,
+    load: Number(row.load),
+  })).filter((row) => Number.isFinite(row.load));
+}
+
+function renderLoadGeneratorPreview(originalRows, generatedRows) {
+  const svg = document.getElementById("loadGeneratorPreview");
+  if (!svg) return;
+  const width = svg.clientWidth || 720;
+  const height = svg.clientHeight || 220;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.innerHTML = "";
+  const original = Array.isArray(originalRows) ? originalRows.map((row) => Number(row.load)).filter(Number.isFinite) : [];
+  const generated = Array.isArray(generatedRows) ? generatedRows.map((row) => Number(row.load)).filter(Number.isFinite) : [];
+  const allValues = [...original, ...generated];
+  if (!allValues.length) {
+    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">生成后显示负荷曲线预览</text>`;
+    return;
+  }
+  const padding = { left: 46, right: 18, top: 18, bottom: 30 };
+  const min = Math.min(...allValues);
+  const max = Math.max(...allValues);
+  const span = max - min || 1;
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const linePoints = (values) => values.map((value, index) => {
+    const x = padding.left + (index / Math.max(1, values.length - 1)) * plotWidth;
+    const y = padding.top + (1 - (value - min) / span) * plotHeight;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ");
+  const preview = generated.length ? generated : original;
+  const avg = preview.reduce((sum, value) => sum + value, 0) / preview.length;
+  svg.innerHTML = `
+    <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="rgba(255,255,255,0.03)"/>
+    <line x1="${padding.left}" y1="${padding.top}" x2="${padding.left}" y2="${height - padding.bottom}" stroke="rgba(160,190,190,0.5)"/>
+    <line x1="${padding.left}" y1="${height - padding.bottom}" x2="${width - padding.right}" y2="${height - padding.bottom}" stroke="rgba(160,190,190,0.5)"/>
+    ${original.length ? `<polyline points="${linePoints(original)}" fill="none" stroke="#8aa2ad" stroke-width="1.4" stroke-dasharray="5 4"/>` : ""}
+    ${generated.length ? `<polyline points="${linePoints(generated)}" fill="none" stroke="#21d5ff" stroke-width="1.8"/>` : ""}
+    <g transform="translate(${width - 178}, ${padding.top + 2})">
+      <line x1="0" y1="0" x2="28" y2="0" stroke="#8aa2ad" stroke-width="1.4" stroke-dasharray="5 4"/>
+      <text x="36" y="4" fill="#dffbff" font-size="12">修改前</text>
+      <line x1="92" y1="0" x2="120" y2="0" stroke="#21d5ff" stroke-width="1.8"/>
+      <text x="128" y="4" fill="#dffbff" font-size="12">修改后</text>
+    </g>
+    <text x="${padding.left}" y="${padding.top - 5}" fill="#dffbff" font-size="12">最大 ${roundUiNumber(max)}</text>
+    <text x="${padding.left}" y="${height - 8}" fill="#dffbff" font-size="12">最小 ${roundUiNumber(min)} / 平均 ${roundUiNumber(avg)}</text>
+  `;
+}
+
+function roundUiNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(Math.round(number * 1000) / 1000) : "";
 }
 
 async function openCoordinatePicker() {
   const modal = document.getElementById("mapPickerModal");
-  modal.hidden = false;
+  showModalInBody(modal);
   setMapPickerHint("根据地名查找坐标，或点击地图选点。");
   const config = await loadMapConfig();
   if (!config || !config.amap_key) {
@@ -537,7 +902,7 @@ async function openCoordinatePicker() {
 }
 
 function closeMapPicker() {
-  document.getElementById("mapPickerModal").hidden = true;
+  hideModal(document.getElementById("mapPickerModal"));
 }
 
 async function loadMapConfig() {
@@ -797,8 +1162,25 @@ function onChartMouseMove(event) {
   cursorPoint.setAttribute("fill", meta.color);
   tip.hidden = false;
   tip.innerHTML = `${escapeHtml(meta.curveTitle)}：${escapeHtml(formatNumber(safeValue))}${escapeHtml(meta.unit)}<br>小时：${escapeHtml(row.hour_index ?? index + 1)}<br>时间：${escapeHtml(row.datetime || "")}`;
-  tip.style.left = `${Math.min(window.innerWidth - 180, event.clientX + 14)}px`;
-  tip.style.top = `${Math.max(12, event.clientY - 28)}px`;
+  positionFloatingTipInRect(tip, rect, event);
+}
+
+function positionFloatingTipInRect(tip, bounds, event) {
+  const margin = 8;
+  const tipWidth = tip.offsetWidth || 180;
+  const tipHeight = tip.offsetHeight || 64;
+  const minLeft = bounds.left + margin;
+  const maxLeft = Math.max(minLeft, bounds.right - tipWidth - margin);
+  const minTop = bounds.top + margin;
+  const maxTop = Math.max(minTop, bounds.bottom - tipHeight - margin);
+  const preferredLeft = event.clientX + 14;
+  const preferredTop = event.clientY - tipHeight - 10;
+  const viewportLeft = Math.min(maxLeft, Math.max(minLeft, preferredLeft));
+  const viewportTop = Math.min(maxTop, Math.max(minTop, preferredTop));
+  const parent = tip.offsetParent || document.body;
+  const parentRect = parent.getBoundingClientRect();
+  tip.style.left = `${viewportLeft - parentRect.left + (parent.scrollLeft || 0)}px`;
+  tip.style.top = `${viewportTop - parentRect.top + (parent.scrollTop || 0)}px`;
 }
 
 function hideChartCursor() {
@@ -907,8 +1289,23 @@ function renderDeviceFilters() {
 function deviceTable(key, fields) {
   const rows = state.payload[key] || [];
   return `<div class="data-table"><table><thead><tr>${fields.map((field) => `<th>${labels[field] || field}</th>`).join("")}<th>操作</th></tr></thead><tbody>${rows
-    .map((row, index) => `<tr>${fields.map((field) => `<td><input data-device="${key}" data-row="${index}" data-key="${field}" value="${escapeHtml(row[field])}"></td>`).join("")}<td><button class="delete-row" type="button" data-device="${key}" data-row="${index}">删除</button></td></tr>`)
+    .map((row, index) => `<tr>${fields.map((field) => `<td><input ${deviceInputAttributes(key, index, field, row[field])}></td>`).join("")}<td><button class="delete-row" type="button" data-device="${key}" data-row="${index}">删除</button></td></tr>`)
     .join("")}</tbody></table></div>`;
+}
+
+function deviceInputAttributes(device, rowIndex, field, value) {
+  const rule = deviceFieldRules[field];
+  const attrs = [
+    `data-device="${escapeHtml(device)}"`,
+    `data-row="${rowIndex}"`,
+    `data-key="${escapeHtml(field)}"`,
+  ];
+  if (rule) {
+    attrs.push('type="number"');
+    attrs.push(...rule.attrs);
+  }
+  attrs.push(`value="${escapeHtml(value)}"`);
+  return attrs.join(" ");
 }
 
 function onDeviceInput(event) {
@@ -1229,8 +1626,7 @@ function onHistogramMouseMove(event) {
   if (!tip) return;
   tip.hidden = false;
   tip.innerHTML = `横坐标：${escapeHtml(bar.dataset.binRange || "")}<br>纵坐标：${escapeHtml(bar.dataset.binCount || "")}`;
-  tip.style.left = `${Math.min(window.innerWidth - 200, event.clientX + 14)}px`;
-  tip.style.top = `${Math.max(12, event.clientY - 28)}px`;
+  positionFloatingTipInRect(tip, bar.ownerSVGElement.getBoundingClientRect(), event);
 }
 
 function hideHistogramTip() {
@@ -1276,11 +1672,14 @@ function collectSaveWarnings() {
   }
   deviceSpecs.forEach(([key, title]) => {
     (state.payload[key] || []).forEach((row, index) => {
-      const quantityLower = Number(row.quantity_lower);
-      const quantityUpper = Number(row.quantity_upper);
-      if (!Number.isFinite(quantityLower) || !Number.isFinite(quantityUpper)) {
-        messages.push({ level: "error", message: `${title}第${index + 1}行数据上下限必须为数值` });
-      } else if (quantityUpper < quantityLower) {
+      const rowLabel = `${title}第${index + 1}行`;
+      deviceFieldsForKey(key).forEach((field) => {
+        const rule = deviceFieldRules[field];
+        if (rule && !validateDeviceFieldValue(row[field], rule)) {
+          messages.push({ level: "error", message: `${rowLabel}${rule.message}` });
+        }
+      });
+      if (validateDeviceFieldValue(row.quantity_lower, deviceFieldRules.quantity_lower) && validateDeviceFieldValue(row.quantity_upper, deviceFieldRules.quantity_upper) && Number(row.quantity_upper) < Number(row.quantity_lower)) {
         messages.push({ level: "error", message: `${title}第${index + 1}行数据上限不能小于数据下限` });
       }
     });
@@ -1316,6 +1715,24 @@ function collectPlanningParameterWarnings() {
     messages.push({ level: "error", message: "频率安全上限不能小于频率安全下限" });
   }
   return messages;
+}
+
+function deviceFieldsForKey(key) {
+  const spec = deviceSpecs.find((item) => item[0] === key);
+  return spec ? spec[2] : [];
+}
+
+function validateDeviceFieldValue(value, rule) {
+  if (!rule) return true;
+  if (value === "" || value === null || value === undefined) return false;
+  const text = String(value).trim();
+  if (text === "") return false;
+  const number = Number(text);
+  if (!Number.isFinite(number)) return false;
+  if (rule.integer && (!/^\d+$/.test(text) || !Number.isInteger(number))) return false;
+  if (rule.positive && number <= 0) return false;
+  if (rule.nonNegative && number < 0) return false;
+  return true;
 }
 
 function coerceInput(value) {

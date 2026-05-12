@@ -44,7 +44,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("storage_battery_packs", payload)
         self.assertIn("hydrogen_tanks", payload)
         self.assertIn("planning_parameters", payload)
-        self.assertEqual(payload["planning_parameters"][0]["design_life_years"], 20)
+        self.assertNotIn("design_life_years", payload["planning_parameters"][0])
         self.assertEqual(payload["planning_parameters"][0]["planning_load_factor"], 1.0)
         self.assertFalse(payload["planning_parameters"][0]["storage_frequency_regulation_enabled"])
         self.assertEqual(payload["validation"][0]["level"], "ok")
@@ -92,7 +92,6 @@ class PlanningStoreTest(unittest.TestCase):
         payload["diesel_generators"][0]["quantity_upper"] = 3
         payload["hydrogen_tanks"][0]["hydrogen_tank_capacity"] = 300
         payload["photovoltaics"][0]["generation_efficiency"] = 0.82
-        payload["planning_parameters"][0]["design_life_years"] = 25
         payload["planning_parameters"][0]["diesel_price"] = 0.76
         payload["planning_parameters"][0]["storage_frequency_regulation_enabled"] = True
 
@@ -105,7 +104,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["diesel_generators"][0]["quantity_upper"], 3)
         self.assertEqual(saved["hydrogen_tanks"][0]["hydrogen_tank_capacity"], 300)
         self.assertEqual(saved["photovoltaics"][0]["generation_efficiency"], 0.82)
-        self.assertEqual(saved["planning_parameters"][0]["design_life_years"], 25)
+        self.assertNotIn("design_life_years", saved["planning_parameters"][0])
         self.assertEqual(saved["planning_parameters"][0]["diesel_price"], 0.76)
         self.assertTrue(saved["planning_parameters"][0]["storage_frequency_regulation_enabled"])
 
@@ -147,6 +146,16 @@ class PlanningStoreTest(unittest.TestCase):
                 self.assertIn("design_life_years", planning_store.SHEET_SPECS[key][1])
                 self.assertEqual(payload[key][0]["design_life_years"], 20)
 
+    def test_hydrogen_electrolyzer_rows_include_power_lower(self):
+        payload = planning_store.default_payload("方案A")
+        headers = planning_store.SHEET_SPECS["hydrogen_electrolyzers"][1]
+
+        self.assertIn("power_lower", headers)
+        self.assertLess(headers.index("power_capacity"), headers.index("power_lower"))
+        self.assertLess(headers.index("power_lower"), headers.index("cost"))
+        self.assertIn("power_lower", payload["hydrogen_electrolyzers"][0])
+        self.assertEqual(payload["hydrogen_electrolyzers"][0]["power_lower"], 0)
+
     def test_read_legacy_time_series_without_temperature_keeps_load(self):
         self.store.create_scheme("方案A")
         workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
@@ -168,7 +177,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(payload["time_series"][0]["load"], 123.4)
         self.assertEqual(payload["time_series"][0]["temperature"], "")
         self.assertIn("planning_parameters", payload)
-        self.assertEqual(payload["planning_parameters"][0]["design_life_years"], 20)
+        self.assertNotIn("design_life_years", payload["planning_parameters"][0])
 
     def test_read_legacy_photovoltaic_sheet_does_not_shift_removed_capacity_columns(self):
         self.store.create_scheme("方案A")
@@ -215,6 +224,48 @@ class PlanningStoreTest(unittest.TestCase):
         messages = planning_store.validate_payload(payload)
 
         self.assertTrue(any("数据上限不能小于数据下限" in item["message"] for item in messages))
+
+    def test_validate_device_numeric_field_rules(self):
+        payload = planning_store.default_payload("方案A")
+        payload["diesel_generators"][0]["quantity_lower"] = -1
+        payload["diesel_generators"][0]["quantity_upper"] = 1.5
+        payload["diesel_generators"][0]["design_life_years"] = 0
+        payload["diesel_generators"][0]["cost"] = -0.1
+        payload["diesel_generators"][0]["capacity"] = 0
+        payload["diesel_generators"][0]["fuel_rate"] = 0
+        payload["wind_turbines"][0]["cut_in_wind_speed"] = -0.1
+        payload["wind_turbines"][0]["cut_out_wind_speed"] = -0.2
+        payload["storage_battery_packs"][0]["battery_capacity"] = 0
+        payload["hydrogen_electrolyzers"][0]["electric_to_hydrogen_efficiency"] = 0
+        payload["hydrogen_electrolyzers"][0]["power_lower"] = -0.1
+        payload["fuel_cells"][0]["hydrogen_to_electric_efficiency"] = 0
+
+        messages = planning_store.validate_payload(payload)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        for expected in (
+            "数据上下限必须为非负整数",
+            "设计年限(年）必须为正整数",
+            "成本(万元/台)必须为非负浮点数",
+            "功率容量(kW)必须为正实数",
+            "电池容量(kWh)必须为正实数",
+            "电-氢效率(Nm3/kWh)必须为正实数",
+            "氢-电效率(kWh/Nm3)必须为正实数",
+            "油耗率(kg/kWh)必须为正实数",
+            "功率下限(kW)必须为非负实数",
+            "切入风速(m/s)必须为非负实数",
+            "切出风速(m/s)必须为非负实数",
+        ):
+            self.assertIn(expected, message_text)
+
+    def test_write_scheme_sanitizes_invisible_device_names(self):
+        payload = planning_store.default_payload("方案A")
+        payload["diesel_generators"][0]["name"] = " 柴\u200b发\r\n1 "
+
+        self.store.write_scheme("方案A", payload)
+        saved = self.store.read_scheme("方案A")
+
+        self.assertEqual(saved["diesel_generators"][0]["name"], "柴发1")
 
     def test_validate_time_series_messages_use_display_label(self):
         payload = planning_store.default_payload("方案A")

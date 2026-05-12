@@ -25,12 +25,12 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "capacity",
             "cost",
-            "design_life_years",
             "power_upper",
             "power_lower",
             "fuel_rate",
             "quantity_lower",
             "quantity_upper",
+            "design_life_years",
         ],
     ),
     "wind_turbines": (
@@ -39,11 +39,11 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "capacity",
             "cost",
-            "design_life_years",
             "cut_in_wind_speed",
             "cut_out_wind_speed",
             "quantity_lower",
             "quantity_upper",
+            "design_life_years",
         ],
     ),
     "photovoltaics": (
@@ -52,30 +52,31 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "capacity",
             "cost",
-            "design_life_years",
             "generation_efficiency",
             "quantity_lower",
             "quantity_upper",
+            "design_life_years",
         ],
     ),
     "storage_pcs": (
         "储能PCS参数",
-        ["name", "power_capacity", "cost", "design_life_years", "quantity_lower", "quantity_upper"],
+        ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"],
     ),
     "storage_battery_packs": (
         "储能电池组参数",
-        ["name", "battery_capacity", "cost", "design_life_years", "quantity_lower", "quantity_upper"],
+        ["name", "battery_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"],
     ),
     "hydrogen_electrolyzers": (
         "电制氢参数",
         [
             "name",
             "power_capacity",
+            "power_lower",
             "cost",
-            "design_life_years",
             "electric_to_hydrogen_efficiency",
             "quantity_lower",
             "quantity_upper",
+            "design_life_years",
         ],
     ),
     "hydrogen_tanks": (
@@ -84,9 +85,9 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "hydrogen_tank_capacity",
             "cost",
-            "design_life_years",
             "quantity_lower",
             "quantity_upper",
+            "design_life_years",
         ],
     ),
     "fuel_cells": (
@@ -95,16 +96,15 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "power_capacity",
             "cost",
-            "design_life_years",
             "hydrogen_to_electric_efficiency",
             "quantity_lower",
             "quantity_upper",
+            "design_life_years",
         ],
     ),
     "planning_parameters": (
         "规划参数",
         [
-            "design_life_years",
             "diesel_price",
             "planning_load_factor",
             "green_power_ratio_lower",
@@ -176,6 +176,7 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
         {
             "name": "电制氢1",
             "power_capacity": 50,
+            "power_lower": 0,
             "cost": 0,
             "electric_to_hydrogen_efficiency": 0.7,
             "quantity_lower": 0,
@@ -204,7 +205,6 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
 }
 
 DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
-    "design_life_years": 20,
     "diesel_price": 0,
     "planning_load_factor": 1.0,
     "green_power_ratio_lower": 0,
@@ -220,6 +220,23 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
 
 FIELD_DEFAULTS: dict[str, Any] = {
     "design_life_years": 20,
+}
+
+DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
+    "quantity_lower": {"integer": True, "non_negative": True, "message": "数据上下限必须为非负整数"},
+    "quantity_upper": {"integer": True, "non_negative": True, "message": "数据上下限必须为非负整数"},
+    "design_life_years": {"integer": True, "positive": True, "message": "设计年限(年）必须为正整数"},
+    "cost": {"non_negative": True, "message": "成本(万元/台)必须为非负浮点数"},
+    "capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
+    "power_capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
+    "battery_capacity": {"positive": True, "message": "电池容量(kWh)必须为正实数"},
+    "hydrogen_tank_capacity": {"positive": True, "message": "氢储容量(Nm3)必须为正实数"},
+    "electric_to_hydrogen_efficiency": {"positive": True, "message": "电-氢效率(Nm3/kWh)必须为正实数"},
+    "hydrogen_to_electric_efficiency": {"positive": True, "message": "氢-电效率(kWh/Nm3)必须为正实数"},
+    "fuel_rate": {"positive": True, "message": "油耗率(kg/kWh)必须为正实数"},
+    "power_lower": {"non_negative": True, "message": "功率下限(kW)必须为非负实数"},
+    "cut_in_wind_speed": {"non_negative": True, "message": "切入风速(m/s)必须为非负实数"},
+    "cut_out_wind_speed": {"non_negative": True, "message": "切出风速(m/s)必须为非负实数"},
 }
 
 INVALID_NAME_RE = re.compile(r'[<>:"/\\|?*]')
@@ -281,6 +298,17 @@ def with_field_defaults(row: dict[str, Any], headers: list[str]) -> dict[str, An
         if header not in normalized:
             normalized[header] = field_default(header, "")
     return normalized
+
+
+def sanitize_payload_names(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in DEFAULT_DEVICE_ROWS:
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and "name" in row:
+                row["name"] = sanitize_scheme_name(row.get("name", ""))
+    return payload
 
 
 @dataclass
@@ -357,6 +385,7 @@ class PlanningStore:
         clean = validate_scheme_name(name)
         folder = self.scheme_dir(clean)
         folder.mkdir(parents=True, exist_ok=True)
+        payload = sanitize_payload_names(deepcopy(payload))
         workbook = build_workbook(payload | {"scheme": clean})
         tmp_path = folder / f".{WORKBOOK_NAME}.tmp"
         final_path = folder / WORKBOOK_NAME
@@ -468,6 +497,38 @@ def count_sheet_rows(path: Path, sheet_name: str) -> int:
         workbook.close()
 
 
+def is_non_negative_integer_value(value: Any) -> bool:
+    if isinstance(value, bool) or value in ("", None):
+        return False
+    if isinstance(value, int):
+        return value >= 0
+    if isinstance(value, float):
+        return value >= 0 and value.is_integer()
+    text = str(value).strip()
+    return bool(re.fullmatch(r"\d+", text))
+
+
+def validate_device_field_value(value: Any, rule: dict[str, Any]) -> bool:
+    if rule.get("integer"):
+        if not is_non_negative_integer_value(value):
+            return False
+        number = float(value)
+    else:
+        if isinstance(value, bool) or value in ("", None):
+            return False
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        if not number == number or number in (float("inf"), float("-inf")):
+            return False
+    if rule.get("positive") and number <= 0:
+        return False
+    if rule.get("non_negative") and number < 0:
+        return False
+    return True
+
+
 def validate_payload(payload: dict[str, Any], require_time_series: bool = True) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     if require_time_series:
@@ -481,17 +542,16 @@ def validate_payload(payload: dict[str, Any], require_time_series: bool = True) 
 
     for key in DEFAULT_DEVICE_ROWS:
         for index, row in enumerate(payload.get(key, []), start=1):
-            quantity_lower = row.get("quantity_lower", "")
-            quantity_upper = row.get("quantity_upper", "")
-            if quantity_lower == "" or quantity_upper == "":
-                continue
-            try:
-                quantity_lower_number = float(quantity_lower)
-                quantity_upper_number = float(quantity_upper)
-            except (TypeError, ValueError):
-                messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行数量上下限不是数值"})
-                continue
-            if quantity_lower_number > quantity_upper_number:
+            row_label = f"{SHEET_SPECS[key][0]}第{index}行"
+            for field in SHEET_SPECS[key][1]:
+                rule = DEVICE_FIELD_RULES.get(field)
+                if rule and not validate_device_field_value(row.get(field, ""), rule):
+                    messages.append({"level": "error", "message": f"{row_label}{rule['message']}"})
+            if (
+                validate_device_field_value(row.get("quantity_lower", ""), DEVICE_FIELD_RULES["quantity_lower"])
+                and validate_device_field_value(row.get("quantity_upper", ""), DEVICE_FIELD_RULES["quantity_upper"])
+                and float(row.get("quantity_lower")) > float(row.get("quantity_upper"))
+            ):
                 messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行数据上限不能小于数据下限"})
     messages.extend(validate_planning_parameters(payload))
     return messages
@@ -523,15 +583,12 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
             messages.append({"level": "error", "message": f"{label}不能大于{maximum:g}"})
         return number
 
-    design_life = number_in_range("design_life_years", "设计使用年限(年)", 1)
-    if design_life is not None and not float(design_life).is_integer():
-        messages.append({"level": "error", "message": "设计使用年限(年)必须为整数"})
     number_in_range("diesel_price", "柴油价格(万元/吨)", 0)
     number_in_range("planning_load_factor", "规划负荷系数(0.1-10.0)", 0.1, 10)
     number_in_range("green_power_ratio_lower", "绿电电量占比下限(0.0-1.0)", 0, 1)
     number_in_range("load_disturbance_factor", "负荷扰动系数(0.0-0.5)", 0, 0.5)
     frequency_upper = number_in_range("frequency_security_upper", "频率安全上限(1.0-1.5)", 1, 1.5)
-    frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(1.0-1.5)", 1, 1.5)
+    frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(0.9-1.0)", 0.9, 1)
     if frequency_upper is not None and frequency_lower is not None and frequency_upper < frequency_lower:
         messages.append({"level": "error", "message": "频率安全上限不能小于频率安全下限"})
     return messages
