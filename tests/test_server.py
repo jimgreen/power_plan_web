@@ -1274,6 +1274,29 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn(">电网规划列表<", html)
         self.assertNotIn(">8760时序数据<", html)
 
+    def test_scheme_lists_use_list_items_with_hover_response(self):
+        planning_script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        optimize_script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
+        evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+
+        for script in (planning_script, optimize_script, evaluation_script):
+            self.assertIn('<ul class="scheme-list-items" role="listbox">', script)
+            self.assertIn('<li class="scheme-item', script)
+            self.assertIn('role="option"', script)
+            self.assertIn('tabindex="0"', script)
+            self.assertIn('aria-selected="${scheme.name === state.currentScheme ? "true" : "false"}"', script)
+            self.assertIn("bindSchemeListItem", script)
+            self.assertIn("event.key === \"Enter\" || event.key === \" \"", script)
+            self.assertNotIn("<button class=\"scheme-item", script)
+
+        self.assertIn(".scheme-list-items", css)
+        self.assertIn(".scheme-item:hover", css)
+        self.assertIn(".scheme-item:focus-visible", css)
+        scheme_item_css = css.split(".scheme-item {", 1)[1].split("}", 1)[0]
+        self.assertIn("cursor: pointer", scheme_item_css)
+        self.assertIn("user-select: none", scheme_item_css)
+
     def test_optimization_page_has_requested_three_area_layout(self):
         html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
         planning_html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")

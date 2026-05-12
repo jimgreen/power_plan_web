@@ -334,11 +334,21 @@ function renderSchemes() {
     list.innerHTML = "<div class=\"validation-item\">暂无方案，请新建方案。</div>";
     return;
   }
-  list.innerHTML = state.schemes
-    .map((scheme) => `<button class="scheme-item ${scheme.name === state.currentScheme ? "active" : ""}" type="button" data-name="${escapeHtml(scheme.name)}">${escapeHtml(scheme.name)}</button>`)
-    .join("");
-  document.querySelectorAll(".scheme-item").forEach((button) => {
-    button.addEventListener("click", () => selectScheme(button.dataset.name).catch(showError));
+  list.innerHTML = `<ul class="scheme-list-items" role="listbox">${state.schemes
+    .map((scheme) => `<li class="scheme-item ${scheme.name === state.currentScheme ? "active" : ""}" data-name="${escapeHtml(scheme.name)}" role="option" aria-selected="${scheme.name === state.currentScheme ? "true" : "false"}" tabindex="0">${escapeHtml(scheme.name)}</li>`)
+    .join("")}</ul>`;
+  document.querySelectorAll(".scheme-item").forEach((item) => {
+    bindSchemeListItem(item, () => selectScheme(item.dataset.name).catch(showError));
+  });
+}
+
+function bindSchemeListItem(item, onSelect) {
+  item.addEventListener("click", onSelect);
+  item.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelect();
+    }
   });
 }
 
