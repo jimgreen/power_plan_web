@@ -50,6 +50,7 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "capacity",
             "cost",
             "cut_in_wind_speed",
+            "rated_wind_speed",
             "cut_out_wind_speed",
             "quantity_lower",
             "quantity_upper",
@@ -152,6 +153,7 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "capacity": 50,
             "cost": 0,
             "cut_in_wind_speed": 3,
+            "rated_wind_speed": 12,
             "cut_out_wind_speed": 25,
             "quantity_lower": 0,
             "quantity_upper": 0,
@@ -237,6 +239,7 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
 FIELD_DEFAULTS: dict[str, Any] = {
     **DEFAULT_PLANNING_PARAMETERS,
     "design_life_years": 20,
+    "rated_wind_speed": 12,
 }
 
 DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
@@ -253,6 +256,7 @@ DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
     "fuel_rate": {"positive": True, "message": "油耗率(kg/kWh)必须为正实数"},
     "power_lower": {"non_negative": True, "message": "功率下限(kW)必须为非负实数"},
     "cut_in_wind_speed": {"non_negative": True, "message": "切入风速(m/s)必须为非负实数"},
+    "rated_wind_speed": {"positive": True, "message": "额定风速(m/s)必须为正实数"},
     "cut_out_wind_speed": {"non_negative": True, "message": "切出风速(m/s)必须为非负实数"},
 }
 

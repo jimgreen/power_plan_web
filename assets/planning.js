@@ -18,7 +18,7 @@ const state = {
 
 const deviceSpecs = [
   ["diesel_generators", "柴发", ["name", "capacity", "cost", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["wind_turbines", "风机", ["name", "capacity", "cost", "cut_in_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["wind_turbines", "风机", ["name", "capacity", "cost", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["photovoltaics", "光伏", ["name", "capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
@@ -91,6 +91,7 @@ const labels = {
   power_lower: "功率下限(kW)",
   fuel_rate: "油耗率(kg/kWh)",
   cut_in_wind_speed: "切入风速(m/s)",
+  rated_wind_speed: "额定风速(m/s)",
   cut_out_wind_speed: "切出风速(m/s)",
   electric_to_hydrogen_efficiency: "电-氢效率(Nm3/kWh)",
   hydrogen_to_electric_efficiency: "氢-电效率(kWh/Nm3)",
@@ -98,6 +99,7 @@ const labels = {
 
 const deviceFieldDefaults = {
   design_life_years: 20,
+  rated_wind_speed: 12,
 };
 
 const deviceFieldRules = {
@@ -114,6 +116,7 @@ const deviceFieldRules = {
   fuel_rate: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "油耗率(kg/kWh)必须为正实数" },
   power_lower: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率下限(kW)必须为非负实数" },
   cut_in_wind_speed: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "切入风速(m/s)必须为非负实数" },
+  rated_wind_speed: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "额定风速(m/s)必须为正实数" },
   cut_out_wind_speed: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "切出风速(m/s)必须为非负实数" },
 };
 

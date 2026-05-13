@@ -201,6 +201,16 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("power_lower", payload["hydrogen_electrolyzers"][0])
         self.assertEqual(payload["hydrogen_electrolyzers"][0]["power_lower"], 0)
 
+    def test_wind_turbine_rows_include_rated_wind_speed_between_cut_in_and_cut_out(self):
+        payload = planning_store.default_payload("方案A")
+        headers = planning_store.SHEET_SPECS["wind_turbines"][1]
+
+        self.assertIn("rated_wind_speed", headers)
+        self.assertLess(headers.index("cut_in_wind_speed"), headers.index("rated_wind_speed"))
+        self.assertLess(headers.index("rated_wind_speed"), headers.index("cut_out_wind_speed"))
+        self.assertIn("rated_wind_speed", payload["wind_turbines"][0])
+        self.assertEqual(payload["wind_turbines"][0]["rated_wind_speed"], 12)
+
     def test_read_legacy_time_series_without_temperature_keeps_load(self):
         self.store.create_scheme("方案A")
         workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
@@ -310,6 +320,7 @@ class PlanningStoreTest(unittest.TestCase):
         payload["diesel_generators"][0]["capacity"] = 0
         payload["diesel_generators"][0]["fuel_rate"] = 0
         payload["wind_turbines"][0]["cut_in_wind_speed"] = -0.1
+        payload["wind_turbines"][0]["rated_wind_speed"] = 0
         payload["wind_turbines"][0]["cut_out_wind_speed"] = -0.2
         payload["storage_battery_packs"][0]["battery_capacity"] = 0
         payload["hydrogen_electrolyzers"][0]["electric_to_hydrogen_efficiency"] = 0
@@ -330,6 +341,7 @@ class PlanningStoreTest(unittest.TestCase):
             "油耗率(kg/kWh)必须为正实数",
             "功率下限(kW)必须为非负实数",
             "切入风速(m/s)必须为非负实数",
+            "额定风速(m/s)必须为正实数",
             "切出风速(m/s)必须为非负实数",
         ):
             self.assertIn(expected, message_text)

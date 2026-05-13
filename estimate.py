@@ -774,7 +774,7 @@ def wind_generation(wind_speed: float, capacity: float, params: dict[str, Any]) 
         return 0.0
     cut_in = numeric(params.get("cut_in_wind_speed"), 3.0)
     cut_out = numeric(params.get("cut_out_wind_speed"), 25.0)
-    rated = max(cut_in + 0.1, 12.0)
+    rated = max(cut_in + 0.1, numeric(params.get("rated_wind_speed"), 12.0))
     if wind_speed < cut_in or wind_speed >= cut_out:
         return 0.0
     if wind_speed >= rated:

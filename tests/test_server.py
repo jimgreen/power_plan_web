@@ -532,6 +532,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertAlmostEqual(estimate.pv_generation(500, 100, {"generation_efficiency": 0.1}), 50.0)
         self.assertAlmostEqual(estimate.pv_generation(1200, 100, {}), 100.0)
 
+    def test_wind_generation_uses_configured_rated_wind_speed(self):
+        params = {"cut_in_wind_speed": 3, "rated_wind_speed": 9, "cut_out_wind_speed": 25}
+
+        self.assertAlmostEqual(estimate.wind_generation(9, 100, params), 100.0)
+        self.assertAlmostEqual(estimate.wind_generation(6, 100, params), 12.5)
+        self.assertAlmostEqual(estimate.wind_generation(25, 100, params), 0.0)
+
     def test_estimate_dispatch_outputs_requested_8760_curve_columns(self):
         payload = server.planning_store.default_payload("方案A")
         for row in payload["time_series"]:
@@ -2492,6 +2499,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "fuel_rate",
             "power_lower",
             "cut_in_wind_speed",
+            "rated_wind_speed",
             "cut_out_wind_speed",
         ):
             self.assertIn(field, script)
@@ -2507,6 +2515,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "油耗率(kg/kWh)必须为正实数",
             "功率下限(kW)必须为非负实数",
             "切入风速(m/s)必须为非负实数",
+            "额定风速(m/s)必须为正实数",
             "切出风速(m/s)必须为非负实数",
         ):
             self.assertIn(message, script)
@@ -2887,6 +2896,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("氢-电效率(kWh/Nm3)", script)
         self.assertIn("电-氢效率(Nm3/kWh)", script)
         self.assertIn("切入风速(m/s)", script)
+        self.assertIn("额定风速(m/s)", script)
         self.assertIn("切出风速(m/s)", script)
         self.assertIn("成本(万元/台)", script)
         self.assertIn("油耗率(kg/kWh)", script)
