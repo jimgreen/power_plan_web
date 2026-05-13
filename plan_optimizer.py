@@ -7,10 +7,10 @@ import math
 from typing import Any, Callable
 
 import numpy as np
-from scipy import sparse
-from scipy.optimize import Bounds, LinearConstraint, milp
 
+import dispatch_milp
 import estimate
+from milp_solver import solve_milp
 
 
 LogSink = Callable[[dict[str, Any]], None]
@@ -52,6 +52,8 @@ def run_optimization(
 
     emit(log, "info", "开始建立设备台数与时序运行联合优化模型", 5)
     model = build_planning_model(scheme_payload, time_series)
+    emit_model_input_summary(model, log)
+    emit_device_candidate_summary(model, log)
     emit(log, "info", "已加入台数上下限、建设成本、柴油成本和绿电占比约束", 15)
     solution = solve_planning_model(model, log)
     emit(log, "info", "优化求解完成，正在整理规划结果和8760曲线", 85)
@@ -60,9 +62,10 @@ def run_optimization(
     dispatch_rows = dispatch_rows_from_solution(model, solution)
     totals = dispatch_totals(dispatch_rows)
     costs = cost_summary_from_solution(model, solution, totals)
+    emit_solution_summary(planning_rows, totals, costs, log)
     results = build_results(planning_rows, dispatch_rows, totals, costs, model)
     metrics = build_metrics(totals, costs)
-    emit(log, "ok", "优化规划完成", 100)
+    emit(log, "ok", "规划求解完成", 100)
     return {
         "status": "已完成",
         "progress": 100,
@@ -76,11 +79,26 @@ def run_optimization(
 
 def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[str, Any]]) -> dict[str, Any]:
     planning_parameters = estimate.first_row(scheme_payload.get("planning_parameters"))
-    planning_load_factor = numeric(planning_parameters.get("planning_load_factor"), 1.0)
     diesel_price = max(0.0, numeric(planning_parameters.get("diesel_price"), 0.0))
     green_ratio_lower = min(1.0, max(0.0, numeric(planning_parameters.get("green_power_ratio_lower"), 0.0)))
+    raw_time_limit_minutes = planning_parameters.get(
+        "optimization_time_limit_minutes",
+        numeric(planning_parameters.get("optimization_time_limit_seconds"), 3600) / 60,
+    )
+    optimization_time_limit_minutes = int(min(120, max(10, round(numeric(raw_time_limit_minutes, 60)))))
+    optimization_time_limit_seconds = optimization_time_limit_minutes * 60
+    initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))
+    initial_hydrogen_storage_ratio = min(
+        1.0,
+        max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
+    )
+    storage_charge_efficiency = min(1.0, max(0.0001, numeric(planning_parameters.get("storage_charge_efficiency"), 0.95)))
+    storage_discharge_efficiency = min(
+        1.0,
+        max(0.0001, numeric(planning_parameters.get("storage_discharge_efficiency"), 0.95)),
+    )
     device_rows = normalized_device_rows(scheme_payload)
-    loads = np.array([max(0.0, numeric(row.get("load"), 0.0) * planning_load_factor) for row in time_series], dtype=float)
+    loads = np.array([max(0.0, numeric(row.get("load"), 0.0)) for row in time_series], dtype=float)
     wind_available_per_unit = {
         device["id"]: np.array(
             [
@@ -104,38 +122,28 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     return {
         "time_series": time_series,
         "loads": loads,
-        "planning_load_factor": planning_load_factor,
         "diesel_price": diesel_price,
         "green_ratio_lower": green_ratio_lower,
+        "optimization_time_limit_minutes": optimization_time_limit_minutes,
+        "optimization_time_limit_seconds": optimization_time_limit_seconds,
+        "initial_storage_soc_ratio": initial_storage_soc_ratio,
+        "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
+        "storage_charge_efficiency": storage_charge_efficiency,
+        "storage_discharge_efficiency": storage_discharge_efficiency,
         "device_rows": device_rows,
         "wind_available_per_unit": wind_available_per_unit,
         "pv_available_per_unit": pv_available_per_unit,
-        "storage_charge_efficiency": 0.95,
-        "storage_discharge_efficiency": 0.95,
     }
 
 
 def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> np.ndarray:
     loads = model["loads"]
     n = len(loads)
-    variables: dict[tuple[Any, ...], int] = {}
-    lower_bounds: list[float] = []
-    upper_bounds: list[float] = []
-    integrality: list[int] = []
-    objective: list[float] = []
-
-    def add_var(key: tuple[Any, ...], lower: float = 0.0, upper: float = np.inf, integer: bool = False, cost: float = 0.0) -> int:
-        index = len(objective)
-        variables[key] = index
-        lower_bounds.append(lower)
-        upper_bounds.append(upper)
-        integrality.append(1 if integer else 0)
-        objective.append(cost)
-        return index
+    builder = dispatch_milp.MilpModelBuilder()
 
     for devices in model["device_rows"].values():
         for device in devices:
-            add_var(
+            builder.add_var(
                 ("qty", device["key"], device["index"]),
                 device["quantity_lower"],
                 device["quantity_upper"],
@@ -159,70 +167,52 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         storage_energy_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_battery_devices)
         hydrogen_tank_upper = sum(device["capacity"] * device["quantity_upper"] for device in hydrogen_tank_devices)
 
-        add_var(("wind_power", hour), 0.0, max(0.0, wind_upper))
-        add_var(("wind_curtailed", hour), 0.0, max(0.0, wind_upper), cost=CURTAILMENT_COST)
-        add_var(("pv_power", hour), 0.0, max(0.0, pv_upper))
-        add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper), cost=CURTAILMENT_COST)
-        add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
-        add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
-        add_var(("storage_soc", hour), 0.0, max(0.0, storage_energy_upper))
-        add_var(("hydrogen_storage", hour), 0.0, max(0.0, hydrogen_tank_upper))
-        add_var(("unmet_load", hour), 0.0, max(0.0, loads[hour]), cost=LOAD_SHED_PENALTY_COST)
+        builder.add_var(("wind_power", hour), 0.0, max(0.0, wind_upper))
+        builder.add_var(("wind_curtailed", hour), 0.0, max(0.0, wind_upper), cost=CURTAILMENT_COST)
+        builder.add_var(("pv_power", hour), 0.0, max(0.0, pv_upper))
+        builder.add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper), cost=CURTAILMENT_COST)
+        builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
+        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
+        builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
+        builder.add_var(("storage_discharge_on", hour), 0.0, 1.0, integer=True)
+        builder.add_var(("storage_soc", hour), 0.0, max(0.0, storage_energy_upper))
+        builder.add_var(("hydrogen_storage", hour), 0.0, max(0.0, hydrogen_tank_upper))
+        builder.add_var(("unmet_load", hour), 0.0, max(0.0, loads[hour]), cost=LOAD_SHED_PENALTY_COST)
 
         for device in diesel_devices:
-            add_var(
+            builder.add_var(
                 ("diesel_power", hour, device["index"]),
                 0.0,
                 device["power_upper"] * device["quantity_upper"],
                 cost=device["fuel_rate"] * model["diesel_price"] / 1000,
             )
-            add_var(
-                ("diesel_on_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
-                cost=DIESEL_ON_COUNT_PENALTY,
-            )
+            for unit in range(device["quantity_upper"]):
+                builder.add_var(("diesel_on_unit", hour, device["index"], unit), 0.0, 1.0, integer=True, cost=DIESEL_ON_COUNT_PENALTY)
         for device in electrolyzer_devices:
-            add_var(
+            builder.add_var(
                 ("electrolyzer_power", hour, device["index"]),
                 0.0,
                 device["capacity"] * device["quantity_upper"],
                 cost=CYCLING_COST,
             )
-            add_var(
-                ("electrolyzer_on_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
-                cost=ELECTROLYZER_ON_COUNT_PENALTY,
-            )
+            for unit in range(device["quantity_upper"]):
+                builder.add_var(
+                    ("electrolyzer_on_unit", hour, device["index"], unit),
+                    0.0,
+                    1.0,
+                    integer=True,
+                    cost=ELECTROLYZER_ON_COUNT_PENALTY,
+                )
         for device in fuel_cell_devices:
-            add_var(
+            builder.add_var(
                 ("fuel_cell_power", hour, device["index"]),
                 0.0,
                 device["capacity"] * device["quantity_upper"],
                 cost=CYCLING_COST,
             )
 
-    rows: list[int] = []
-    cols: list[int] = []
-    data: list[float] = []
-    constraint_lower: list[float] = []
-    constraint_upper: list[float] = []
-
     def var(key: tuple[Any, ...]) -> int:
-        return variables[key]
-
-    def add_constraint(terms: dict[int, float], lower: float, upper: float) -> None:
-        row_index = len(constraint_lower)
-        for column, value in terms.items():
-            if value:
-                rows.append(row_index)
-                cols.append(column)
-                data.append(value)
-        constraint_lower.append(lower)
-        constraint_upper.append(upper)
+        return builder.var(key)
 
     def qty_terms(devices: list[dict[str, Any]], coefficient_key: str = "capacity", multiplier: float = 1.0) -> dict[int, float]:
         return {
@@ -234,134 +224,190 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     discharge_efficiency = model["storage_discharge_efficiency"]
 
     for hour in range(n):
-        power_balance: dict[int, float] = {
-            var(("wind_power", hour)): 1.0,
-            var(("pv_power", hour)): 1.0,
-            var(("storage_discharge", hour)): 1.0,
-            var(("storage_charge", hour)): -1.0,
-            var(("unmet_load", hour)): 1.0,
-        }
-        for device in diesel_devices:
-            power_balance[var(("diesel_power", hour, device["index"]))] = 1.0
-        for device in electrolyzer_devices:
-            power_balance[var(("electrolyzer_power", hour, device["index"]))] = -1.0
-        for device in fuel_cell_devices:
-            power_balance[var(("fuel_cell_power", hour, device["index"]))] = 1.0
-        add_constraint(power_balance, loads[hour], loads[hour])
+        dispatch_milp.add_power_balance_constraint(
+            builder,
+            generation_indices=[
+                var(("wind_power", hour)),
+                var(("pv_power", hour)),
+                var(("storage_discharge", hour)),
+                *[var(("diesel_power", hour, device["index"])) for device in diesel_devices],
+                *[var(("fuel_cell_power", hour, device["index"])) for device in fuel_cell_devices],
+            ],
+            charge_indices=[var(("storage_charge", hour))],
+            consumption_indices=[var(("electrolyzer_power", hour, device["index"])) for device in electrolyzer_devices],
+            unmet_index=var(("unmet_load", hour)),
+            load=loads[hour],
+        )
 
-        wind_terms = {var(("wind_power", hour)): 1.0, var(("wind_curtailed", hour)): 1.0}
-        for device in wind_devices:
-            wind_terms[var(("qty", device["key"], device["index"]))] = -model["wind_available_per_unit"][device["id"]][hour]
-        add_constraint(wind_terms, 0.0, 0.0)
+        dispatch_milp.add_availability_constraint(
+            builder,
+            production_indices=[var(("wind_power", hour))],
+            curtailed_index=var(("wind_curtailed", hour)),
+            available_terms={
+                var(("qty", device["key"], device["index"])): model["wind_available_per_unit"][device["id"]][hour]
+                for device in wind_devices
+            },
+        )
 
-        pv_terms = {var(("pv_power", hour)): 1.0, var(("pv_curtailed", hour)): 1.0}
-        for device in pv_devices:
-            pv_terms[var(("qty", device["key"], device["index"]))] = -model["pv_available_per_unit"][device["id"]][hour]
-        add_constraint(pv_terms, 0.0, 0.0)
+        dispatch_milp.add_availability_constraint(
+            builder,
+            production_indices=[var(("pv_power", hour))],
+            curtailed_index=var(("pv_curtailed", hour)),
+            available_terms={
+                var(("qty", device["key"], device["index"])): model["pv_available_per_unit"][device["id"]][hour]
+                for device in pv_devices
+            },
+        )
 
         for device in diesel_devices:
             qty_index = var(("qty", device["key"], device["index"]))
             power_index = var(("diesel_power", hour, device["index"]))
-            on_index = var(("diesel_on_count", hour, device["index"]))
-            add_constraint({on_index: 1.0, qty_index: -1.0}, -np.inf, 0.0)
-            add_constraint({power_index: 1.0, on_index: -device["power_upper"]}, -np.inf, 0.0)
-            add_constraint({power_index: 1.0, on_index: -device["power_lower"]}, 0.0, np.inf)
+            on_terms = {
+                var(("diesel_on_unit", hour, device["index"], unit)): 1.0
+                for unit in range(device["quantity_upper"])
+            }
+            dispatch_milp.add_unit_commitment_constraints(
+                builder,
+                power_index=power_index,
+                on_indices=list(on_terms),
+                power_upper=device["power_upper"],
+                power_lower=device["power_lower"],
+                quantity_index=qty_index,
+            )
 
         for device in electrolyzer_devices:
             qty_index = var(("qty", device["key"], device["index"]))
             power_index = var(("electrolyzer_power", hour, device["index"]))
-            on_index = var(("electrolyzer_on_count", hour, device["index"]))
-            add_constraint({on_index: 1.0, qty_index: -1.0}, -np.inf, 0.0)
-            add_constraint({power_index: 1.0, on_index: -device["capacity"]}, -np.inf, 0.0)
-            add_constraint({power_index: 1.0, on_index: -device["power_lower"]}, 0.0, np.inf)
+            on_terms = {
+                var(("electrolyzer_on_unit", hour, device["index"], unit)): 1.0
+                for unit in range(device["quantity_upper"])
+            }
+            dispatch_milp.add_unit_commitment_constraints(
+                builder,
+                power_index=power_index,
+                on_indices=list(on_terms),
+                power_upper=device["capacity"],
+                power_lower=device["power_lower"],
+                quantity_index=qty_index,
+            )
 
         for device in fuel_cell_devices:
-            add_constraint(
-                {
-                    var(("fuel_cell_power", hour, device["index"])): 1.0,
-                    var(("qty", device["key"], device["index"])): -device["capacity"],
-                },
-                -np.inf,
-                0.0,
+            dispatch_milp.add_capacity_upper_constraint(
+                builder,
+                var(("fuel_cell_power", hour, device["index"])),
+                capacity_terms={var(("qty", device["key"], device["index"])): device["capacity"]},
             )
 
         storage_power_terms = qty_terms(storage_pcs_devices)
-        add_constraint({var(("storage_charge", hour)): 1.0, **{column: -value for column, value in storage_power_terms.items()}}, -np.inf, 0.0)
-        add_constraint({var(("storage_discharge", hour)): 1.0, **{column: -value for column, value in storage_power_terms.items()}}, -np.inf, 0.0)
+        storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_pcs_devices)
         storage_energy_terms = qty_terms(storage_battery_devices)
-        add_constraint({var(("storage_soc", hour)): 1.0, **{column: -value for column, value in storage_energy_terms.items()}}, -np.inf, 0.0)
-
-        storage_terms: dict[int, float] = {
-            var(("storage_soc", hour)): 1.0,
-            var(("storage_charge", hour)): -charge_efficiency,
-            var(("storage_discharge", hour)): 1.0 / discharge_efficiency,
-        }
-        if hour == 0:
-            for column, value in storage_energy_terms.items():
-                storage_terms[column] = storage_terms.get(column, 0.0) - 0.5 * value
-        else:
-            storage_terms[var(("storage_soc", hour - 1))] = -1.0
-        add_constraint(storage_terms, 0.0, 0.0)
+        dispatch_milp.add_storage_constraints(
+            builder,
+            charge_index=var(("storage_charge", hour)),
+            discharge_index=var(("storage_discharge", hour)),
+            charge_on_index=var(("storage_charge_on", hour)),
+            discharge_on_index=var(("storage_discharge_on", hour)),
+            soc_index=var(("storage_soc", hour)),
+            previous_soc_index=var(("storage_soc", hour - 1)) if hour > 0 else None,
+            power_capacity_upper=storage_power_upper,
+            power_capacity_terms=storage_power_terms,
+            energy_capacity_terms=storage_energy_terms,
+            initial_ratio=model["initial_storage_soc_ratio"],
+            charge_efficiency=charge_efficiency,
+            discharge_efficiency=discharge_efficiency,
+        )
 
         hydrogen_capacity_terms = qty_terms(hydrogen_tank_devices)
-        add_constraint({var(("hydrogen_storage", hour)): 1.0, **{column: -value for column, value in hydrogen_capacity_terms.items()}}, -np.inf, 0.0)
-        hydrogen_terms: dict[int, float] = {var(("hydrogen_storage", hour)): 1.0}
-        for device in electrolyzer_devices:
-            hydrogen_terms[var(("electrolyzer_power", hour, device["index"]))] = -device["electric_to_hydrogen_efficiency"]
-        for device in fuel_cell_devices:
-            hydrogen_terms[var(("fuel_cell_power", hour, device["index"]))] = 1.0 / max(0.0001, device["hydrogen_to_electric_efficiency"])
-        if hour == 0:
-            for column, value in hydrogen_capacity_terms.items():
-                hydrogen_terms[column] = hydrogen_terms.get(column, 0.0) - 0.5 * value
-        else:
-            hydrogen_terms[var(("hydrogen_storage", hour - 1))] = -1.0
-        add_constraint(hydrogen_terms, 0.0, 0.0)
+        dispatch_milp.add_hydrogen_constraints(
+            builder,
+            storage_index=var(("hydrogen_storage", hour)),
+            previous_storage_index=var(("hydrogen_storage", hour - 1)) if hour > 0 else None,
+            production_terms={
+                var(("electrolyzer_power", hour, device["index"])): device["electric_to_hydrogen_efficiency"]
+                for device in electrolyzer_devices
+            },
+            consumption_terms={
+                var(("fuel_cell_power", hour, device["index"])): 1.0 / max(0.0001, device["hydrogen_to_electric_efficiency"])
+                for device in fuel_cell_devices
+            },
+            capacity_terms=hydrogen_capacity_terms,
+            initial_ratio=model["initial_hydrogen_storage_ratio"],
+        )
 
     for day_end_hour in range(23, n, 24):
         storage_energy_terms = qty_terms(storage_battery_devices)
-        add_constraint(
-            {var(("storage_soc", day_end_hour)): 1.0, **{column: -0.5 * value for column, value in storage_energy_terms.items()}},
-            0.0,
-            0.0,
+        dispatch_milp.add_storage_cycle_constraint(
+            builder,
+            soc_index=var(("storage_soc", day_end_hour)),
+            energy_capacity_terms=storage_energy_terms,
+            initial_ratio=model["initial_storage_soc_ratio"],
         )
     if n:
         hydrogen_capacity_terms = qty_terms(hydrogen_tank_devices)
-        add_constraint(
-            {var(("hydrogen_storage", n - 1)): 1.0, **{column: -0.5 * value for column, value in hydrogen_capacity_terms.items()}},
-            0.0,
-            0.0,
+        dispatch_milp.add_hydrogen_cycle_constraint(
+            builder,
+            storage_index=var(("hydrogen_storage", n - 1)),
+            capacity_terms=hydrogen_capacity_terms,
+            initial_ratio=model["initial_hydrogen_storage_ratio"],
         )
 
     green_ratio_lower = model["green_ratio_lower"]
-    if green_ratio_lower > 0:
-        green_terms: dict[int, float] = {}
-        for hour in range(n):
-            coefficient = 1.0 - green_ratio_lower
-            for key in (("wind_power", hour), ("pv_power", hour), ("storage_discharge", hour)):
-                green_terms[var(key)] = green_terms.get(var(key), 0.0) + coefficient
-            for device in fuel_cell_devices:
-                index = var(("fuel_cell_power", hour, device["index"]))
-                green_terms[index] = green_terms.get(index, 0.0) + coefficient
-            for device in diesel_devices:
-                index = var(("diesel_power", hour, device["index"]))
-                green_terms[index] = green_terms.get(index, 0.0) - green_ratio_lower
-        add_constraint(green_terms, 0.0, np.inf)
+    dispatch_milp.add_green_ratio_constraint(
+        builder,
+        green_power_indices=[
+            index
+            for hour in range(n)
+            for index in [
+                var(("wind_power", hour)),
+                var(("pv_power", hour)),
+                var(("storage_discharge", hour)),
+                *[var(("fuel_cell_power", hour, device["index"])) for device in fuel_cell_devices],
+            ]
+        ],
+        diesel_power_indices=[
+            var(("diesel_power", hour, device["index"]))
+            for hour in range(n)
+            for device in diesel_devices
+        ],
+        ratio_lower=green_ratio_lower,
+    )
 
+    variable_count = builder.variable_count
+    integer_variable_count = builder.integer_variable_count
+    constraint_count = builder.constraint_count
+    emit(
+        log,
+        "info",
+        f"模型规模：变量{variable_count}个（整数{integer_variable_count}个），约束{constraint_count}条，非零系数{builder.nonzero_count}个",
+        20,
+    )
+    emit(
+        log,
+        "info",
+        f"求解参数：time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
+        22,
+    )
     emit(log, "info", "求解设备台数和全年运行联合混合整数线性规划", 25)
-    matrix = sparse.coo_matrix((data, (rows, cols)), shape=(len(constraint_lower), len(objective))).tocsr()
-    result = milp(
-        np.array(objective, dtype=float),
-        integrality=np.array(integrality, dtype=int),
-        bounds=Bounds(np.array(lower_bounds, dtype=float), np.array(upper_bounds, dtype=float)),
-        constraints=LinearConstraint(matrix, np.array(constraint_lower, dtype=float), np.array(constraint_upper, dtype=float)),
-        options={"time_limit": 180, "mip_rel_gap": 0.01, "disp": False},
+    result = dispatch_milp.solve_built_milp(
+        builder,
+        options={"time_limit": model["optimization_time_limit_seconds"], "mip_rel_gap": 0.01, "disp": False},
+        log=log,
+        problem_name="规划求解",
+        solve_fn=solve_milp,
     )
     if result.x is None:
         raise ValueError(f"规划优化失败：{result.message}")
+    objective_value = float(result.fun) if result.fun is not None else 0.0
+    emit(
+        log,
+        "info",
+        f"求解器返回：success={result.success}，目标函数值={format_log_number(objective_value)}，状态={result.message}",
+        80,
+    )
     if not result.success:
         emit(log, "warn", f"规划优化未达到最优但返回了可行解：{result.message}", 80)
-    model["variables"] = variables
-    model["objective_value"] = float(result.fun) if result.fun is not None else 0.0
+    model["variables"] = builder.variables
+    model["objective_value"] = objective_value
     return result.x
 
 
@@ -415,6 +461,91 @@ def active_devices(model: dict[str, Any], key: str) -> list[dict[str, Any]]:
         for device in model["device_rows"][key]
         if device["quantity_upper"] > 0 and device["capacity"] > 0
     ]
+
+
+def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) -> None:
+    loads = model["loads"]
+    hours = len(loads)
+    load_energy = float(np.sum(loads)) if hours else 0.0
+    peak_load = float(np.max(loads)) if hours else 0.0
+    emit(
+        log,
+        "info",
+        (
+            "模型输入："
+            f"时段={hours}小时，"
+            f"负荷总电量={format_log_number(load_energy)}kWh，"
+            f"最大负荷={format_log_number(peak_load)}kW，"
+            f"柴油价格={format_log_number(model['diesel_price'])}万元/吨，"
+            f"绿电下限={format_log_number(model['green_ratio_lower'] * 100)}%，"
+            f"初始电储={format_log_number(model['initial_storage_soc_ratio'] * 100)}%，"
+            f"初始氢储={format_log_number(model['initial_hydrogen_storage_ratio'] * 100)}%，"
+            f"储能效率={format_log_number(model['storage_charge_efficiency'] * 100)}%/"
+            f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
+            f"求解上限={model['optimization_time_limit_seconds']}秒"
+        ),
+        8,
+    )
+
+
+def emit_device_candidate_summary(model: dict[str, Any], log: LogSink | None = None) -> None:
+    parts = []
+    for key, devices in model["device_rows"].items():
+        if not devices:
+            continue
+        label = DEVICE_SPECS[key]["label"]
+        lower_count = sum(int(device["quantity_lower"]) for device in devices)
+        upper_count = sum(int(device["quantity_upper"]) for device in devices)
+        max_capacity = sum(device["capacity"] * device["quantity_upper"] for device in devices)
+        min_annual_cost = sum(device["annual_cost"] * device["quantity_lower"] for device in devices)
+        max_annual_cost = sum(device["annual_cost"] * device["quantity_upper"] for device in devices)
+        parts.append(
+            (
+                f"{label}{len(devices)}行"
+                f"(台数{lower_count}-{upper_count}, "
+                f"上限容量{format_log_number(max_capacity)}{DEVICE_SPECS[key]['unit']}, "
+                f"年均成本{format_log_number(min_annual_cost)}-{format_log_number(max_annual_cost)}万元)"
+            )
+        )
+    emit(log, "info", f"候选设备：{'；'.join(parts) if parts else '无'}", 12)
+
+
+def emit_solution_summary(
+    planning_rows: list[dict[str, Any]],
+    totals: dict[str, float],
+    costs: dict[str, float],
+    log: LogSink | None = None,
+) -> None:
+    capacities = estimate.capacities_from_planning_rows(planning_rows)
+    emit(
+        log,
+        "info",
+        (
+            "成本汇总："
+            f"年均建设成本={format_log_number(costs['annualized_construction_cost'])}万元，"
+            f"年柴油成本={format_log_number(costs['annual_diesel_cost'])}万元，"
+            f"年总成本={format_log_number(costs['annual_total_cost'])}万元，"
+            f"柴油消耗={format_log_number(totals['diesel_consumption'])}吨，"
+            f"绿电占比={format_log_number(totals['green_power_ratio'])}%"
+        ),
+        92,
+    )
+    emit(
+        log,
+        "info",
+        (
+            "容量结果："
+            f"柴发={format_log_number(capacities['diesel_capacity'])}kW，"
+            f"风电={format_log_number(capacities['wind_capacity'])}kW，"
+            f"光伏={format_log_number(capacities['pv_capacity'])}kW，"
+            f"储能PCS={format_log_number(capacities['storage_power_capacity'])}kW，"
+            f"电池={format_log_number(capacities['storage_energy_capacity'])}kWh，"
+            f"电制氢={format_log_number(capacities['electrolyzer_power_capacity'])}kW，"
+            f"储氢={format_log_number(capacities['hydrogen_tank_capacity'])}Nm3，"
+            f"燃料电池={format_log_number(capacities['fuel_cell_power_capacity'])}kW"
+        ),
+        95,
+    )
 
 
 def planning_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> list[dict[str, Any]]:
@@ -513,10 +644,18 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "storage_charge": round(value(("storage_charge", hour)), 4),
                 "storage_discharge": round(value(("storage_discharge", hour)), 4),
                 "storage_soc": round(value(("storage_soc", hour)), 4),
-                "diesel_on": int(round(sum(value(("diesel_on_count", hour, device["index"])) for device in diesel_devices))),
+                "diesel_on": int(round(sum(
+                    value(("diesel_on_unit", hour, device["index"], unit))
+                    for device in diesel_devices
+                    for unit in range(device["quantity_upper"])
+                ))),
                 "hydrogen_production_power": round(electrolyzer_power, 4),
                 "hydrogen_production": round(hydrogen_production, 4),
-                "electrolyzer_on": int(round(sum(value(("electrolyzer_on_count", hour, device["index"])) for device in electrolyzer_devices))),
+                "electrolyzer_on": int(round(sum(
+                    value(("electrolyzer_on_unit", hour, device["index"], unit))
+                    for device in electrolyzer_devices
+                    for unit in range(device["quantity_upper"])
+                ))),
                 "fuel_cell_power": round(fuel_cell_power, 4),
                 "hydrogen_storage": round(value(("hydrogen_storage", hour)), 4),
                 "wind_curtailed_power": round(wind_curtailed, 4),
@@ -585,7 +724,7 @@ def build_results(
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
         {"指标": "绿电年发电量", "数值": totals["green_generation_energy"], "单位": "kWh"},
         {"指标": "总发电量", "数值": totals["total_generation_energy"], "单位": "kWh"},
-        {"指标": "绿电电量占比下限", "数值": round(model["green_ratio_lower"] * 100, 4), "单位": "%"},
+        {"指标": "绿色电量占比下限", "数值": round(model["green_ratio_lower"] * 100, 4), "单位": "%"},
         {"指标": "柴油消耗", "数值": totals["diesel_consumption"], "单位": "吨"},
         {"指标": "年均建设成本", "数值": costs["annualized_construction_cost"], "单位": "万元"},
         {"指标": "年柴油成本", "数值": costs["annual_diesel_cost"], "单位": "万元"},
@@ -645,7 +784,7 @@ def build_results(
             {"指标": "总成本", "数值": costs["annual_total_cost"], "单位": "万元", "说明": "年均建设成本加年柴油成本"},
         ],
         "green": [
-            {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "满足规划参数中的绿电电量占比下限"},
+            {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "满足规划参数中的绿色电量占比下限"},
             {"指标": "弃电率", "数值": round(curtailed_ratio, 4), "单位": "%", "说明": "新能源弃电量占新能源最大可发电量比例"},
             {"指标": "柴油消耗", "数值": totals["diesel_consumption"], "单位": "吨", "说明": "按各柴发油耗率逐时累计"},
         ],
@@ -653,7 +792,7 @@ def build_results(
         "safety": [
             {"指标": "备用裕度", "数值": 0, "单位": "%", "说明": "基于优化出力结果统计"},
             {"指标": "频率安全裕度", "数值": 1.0, "单位": "p.u.", "说明": "未供负荷为0时按通过处理"},
-            {"指标": "N-1校核", "数值": "通过" if frequency_risk_hours == 0 else "需复核", "单位": "", "说明": "启动优化结果的基础安全摘要"},
+            {"指标": "N-1校核", "数值": "通过" if frequency_risk_hours == 0 else "需复核", "单位": "", "说明": "规划求解结果的基础安全摘要"},
         ],
         "safety_table": [
             {"指标": "向上扰动最大量", "数值": 0, "单位": "kW"},
@@ -768,6 +907,15 @@ def non_negative_int(value: Any, default: int = 0) -> int:
 
 def numeric(value: Any, default: float = 0.0) -> float:
     return estimate.numeric(value, default)
+
+
+def format_log_number(value: Any) -> str:
+    number = numeric(value, 0.0)
+    if abs(number) >= 1000:
+        return f"{number:.0f}"
+    if abs(number) >= 10:
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+    return f"{number:.4f}".rstrip("0").rstrip(".")
 
 
 def emit(log: LogSink | None, level: str, message: str, progress: int | None = None) -> None:

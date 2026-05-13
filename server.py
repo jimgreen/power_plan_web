@@ -384,7 +384,7 @@ class OptimizationRuntime:
         self._thread: threading.Thread | None = None
         self._stop_requested = False
         self._run_token = 0
-        self._append_log_unlocked("info", "优化规划待启动")
+        self._append_log_unlocked("info", "规划求解待启动")
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -412,8 +412,8 @@ class OptimizationRuntime:
                 self._stop_requested = False
                 self._run_token += 1
                 token = self._run_token
-                self._append_log_unlocked("ok", f"启动优化规划，方案：{self.scheme}")
-                self._append_log_unlocked("info", "后台优化规划程序已启动")
+                self._append_log_unlocked("ok", f"启动规划求解，方案：{self.scheme}")
+                self._append_log_unlocked("info", "后台规划求解程序已启动")
                 self._thread = threading.Thread(
                     target=self._run_optimization,
                     args=(token, target_scheme),
@@ -429,7 +429,7 @@ class OptimizationRuntime:
                 self._stop_requested = True
                 self.status = "已停止"
                 self.end_time = _now_text()
-                self._append_log_unlocked("warn", "停止优化规划")
+                self._append_log_unlocked("warn", "停止规划求解")
                 return self._payload_unlocked()
 
         raise ValueError(f"unknown optimization action: {action}")
@@ -446,7 +446,7 @@ class OptimizationRuntime:
         if self.progress >= 100:
             self.status = "已完成"
             self.end_time = _now_text()
-            self._append_log_unlocked("ok", "优化规划完成")
+            self._append_log_unlocked("ok", "规划求解完成")
             self._export_results_once_unlocked()
 
     def _payload_unlocked(self) -> dict:
@@ -525,7 +525,7 @@ class OptimizationRuntime:
                     return
                 self.status = "失败"
                 self.end_time = _now_text()
-                self._append_log_unlocked("error", f"优化规划失败：{exc}")
+                self._append_log_unlocked("error", f"规划求解失败：{exc}")
 
     def _append_optimizer_event(self, event: dict, token: int) -> None:
         level = str(event.get("level") or "info")
@@ -2828,7 +2828,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 return
 
         content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-        no_cache_suffixes = {".html", ".css", ".js"}
+        no_cache_suffixes = {".html", ".css", ".js", ".png"}
         headers = {
             "Content-Type": content_type,
             "Cache-Control": "no-cache" if path.suffix in no_cache_suffixes else "public, max-age=3600",

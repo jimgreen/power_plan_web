@@ -45,7 +45,12 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("hydrogen_tanks", payload)
         self.assertIn("planning_parameters", payload)
         self.assertNotIn("design_life_years", payload["planning_parameters"][0])
-        self.assertEqual(payload["planning_parameters"][0]["planning_load_factor"], 1.0)
+        self.assertNotIn("planning_load_factor", payload["planning_parameters"][0])
+        self.assertEqual(payload["planning_parameters"][0]["optimization_time_limit_minutes"], 60)
+        self.assertEqual(payload["planning_parameters"][0]["initial_storage_soc_ratio"], 0.5)
+        self.assertEqual(payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.5)
+        self.assertEqual(payload["planning_parameters"][0]["storage_charge_efficiency"], 0.95)
+        self.assertEqual(payload["planning_parameters"][0]["storage_discharge_efficiency"], 0.95)
         self.assertFalse(payload["planning_parameters"][0]["storage_frequency_regulation_enabled"])
         self.assertEqual(payload["validation"][0]["level"], "ok")
         for key in planning_store.DEFAULT_DEVICE_ROWS:
@@ -55,7 +60,7 @@ class PlanningStoreTest(unittest.TestCase):
             self.assertNotIn("design_capacity_upper", payload[key][0])
             self.assertEqual(payload[key][0]["quantity_lower"], 0)
             self.assertEqual(payload[key][0]["quantity_upper"], 0)
-        self.assertIn("generation_efficiency", payload["photovoltaics"][0])
+        self.assertNotIn("generation_efficiency", payload["photovoltaics"][0])
         self.assertNotIn("cut_in_wind_speed", payload["photovoltaics"][0])
         self.assertNotIn("cut_out_wind_speed", payload["photovoltaics"][0])
 
@@ -91,8 +96,12 @@ class PlanningStoreTest(unittest.TestCase):
         payload["diesel_generators"][0]["quantity_lower"] = 1
         payload["diesel_generators"][0]["quantity_upper"] = 3
         payload["hydrogen_tanks"][0]["hydrogen_tank_capacity"] = 300
-        payload["photovoltaics"][0]["generation_efficiency"] = 0.82
         payload["planning_parameters"][0]["diesel_price"] = 0.76
+        payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 90
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.25
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.75
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.9
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.88
         payload["planning_parameters"][0]["storage_frequency_regulation_enabled"] = True
 
         self.store.write_scheme("方案A", payload)
@@ -103,9 +112,14 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["diesel_generators"][0]["quantity_lower"], 1)
         self.assertEqual(saved["diesel_generators"][0]["quantity_upper"], 3)
         self.assertEqual(saved["hydrogen_tanks"][0]["hydrogen_tank_capacity"], 300)
-        self.assertEqual(saved["photovoltaics"][0]["generation_efficiency"], 0.82)
+        self.assertNotIn("generation_efficiency", saved["photovoltaics"][0])
         self.assertNotIn("design_life_years", saved["planning_parameters"][0])
         self.assertEqual(saved["planning_parameters"][0]["diesel_price"], 0.76)
+        self.assertEqual(saved["planning_parameters"][0]["optimization_time_limit_minutes"], 90)
+        self.assertEqual(saved["planning_parameters"][0]["initial_storage_soc_ratio"], 0.25)
+        self.assertEqual(saved["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.75)
+        self.assertEqual(saved["planning_parameters"][0]["storage_charge_efficiency"], 0.9)
+        self.assertEqual(saved["planning_parameters"][0]["storage_discharge_efficiency"], 0.88)
         self.assertTrue(saved["planning_parameters"][0]["storage_frequency_regulation_enabled"])
 
     def test_read_scheme_overview_defers_time_series_rows(self):
@@ -179,6 +193,37 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("planning_parameters", payload)
         self.assertNotIn("design_life_years", payload["planning_parameters"][0])
 
+    def test_read_legacy_planning_parameters_defaults_missing_new_fields(self):
+        self.store.create_scheme("方案A")
+        workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        time_sheet = workbook.create_sheet("8760时序数据")
+        time_sheet.append(planning_store.SHEET_SPECS["time_series"][1])
+        for row in planning_store.default_time_series():
+            time_sheet.append([row.get(header, "") for header in planning_store.SHEET_SPECS["time_series"][1]])
+        for key, (sheet_name, headers) in planning_store.SHEET_SPECS.items():
+            if key in {"time_series", "planning_parameters"}:
+                continue
+            sheet = workbook.create_sheet(sheet_name)
+            sheet.append(headers)
+        planning_sheet = workbook.create_sheet("规划参数")
+        planning_sheet.append(["diesel_price", "planning_load_factor", "green_power_ratio_lower"])
+        planning_sheet.append([1.2, 1.1, 0.2])
+        workbook.save(workbook_path)
+
+        payload = self.store.read_scheme("方案A")
+        row = payload["planning_parameters"][0]
+
+        self.assertEqual(row["diesel_price"], 1.2)
+        self.assertNotIn("planning_load_factor", row)
+        self.assertEqual(row["green_power_ratio_lower"], 0.2)
+        self.assertEqual(row["optimization_time_limit_minutes"], 60)
+        self.assertEqual(row["initial_storage_soc_ratio"], 0.5)
+        self.assertEqual(row["initial_hydrogen_storage_ratio"], 0.5)
+        self.assertEqual(row["storage_charge_efficiency"], 0.95)
+        self.assertEqual(row["storage_discharge_efficiency"], 0.95)
+
     def test_read_legacy_photovoltaic_sheet_does_not_shift_removed_capacity_columns(self):
         self.store.create_scheme("方案A")
         workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
@@ -211,7 +256,7 @@ class PlanningStoreTest(unittest.TestCase):
         payload = self.store.read_scheme("方案A")
 
         self.assertEqual(payload["photovoltaics"][0]["cost"], 3.5)
-        self.assertEqual(payload["photovoltaics"][0]["generation_efficiency"], "")
+        self.assertNotIn("generation_efficiency", payload["photovoltaics"][0])
         self.assertEqual(payload["photovoltaics"][0]["design_life_years"], 20)
         self.assertEqual(payload["photovoltaics"][0]["quantity_lower"], 4)
         self.assertEqual(payload["photovoltaics"][0]["quantity_upper"], 5)
@@ -279,15 +324,23 @@ class PlanningStoreTest(unittest.TestCase):
 
     def test_validate_planning_parameter_ranges(self):
         payload = planning_store.default_payload("方案A")
-        payload["planning_parameters"][0]["planning_load_factor"] = 12
         payload["planning_parameters"][0]["green_power_ratio_lower"] = 1.2
+        payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 9
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = -0.1
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 1.1
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 1.1
         payload["planning_parameters"][0]["frequency_security_upper"] = 1.1
         payload["planning_parameters"][0]["frequency_security_lower"] = 1.3
 
         messages = planning_store.validate_payload(payload)
 
-        self.assertTrue(any("规划负荷系数(0.1-10.0)不能大于10" in item["message"] for item in messages))
-        self.assertTrue(any("绿电电量占比下限(0.0-1.0)不能大于1" in item["message"] for item in messages))
+        self.assertTrue(any("绿色电量占比下限(0.0-1.0)不能大于1" in item["message"] for item in messages))
+        self.assertTrue(any("规划求解时间上限(分钟)不能小于10" in item["message"] for item in messages))
+        self.assertTrue(any("初始电储SOC(0.0-1.0)不能小于0" in item["message"] for item in messages))
+        self.assertTrue(any("初始氢储SOC(0.0-1.0)不能大于1" in item["message"] for item in messages))
+        self.assertTrue(any("电储能充电效率(0.0-1.0)必须大于0" in item["message"] for item in messages))
+        self.assertTrue(any("电储能放电效率(0.0-1.0)不能大于1" in item["message"] for item in messages))
         self.assertTrue(any("频率安全上限不能小于频率安全下限" in item["message"] for item in messages))
 
 

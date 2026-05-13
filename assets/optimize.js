@@ -286,8 +286,8 @@ function updateOptimizationActions(data = state.optimization || {}) {
   stopButton.classList.toggle("is-active", !stopButton.disabled);
   startButton.setAttribute("aria-disabled", String(startButton.disabled));
   stopButton.setAttribute("aria-disabled", String(stopButton.disabled));
-  startButton.title = !hasScheme ? "请先选择方案" : isRunning ? "当前方案正在运行" : "启动当前方案优化规划";
-  stopButton.title = !hasScheme ? "请先选择方案" : isRunning ? "停止当前方案优化规划" : "当前方案没有运行";
+  startButton.title = !hasScheme ? "请先选择方案" : isRunning ? "当前方案正在运行" : "启动当前方案规划求解";
+  stopButton.title = !hasScheme ? "请先选择方案" : isRunning ? "停止当前方案规划求解" : "当前方案没有运行";
 }
 
 function defaultOptimizationState(scheme = "") {

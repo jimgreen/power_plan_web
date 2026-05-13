@@ -6,6 +6,7 @@ import unittest
 import base64
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import quote
 from unittest.mock import patch
 
@@ -91,7 +92,7 @@ class PowerPlanServerTest(unittest.TestCase):
     def test_index_page_has_visual_planning_entry_buttons(self):
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
 
-        self.assertIn('background-image: url("assets/main-dashboard-bg.png?v=20260510-title-safe")', html)
+        self.assertIn('background-image: url("assets/main-dashboard-bg.png?v=20260513-bg-refresh")', html)
         self.assertIn("background-size: contain", html)
         self.assertIn('<link rel="icon" href="data:,">', html)
         self.assertIn(".screen::before", html)
@@ -100,7 +101,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("考察站风-光-氢-储-柴联合规划系统</h1>", html)
         home_title_css = html.split(".home-title {", 1)[1].split("}", 1)[0]
         self.assertIn("z-index: 6", home_title_css)
-        self.assertIn("text-shadow:", home_title_css)
+        self.assertIn("text-shadow: none", home_title_css)
         self.assertIn("color: #ffffff", home_title_css)
         home_user_status_css = html.split(".home-user-status {", 1)[1].split("}", 1)[0]
         self.assertIn("border: 0", home_user_status_css)
@@ -123,11 +124,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('class="energy-side energy-left"', html)
         self.assertIn('class="energy-side energy-right"', html)
         self.assertIn('<strong>参数维护</strong>', html)
-        self.assertIn('<strong>算法启动</strong>', html)
+        self.assertIn('<strong>规划求解</strong>', html)
         self.assertIn('<strong>方案评估</strong>', html)
         self.assertIn('<strong>结果对比</strong>', html)
         self.assertNotIn("规划参数维护", html)
-        self.assertNotIn("规划算法启动", html)
+        self.assertNotIn("规划算法", html)
         self.assertNotIn("规划方案评估", html)
         self.assertIn('href="planning.html"', html)
         self.assertIn('href="optimize.html"', html)
@@ -157,7 +158,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertIn("assets/planning.css?v=", planning_html)
         self.assertIn("assets/planning.css?v=", optimize_html)
-        self.assertIn('url("main-dashboard-bg.png?v=20260510-title-safe")', css)
+        self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
         self.assertIn("rgba(20, 190, 255, 0.64)", css)
@@ -302,7 +303,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(started["state"]["scheme"], "方案A")
             self.assertTrue(started["state"]["start_time"])
             self.assertFalse(started["state"]["end_time"])
-            self.assertTrue(any("启动优化规划" in item["message"] for item in started["state"]["logs"]))
+            self.assertTrue(any("启动规划求解" in item["message"] for item in started["state"]["logs"]))
 
             status, headers, body = server.handle_control_path(
                 "/api/optimization/control",
@@ -347,7 +348,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(stopped["state"]["status"], "已停止")
             self.assertTrue(stopped["state"]["end_time"])
-            self.assertTrue(any("停止优化规划" in item["message"] for item in stopped["state"]["logs"]))
+            self.assertTrue(any("停止规划求解" in item["message"] for item in stopped["state"]["logs"]))
 
             status, headers, body = server.handle_control_path(
                 "/api/optimization/control",
@@ -464,6 +465,53 @@ class PowerPlanServerTest(unittest.TestCase):
         for day_end_hour in range(23, 8760, 24):
             self.assertAlmostEqual(dispatch_rows[day_end_hour]["storage_soc"], expected_storage_start, places=3)
         self.assertAlmostEqual(dispatch_rows[-1]["hydrogen_storage"], expected_hydrogen_start, places=3)
+
+    def test_estimate_dispatch_uses_unit_binaries_and_initial_storage_ratios(self):
+        payload = server.planning_store.default_payload("方案A")
+        payload["time_series"] = payload["time_series"][:1]
+        payload["time_series"][0]["load"] = 0
+        payload["time_series"][0]["wind_speed"] = 0
+        payload["time_series"][0]["solar_irradiance"] = 0
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.2
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.8
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.91
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.89
+        payload["diesel_generators"][0]["capacity"] = 100
+        payload["diesel_generators"][0]["power_lower"] = 20
+        payload["diesel_generators"][0]["power_upper"] = 100
+        payload["hydrogen_electrolyzers"][0]["power_capacity"] = 30
+        payload["hydrogen_electrolyzers"][0]["power_lower"] = 5
+        result_rows = [
+            {"设备类型": "柴发", "设计台数": 2, "单台容量": 100, "总容量": 200, "单位": "kW"},
+            {"设备类型": "储能PCS", "设计台数": 1, "单台容量": 50, "总容量": 50, "单位": "kW"},
+            {"设备类型": "储能电池组", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kWh"},
+            {"设备类型": "电制氢", "设计台数": 2, "单台容量": 30, "总容量": 60, "单位": "kW"},
+            {"设备类型": "储氢罐", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "Nm3"},
+        ]
+        model = estimate.build_dispatch_model(payload, result_rows)
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            return SimpleNamespace(success=True, x=lower_bounds.copy(), fun=0.0, message="ok")
+
+        with patch.object(estimate, "solve_milp", side_effect=fake_solve_milp):
+            estimate.solve_dispatch_model(model)
+
+        variables = model["variables"]
+        for unit in range(2):
+            self.assertIn(("diesel_on_unit", 0, unit), variables)
+            self.assertIn(("electrolyzer_on_unit", 0, unit), variables)
+        self.assertNotIn(("diesel_on", 0), variables)
+        self.assertNotIn(("electrolyzer_on", 0), variables)
+        self.assertIn(("storage_charge_on", 0), variables)
+        self.assertIn(("storage_discharge_on", 0), variables)
+        self.assertEqual(model["initial_storage_soc_ratio"], 0.2)
+        self.assertEqual(model["initial_hydrogen_storage_ratio"], 0.8)
+        self.assertEqual(model["storage_charge_efficiency"], 0.91)
+        self.assertEqual(model["storage_discharge_efficiency"], 0.89)
+
+    def test_pv_generation_uses_capacity_times_irradiance_without_efficiency_parameter(self):
+        self.assertAlmostEqual(estimate.pv_generation(500, 100, {"generation_efficiency": 0.1}), 50.0)
+        self.assertAlmostEqual(estimate.pv_generation(1200, 100, {}), 100.0)
 
     def test_estimate_dispatch_outputs_requested_8760_curve_columns(self):
         payload = server.planning_store.default_payload("方案A")
@@ -1014,7 +1062,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 self.assertIn("新能源弃电率", hourly_headers)
                 self.assertEqual(workbook["运行日志"]["A1"].value, "时间")
                 log_messages = [row[2] for row in workbook["运行日志"].iter_rows(min_row=2, values_only=True)]
-                self.assertIn("优化规划完成", log_messages)
+                self.assertIn("规划求解完成", log_messages)
             finally:
                 workbook.close()
         finally:
@@ -1710,7 +1758,7 @@ class PowerPlanServerTest(unittest.TestCase):
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
         self.assertIn(">考察站风-光-氢-储-柴联合规划系统<", html)
-        self.assertIn('<a class="active" href="optimize.html">启动优化</a>', html)
+        self.assertIn('<a class="active" href="optimize.html">规划求解</a>', html)
         self.assertIn('<aside class="scheme-rail">', html)
         self.assertIn('<div class="scheme-list-title">方案列表</div>', html)
         self.assertIn('id="schemeList"', html)
@@ -1738,7 +1786,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(">曲线展示<", html)
         self.assertIn("assets/result_curves.js", html)
         self.assertIn('assets/optimize.js', html)
-        self.assertIn('href="optimize.html">启动优化</a>', planning_html)
+        self.assertIn('href="optimize.html">规划求解</a>', planning_html)
         self.assertIn(".optimization-panel", css)
         self.assertIn("grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr)) 14px minmax(120px, var(--optimization-log-height, 24vh))", css)
         self.assertIn(".log-view-tabs", css)
@@ -2350,8 +2398,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("#planningTab #planningParametersTable", css)
         for label in (
             "柴油价格(万元/吨)",
-            "规划负荷系数(0.1-10.0)",
-            "绿电电量占比下限(0.0-1.0)",
+            "绿色电量占比下限(0.0-1.0)",
+            "规划求解时间上限(分钟)",
+            "初始电储SOC(0.0-1.0)",
+            "初始氢储SOC(0.0-1.0)",
+            "电储能充电效率(0.0-1.0)",
+            "电储能放电效率(0.0-1.0)",
             "储能是否参与调频",
             "负荷扰动系数(0.0-0.5)",
             "是否考虑频率安全约束",
@@ -2387,7 +2439,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("数据上限(台)", script)
         self.assertIn("数据上限不能小于数据下限", script)
         self.assertIn("频率安全上限不能小于频率安全下限", script)
-        self.assertIn("规划负荷系数(0.1-10.0)", script)
+        self.assertIn("规划求解时间上限(分钟)", script)
+        self.assertIn("defaultValue: 60", script)
+        self.assertIn("max: 120", script)
+        self.assertNotIn("规划负荷系数(0.1-10.0)", script)
         self.assertNotIn("设计容量上限不能小于下限", script)
 
     def test_planning_device_fields_have_numeric_validation_rules(self):
@@ -2810,8 +2865,8 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertNotIn("design_capacity_lower", script)
         self.assertNotIn("design_capacity_upper", script)
-        self.assertIn("generation_efficiency", script)
-        self.assertIn("发电效率(0-1.0)", script)
+        self.assertNotIn("generation_efficiency", script)
+        self.assertNotIn("发电效率(0-1.0)", script)
         self.assertIn("氢-电效率(kWh/Nm3)", script)
         self.assertIn("电-氢效率(Nm3/kWh)", script)
         self.assertIn("切入风速(m/s)", script)
@@ -2862,13 +2917,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(resolved.name, "index.html")
         self.assertTrue(resolved.exists())
 
-    def test_planning_assets_are_cache_busted_and_static_js_css_are_no_cache(self):
+    def test_planning_assets_are_cache_busted_and_static_js_css_png_are_no_cache(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
 
         self.assertIn("assets/planning.css?v=", html)
         self.assertIn("assets/planning.js?v=", html)
         self.assertEqual(server.resolve_static_path("/assets/planning.js?v=test").name, "planning.js")
-        self.assertIn('".css", ".js"', (WEB_ROOT / "server.py").read_text(encoding="utf-8"))
+        server_text = (WEB_ROOT / "server.py").read_text(encoding="utf-8")
+        self.assertIn('".css", ".js"', server_text)
+        self.assertIn('".png"', server_text)
 
     def test_static_path_rejects_directory_traversal(self):
         with self.assertRaises(ValueError):

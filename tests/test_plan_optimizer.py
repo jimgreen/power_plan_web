@@ -1,6 +1,10 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import numpy as np
 
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
@@ -26,9 +30,9 @@ class PlanOptimizerTest(unittest.TestCase):
                 row["quantity_upper"] = 0
                 row["cost"] = 0
                 row["design_life_years"] = 20
-        payload["planning_parameters"][0]["planning_load_factor"] = 1
         payload["planning_parameters"][0]["diesel_price"] = 0
         payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
+        payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 60
         return payload
 
     def test_planning_optimization_optimizes_equipment_counts_and_cost_terms(self):
@@ -100,6 +104,109 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertAlmostEqual(annual_rows["年柴油成本"]["数值"], 0.24, places=4)
         self.assertAlmostEqual(annual_rows["年总成本"]["数值"], 10.24, places=4)
         self.assertAlmostEqual(result["totals"]["diesel_consumption"], 0.12, places=4)
+
+    def test_planning_optimization_emits_detailed_progress_logs(self):
+        payload = self._payload()
+        payload["diesel_generators"][0].update(
+            {
+                "capacity": 10,
+                "power_upper": 10,
+                "power_lower": 0,
+                "fuel_rate": 0.5,
+                "quantity_lower": 1,
+                "quantity_upper": 1,
+            }
+        )
+        events = []
+
+        plan_optimizer.run_optimization(payload, horizon_hours=24, log=events.append)
+
+        messages = "\n".join(event["message"] for event in events)
+        for expected in (
+            "模型输入",
+            "候选设备",
+            "模型规模",
+            "求解参数",
+            "求解器返回",
+            "成本汇总",
+            "容量结果",
+        ):
+            self.assertIn(expected, messages)
+
+    def test_planning_optimization_uses_time_limit_from_planning_parameters(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 90
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        seen_options = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            seen_options.update(options)
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        self.assertEqual(seen_options["time_limit"], 5400)
+
+    def test_planning_optimization_uses_unit_commitment_binaries(self):
+        payload = self._payload()
+        payload["diesel_generators"][0].update(
+            {
+                "capacity": 10,
+                "power_upper": 10,
+                "power_lower": 2,
+                "quantity_lower": 0,
+                "quantity_upper": 2,
+            }
+        )
+        payload["storage_pcs"][0].update({"power_capacity": 10, "quantity_lower": 0, "quantity_upper": 1})
+        payload["storage_battery_packs"][0].update({"battery_capacity": 20, "quantity_lower": 0, "quantity_upper": 1})
+        payload["hydrogen_electrolyzers"][0].update(
+            {
+                "power_capacity": 5,
+                "power_lower": 1,
+                "quantity_lower": 0,
+                "quantity_upper": 2,
+            }
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        for unit in range(2):
+            self.assertIn(("diesel_on_unit", 0, 0, unit), variables)
+            self.assertIn(("electrolyzer_on_unit", 0, 0, unit), variables)
+            self.assertNotIn(("diesel_on_count", 0, 0), variables)
+            self.assertNotIn(("electrolyzer_on_count", 0, 0), variables)
+        self.assertIn(("storage_charge_on", 0), variables)
+        self.assertIn(("storage_discharge_on", 0), variables)
+
+    def test_planning_optimization_uses_initial_storage_ratios_from_planning_parameters(self):
+        payload = self._payload()
+        for row in payload["time_series"]:
+            row["load"] = 0
+            row["wind_speed"] = 0
+        payload["storage_battery_packs"][0].update(
+            {"battery_capacity": 100, "quantity_lower": 1, "quantity_upper": 1}
+        )
+        payload["hydrogen_tanks"][0].update(
+            {"hydrogen_tank_capacity": 80, "quantity_lower": 1, "quantity_upper": 1}
+        )
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.25
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.75
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 1
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 1
+
+        result = plan_optimizer.run_optimization(payload, horizon_hours=1)
+        row = result["dispatch_rows"][0]
+
+        self.assertAlmostEqual(row["storage_soc"], 25.0, places=4)
+        self.assertAlmostEqual(row["hydrogen_storage"], 60.0, places=4)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ const state = {
 const deviceSpecs = [
   ["diesel_generators", "柴发", ["name", "capacity", "cost", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["wind_turbines", "风机", ["name", "capacity", "cost", "cut_in_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["photovoltaics", "光伏", ["name", "capacity", "cost", "generation_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["photovoltaics", "光伏", ["name", "capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["hydrogen_electrolyzers", "电制氢", ["name", "power_capacity", "power_lower", "cost", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
@@ -36,8 +36,12 @@ const summarySeries = [
 
 const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
-  ["planning_load_factor", "规划负荷系数(0.1-10.0)", "number", { min: 0.1, max: 10, defaultValue: 1 }],
-  ["green_power_ratio_lower", "绿电电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
+  ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
+  ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 120, integer: true, positive: true, defaultValue: 60 }],
+  ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
+  ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
+  ["storage_charge_efficiency", "电储能充电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
+  ["storage_discharge_efficiency", "电储能放电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
   ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: false }],
   ["load_disturbance_factor", "负荷扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: false }],
@@ -88,7 +92,6 @@ const labels = {
   fuel_rate: "油耗率(kg/kWh)",
   cut_in_wind_speed: "切入风速(m/s)",
   cut_out_wind_speed: "切出风速(m/s)",
-  generation_efficiency: "发电效率(0-1.0)",
   electric_to_hydrogen_efficiency: "电-氢效率(Nm3/kWh)",
   hydrogen_to_electric_efficiency: "氢-电效率(kWh/Nm3)",
 };
@@ -1701,6 +1704,9 @@ function collectPlanningParameterWarnings() {
     }
     if (options.integer && !Number.isInteger(value)) {
       messages.push({ level: "error", message: `${label}必须为整数` });
+    }
+    if (options.positive && value <= 0) {
+      messages.push({ level: "error", message: `${label}必须大于0` });
     }
     if (options.min !== undefined && value < options.min) {
       messages.push({ level: "error", message: `${label}不能小于${options.min}` });

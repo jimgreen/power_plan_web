@@ -52,7 +52,6 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "capacity",
             "cost",
-            "generation_efficiency",
             "quantity_lower",
             "quantity_upper",
             "design_life_years",
@@ -106,8 +105,12 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "规划参数",
         [
             "diesel_price",
-            "planning_load_factor",
             "green_power_ratio_lower",
+            "optimization_time_limit_minutes",
+            "initial_storage_soc_ratio",
+            "initial_hydrogen_storage_ratio",
+            "storage_charge_efficiency",
+            "storage_discharge_efficiency",
             "storage_frequency_regulation_enabled",
             "load_disturbance_factor",
             "frequency_security_constraint_enabled",
@@ -149,7 +152,6 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "name": "光伏1",
             "capacity": 50,
             "cost": 0,
-            "generation_efficiency": 0.8,
             "quantity_lower": 0,
             "quantity_upper": 0,
         }
@@ -206,8 +208,12 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
 
 DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "diesel_price": 0,
-    "planning_load_factor": 1.0,
     "green_power_ratio_lower": 0,
+    "optimization_time_limit_minutes": 60,
+    "initial_storage_soc_ratio": 0.5,
+    "initial_hydrogen_storage_ratio": 0.5,
+    "storage_charge_efficiency": 0.95,
+    "storage_discharge_efficiency": 0.95,
     "storage_frequency_regulation_enabled": False,
     "load_disturbance_factor": 0,
     "frequency_security_constraint_enabled": False,
@@ -219,6 +225,7 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
 }
 
 FIELD_DEFAULTS: dict[str, Any] = {
+    **DEFAULT_PLANNING_PARAMETERS,
     "design_life_years": 20,
 }
 
@@ -389,7 +396,10 @@ class PlanningStore:
         workbook = build_workbook(payload | {"scheme": clean})
         tmp_path = folder / f".{WORKBOOK_NAME}.tmp"
         final_path = folder / WORKBOOK_NAME
-        workbook.save(tmp_path)
+        try:
+            workbook.save(tmp_path)
+        finally:
+            workbook.close()
         tmp_path.replace(final_path)
 
     def read_scheme(self, name: str) -> dict[str, Any]:
@@ -479,6 +489,17 @@ def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None
                         if source_index < len(values) and values[source_index] is not None
                         else field_default(header, "")
                     )
+                if key == "planning_parameters" and "optimization_time_limit_minutes" not in header_index:
+                    legacy_index = next(
+                        (
+                            index
+                            for index, value in enumerate(header_values)
+                            if value is not None and str(value) == "optimization_time_limit_seconds"
+                        ),
+                        None,
+                    )
+                    if legacy_index is not None and legacy_index < len(values) and values[legacy_index] not in (None, ""):
+                        row["optimization_time_limit_minutes"] = numeric(values[legacy_index], 3600) / 60
                 rows.append(row)
             payload[key] = (rows or default_rows_for_key(key)) if key == "planning_parameters" else rows
     finally:
@@ -506,6 +527,16 @@ def is_non_negative_integer_value(value: Any) -> bool:
         return value >= 0 and value.is_integer()
     text = str(value).strip()
     return bool(re.fullmatch(r"\d+", text))
+
+
+def numeric(value: Any, default: float = 0.0) -> float:
+    if value in (None, ""):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number == number and number not in (float("inf"), float("-inf")) else default
 
 
 def validate_device_field_value(value: Any, rule: dict[str, Any]) -> bool:
@@ -584,8 +615,19 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         return number
 
     number_in_range("diesel_price", "柴油价格(万元/吨)", 0)
-    number_in_range("planning_load_factor", "规划负荷系数(0.1-10.0)", 0.1, 10)
-    number_in_range("green_power_ratio_lower", "绿电电量占比下限(0.0-1.0)", 0, 1)
+    number_in_range("green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", 0, 1)
+    time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 120)
+    if time_limit is not None and not float(time_limit).is_integer():
+        messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
+    number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
+    number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
+    for key, label in (
+        ("storage_charge_efficiency", "电储能充电效率(0.0-1.0)"),
+        ("storage_discharge_efficiency", "电储能放电效率(0.0-1.0)"),
+    ):
+        efficiency = number_in_range(key, label, 0, 1)
+        if efficiency is not None and efficiency <= 0:
+            messages.append({"level": "error", "message": f"{label}必须大于0"})
     number_in_range("load_disturbance_factor", "负荷扰动系数(0.0-0.5)", 0, 0.5)
     frequency_upper = number_in_range("frequency_security_upper", "频率安全上限(1.0-1.5)", 1, 1.5)
     frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(0.9-1.0)", 0.9, 1)

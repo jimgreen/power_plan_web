@@ -2740,7 +2740,7 @@ body {
     linear-gradient(180deg, rgba(0, 16, 45, 0.44), rgba(0, 10, 30, 0.76) 62%, rgba(0, 7, 20, 0.9)),
     radial-gradient(circle at 50% 43%, rgba(13, 116, 204, 0.32), transparent 44%),
     linear-gradient(90deg, rgba(2, 10, 22, 0.88), rgba(2, 10, 22, 0.28) 24%, rgba(2, 10, 22, 0.38) 76%, rgba(2, 10, 22, 0.88)),
-    url("main-dashboard-bg.png?v=20260510-title-safe");
+    url("main-dashboard-bg.png?v=20260513-bg-refresh");
   background-position: center;
   background-size: cover;
   background-repeat: no-repeat;

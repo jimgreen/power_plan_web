@@ -14,7 +14,7 @@
       <nav class="main-nav" aria-label="主功能导航">
         <a href="index.html">系统首页</a>
         <a href="planning.html">参数维护</a>
-        <a class="active" href="optimize.html">启动优化</a>
+        <a class="active" href="optimize.html">规划求解</a>
         <a href="users.html" data-admin-only hidden>用户管理</a>
         <a href="evaluation.html">方案评估</a>
         <a href="comparison.html">结果对比</a>
@@ -34,13 +34,13 @@
       <section class="optimization-panel">
         <section class="optimization-command-card">
           <div class="optimization-command-row">
-            <div class="optimization-actions" aria-label="优化规划操作">
-              <button id="startOptimization" class="primary" type="button">启动规划</button>
-              <button id="stopOptimization" class="danger" type="button">停止规划</button>
+            <div class="optimization-actions" aria-label="规划求解操作">
+              <button id="startOptimization" class="primary" type="button">规划求解</button>
+              <button id="stopOptimization" class="danger" type="button">停止求解</button>
             </div>
             <div id="optimizationCurrentScheme" class="optimization-current-scheme">当前方案: 未选择方案</div>
           </div>
-          <div class="optimization-status-grid" aria-label="优化规划总体指标">
+          <div class="optimization-status-grid" aria-label="规划求解总体指标">
             <div class="status-tile"><span>当前状态</span><strong id="optimizationStatus">待启动</strong></div>
             <div class="status-tile"><span>启动时刻</span><strong id="optimizationStartTime">-</strong></div>
             <div class="status-tile"><span>结束时刻</span><strong id="optimizationEndTime">-</strong></div>
@@ -52,7 +52,7 @@
         <div id="optimizationResultResizeHandle" class="optimization-result-resize-handle" role="separator" tabindex="0" aria-label="调整规划结果高度" aria-orientation="horizontal" aria-valuemin="220" aria-valuemax="720" aria-valuenow="0"></div>
 
         <section class="optimization-result-card">
-          <div class="result-tabs" role="tablist" aria-label="优化规划结果切换">
+          <div class="result-tabs" role="tablist" aria-label="规划求解结果切换">
             <button class="result-tab active" data-result-tab="overview" type="button" aria-selected="true">结果概览</button>
             <button class="result-tab" data-result-tab="green" type="button" aria-selected="false">供能分析</button>
             <button class="result-tab" data-result-tab="safety" type="button" aria-selected="false">安全评估</button>
@@ -65,7 +65,7 @@
         <div id="optimizationLogResizeHandle" class="optimization-log-resize-handle" role="separator" tabindex="0" aria-label="调整运行日志高度" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="520" aria-valuenow="0"></div>
 
         <section class="optimization-log-card">
-          <div class="log-view-tabs" role="tablist" aria-label="优化运行信息切换">
+          <div class="log-view-tabs" role="tablist" aria-label="规划求解运行信息切换">
             <button id="optimizationLogViewToggle" class="log-view-tab active" data-log-view="logs" type="button" aria-selected="true">运行日志</button>
             <button id="optimizationCurveViewToggle" class="log-view-tab" data-log-view="curves" type="button" aria-selected="false">曲线展示</button>
           </div>
