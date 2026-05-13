@@ -875,7 +875,7 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr)) 14px minmax(120px, var(--optimization-log-height, 24vh));
+  grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr));
   gap: 16px;
   padding: 16px;
   overflow: hidden;
@@ -1656,6 +1656,10 @@ button:disabled {
   overflow: hidden;
 }
 
+.optimization-log-result-panel.active {
+  overflow: hidden;
+}
+
 .optimization-logs {
   flex: 1 1 auto;
   min-height: 0;
@@ -1678,6 +1682,7 @@ button:disabled {
 
 .optimization-curve-panel.active {
   display: grid;
+  overflow: hidden;
 }
 
 .optimization-curve-name-list {
@@ -2662,7 +2667,7 @@ td input[type="checkbox"] {
   }
   .optimization-panel {
     min-height: 76vh;
-    grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(420px, var(--optimization-result-height, 1fr)) 14px minmax(180px, var(--optimization-log-height, 24vh));
+    grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(420px, var(--optimization-result-height, 1fr));
     overflow: visible;
   }
   .optimization-status-grid,

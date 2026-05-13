@@ -6,7 +6,6 @@ const state = {
   pollDelay: 4000,
   optimizationCommandHeight: null,
   optimizationResultHeight: null,
-  optimizationLogHeight: null,
   greenResultTableWidth: null,
   safetyResultTableWidth: null,
   greenDailyPoints: [],
@@ -16,7 +15,7 @@ const state = {
   resultChartResizeObserver: null,
   optimizationCurveViewer: null,
   curveDataKey: "",
-  activeLogView: "logs",
+  activeResultTab: "overview",
 };
 
 const optimizationResizeMinHeights = {
@@ -71,12 +70,10 @@ document.addEventListener("DOMContentLoaded", () => {
         promptText: "请选择8760曲线",
       })
     : null;
-  bindLogViewTabs();
   bindResultTabs();
   bindOptimizationActions();
   lockOptimizationCommandHeight();
   bindOptimizationResultResizeHandle();
-  bindOptimizationLogResizeHandle();
   window.addEventListener("resize", () => {
     state.optimizationCommandHeight = null;
     lockOptimizationCommandHeight();
@@ -136,28 +133,6 @@ function bindSchemeListItem(item, onSelect) {
       event.preventDefault();
       onSelect();
     }
-  });
-}
-
-function bindLogViewTabs() {
-  const buttons = Array.from(document.querySelectorAll("[data-log-view]"));
-  const panels = Array.from(document.querySelectorAll("[data-log-view-panel]"));
-  buttons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = button.dataset.logView || "logs";
-      state.activeLogView = target;
-      buttons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle("active", active);
-        item.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const active = panel.dataset.logViewPanel === target;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      if (target === "curves") loadOptimizationCurveData().catch(showError);
-    });
   });
 }
 
@@ -222,6 +197,7 @@ function bindResultTabs() {
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.dataset.resultTab;
+      state.activeResultTab = target || "overview";
       buttons.forEach((item) => {
         const active = item === button;
         item.classList.toggle("active", active);
@@ -232,6 +208,7 @@ function bindResultTabs() {
         panel.classList.toggle("active", active);
         panel.hidden = !active;
       });
+      if (target === "curves") loadOptimizationCurveData().catch(showError);
       window.requestAnimationFrame(refreshAdaptiveResultCharts);
     });
   });
@@ -247,7 +224,7 @@ function renderOptimization(data) {
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
-  if (state.activeLogView === "curves") loadOptimizationCurveData().catch(showError);
+  if (state.activeResultTab === "curves") loadOptimizationCurveData().catch(showError);
   window.requestAnimationFrame(lockOptimizationCommandHeight);
 }
 
@@ -975,7 +952,7 @@ function bindOptimizationResultResizeHandle() {
 
   const applyHeight = (height) => {
     const safeHeight = clampOptimizationResultHeight(height);
-    const pairedCommandHeight = Math.max(optimizationResizeMinHeights.command, optimizationTopMiddleContentHeight() - safeHeight);
+    const pairedCommandHeight = Math.max(optimizationResizeMinHeights.command, optimizationCardsContentHeight() - safeHeight);
     setOptimizationCommandHeight(pairedCommandHeight);
     setOptimizationResultHeight(safeHeight, handle);
   };
@@ -983,7 +960,6 @@ function bindOptimizationResultResizeHandle() {
   handle.addEventListener("pointerdown", (event) => {
     event.preventDefault();
     lockOptimizationCommandHeight();
-    setOptimizationLogHeight(currentOptimizationLogHeight());
     const startY = event.clientY;
     const startHeight = resultCard.getBoundingClientRect().height || 360;
     handle.classList.add("dragging");
@@ -1006,45 +982,6 @@ function bindOptimizationResultResizeHandle() {
 
   bindResizeHandleKeys(handle, () => state.optimizationResultHeight || resultCard.getBoundingClientRect().height || 360, applyHeight, optimizationResultHeightBounds);
   handle.setAttribute("aria-valuenow", String(Math.round(resultCard.getBoundingClientRect().height || 360)));
-}
-
-function bindOptimizationLogResizeHandle() {
-  const handle = document.getElementById("optimizationLogResizeHandle");
-  const logCard = document.querySelector(".optimization-log-card");
-  if (!handle || !logCard) return;
-
-  const applyHeight = (height) => {
-    const safeHeight = clampOptimizationLogHeight(height);
-    const pairedResultHeight = Math.max(optimizationResizeMinHeights.result, optimizationResizableContentHeight() - safeHeight);
-    setOptimizationLogHeight(safeHeight, handle);
-    setOptimizationResultHeight(pairedResultHeight);
-  };
-
-  handle.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    lockOptimizationCommandHeight();
-    const startY = event.clientY;
-    const startHeight = logCard.getBoundingClientRect().height || 180;
-    handle.classList.add("dragging");
-    handle.setPointerCapture?.(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      applyHeight(startHeight - (moveEvent.clientY - startY));
-    };
-    const onDone = () => {
-      handle.classList.remove("dragging");
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onDone);
-      window.removeEventListener("pointercancel", onDone);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onDone);
-    window.addEventListener("pointercancel", onDone);
-  });
-
-  bindResizeHandleKeys(handle, () => state.optimizationLogHeight || logCard.getBoundingClientRect().height || 180, applyHeight, optimizationLogHeightBounds);
-  handle.setAttribute("aria-valuenow", String(Math.round(logCard.getBoundingClientRect().height || 180)));
 }
 
 function bindResizeHandleKeys(handle, currentHeight, applyHeight, boundsFactory) {
@@ -1075,13 +1012,6 @@ function setOptimizationResultHeight(height, handle = document.getElementById("o
   handle?.setAttribute("aria-valuenow", String(roundedHeight));
 }
 
-function setOptimizationLogHeight(height, handle = document.getElementById("optimizationLogResizeHandle")) {
-  const roundedHeight = Math.round(height);
-  state.optimizationLogHeight = roundedHeight;
-  document.documentElement.style.setProperty("--optimization-log-height", `${roundedHeight}px`);
-  handle?.setAttribute("aria-valuenow", String(roundedHeight));
-}
-
 function setOptimizationCommandHeight(height) {
   const roundedHeight = Math.round(height);
   state.optimizationCommandHeight = roundedHeight;
@@ -1093,26 +1023,12 @@ function clampOptimizationResultHeight(height) {
   return Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
 }
 
-function clampOptimizationLogHeight(height) {
-  const bounds = optimizationLogHeightBounds();
-  return Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
-}
-
 function optimizationResultHeightBounds() {
-  const availableHeight = optimizationTopMiddleContentHeight();
+  const availableHeight = optimizationCardsContentHeight();
   const maxResultHeight = availableHeight - optimizationResizeMinHeights.command;
   return {
     min: optimizationResizeMinHeights.result,
-    max: Math.max(optimizationResizeMinHeights.result, Math.min(760, maxResultHeight)),
-  };
-}
-
-function optimizationLogHeightBounds() {
-  const availableHeight = optimizationResizableContentHeight();
-  const maxLogHeight = availableHeight - optimizationResizeMinHeights.result;
-  return {
-    min: optimizationResizeMinHeights.log,
-    max: Math.max(optimizationResizeMinHeights.log, Math.min(520, maxLogHeight)),
+    max: Math.max(optimizationResizeMinHeights.result, maxResultHeight),
   };
 }
 
@@ -1126,42 +1042,18 @@ function lockOptimizationCommandHeight() {
   return height;
 }
 
-function optimizationResizableContentHeight() {
-  const commandHeight = state.optimizationCommandHeight || lockOptimizationCommandHeight();
-  return Math.max(
-    optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
-    optimizationCardsContentHeight() - commandHeight,
-  );
-}
-
-function optimizationTopMiddleContentHeight() {
-  const currentLogHeight = currentOptimizationLogHeight();
-  return Math.max(
-    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result,
-    optimizationCardsContentHeight() - currentLogHeight,
-  );
-}
-
 function optimizationCardsContentHeight() {
   const panel = document.querySelector(".optimization-panel");
-  if (!panel) return Math.max(optimizationResizeMinHeights.command + optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
+  if (!panel) return Math.max(optimizationResizeMinHeights.command + optimizationResizeMinHeights.result, window.innerHeight - 260);
   const style = window.getComputedStyle(panel);
   const paddingY = cssNumber(style.paddingTop) + cssNumber(style.paddingBottom);
   const rowGap = cssNumber(style.rowGap || style.gap);
   const resultHandle = document.getElementById("optimizationResultResizeHandle");
-  const logHandle = document.getElementById("optimizationLogResizeHandle");
-  const handleHeights =
-    (resultHandle?.getBoundingClientRect().height || 14) +
-    (logHandle?.getBoundingClientRect().height || 14);
+  const handleHeights = resultHandle?.getBoundingClientRect().height || 14;
   return Math.max(
-    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
-    panel.clientHeight - paddingY - rowGap * 4 - handleHeights,
+    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result,
+    panel.clientHeight - paddingY - rowGap * 2 - handleHeights,
   );
-}
-
-function currentOptimizationLogHeight() {
-  const logCard = document.querySelector(".optimization-log-card");
-  return state.optimizationLogHeight || logCard?.getBoundingClientRect().height || 180;
 }
 
 function cssNumber(value) {
