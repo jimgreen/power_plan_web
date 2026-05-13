@@ -79,6 +79,12 @@ document.addEventListener("DOMContentLoaded", () => {
   bindResultTabs();
   bindOptimizationActions();
   bindEvaluationResultActions();
+  bindLogContextMenu({
+    boxId: "evaluationLogs",
+    emptyText: "暂无评估日志",
+    clearLogs: clearEvaluationLogs,
+    saveLogs: saveEvaluationLogs,
+  });
   lockOptimizationCommandHeight();
   bindEvaluationMainResizeHandle();
   bindOptimizationResultResizeHandle();
@@ -408,6 +414,26 @@ async function controlOptimization(action) {
     else showError(error);
     await refreshOptimizationStatus().catch(showError);
   }
+}
+
+async function clearEvaluationLogs() {
+  if (!state.currentScheme) return;
+  const data = await api("/api/evaluation/control", {
+    method: "POST",
+    body: JSON.stringify({
+      action: "clear_logs",
+      scheme: state.currentScheme,
+      filename: state.selectedResultFile,
+    }),
+  });
+  state.optimization = data.state;
+  renderOptimization(data.state);
+}
+
+function saveEvaluationLogs() {
+  const logs = state.optimization?.logs || [];
+  const resultName = state.selectedResultFile ? `_${state.selectedResultFile.replace(/_results\.xlsx$/i, "")}` : "";
+  saveLogsToFile(logs, `方案评估_${state.currentScheme || "未选择方案"}${resultName}_运行日志`);
 }
 
 async function refreshOptimizationStatus(scheme = state.currentScheme, filename = state.selectedResultFile) {
@@ -930,6 +956,90 @@ function renderOptimizationLogs(logs) {
     .map((item) => `<div class="log-line ${escapeHtml(item.level || "")}"><span>${escapeHtml(item.time || "")}</span><strong>${escapeHtml(item.message || "")}</strong></div>`)
     .join("");
   box.scrollTop = box.scrollHeight;
+}
+
+function bindLogContextMenu({ boxId, emptyText, clearLogs, saveLogs }) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  const menu = createLogContextMenu();
+  box.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    showLogContextMenu(menu, event.clientX, event.clientY);
+  });
+  menu.addEventListener("click", async (event) => {
+    const action = event.target?.dataset?.logMenuAction;
+    if (!action) return;
+    hideLogContextMenu(menu);
+    try {
+      if (action === "clear") {
+        await clearLogs();
+      } else if (action === "save") {
+        saveLogs();
+      }
+    } catch (error) {
+      showError(error);
+    }
+  });
+  window.addEventListener("click", () => hideLogContextMenu(menu));
+  window.addEventListener("resize", () => hideLogContextMenu(menu));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideLogContextMenu(menu);
+  });
+  if (!box.textContent.trim()) box.innerHTML = `<div class="log-line">${escapeHtml(emptyText)}</div>`;
+}
+
+function createLogContextMenu() {
+  const menu = document.createElement("div");
+  menu.className = "log-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
+  menu.innerHTML = `
+    <button type="button" role="menuitem" data-log-menu-action="clear">清空日志</button>
+    <button type="button" role="menuitem" data-log-menu-action="save">保存日志到文件</button>`;
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function showLogContextMenu(menu, x, y) {
+  menu.hidden = false;
+  const width = menu.offsetWidth || 180;
+  const height = menu.offsetHeight || 88;
+  const left = Math.min(x, window.innerWidth - width - 8);
+  const top = Math.min(y, window.innerHeight - height - 8);
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideLogContextMenu(menu) {
+  menu.hidden = true;
+}
+
+function saveLogsToFile(logs, baseName) {
+  const content = formatLogsForFile(logs);
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${safeFileName(baseName)}_${timestampForFile()}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function formatLogsForFile(logs) {
+  if (!logs.length) return "暂无评估日志\n";
+  return `${logs.map((item) => `[${item.time || ""}] [${item.level || "info"}] ${item.message || ""}`).join("\n")}\n`;
+}
+
+function timestampForFile() {
+  const date = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
+
+function safeFileName(value) {
+  return String(value || "运行日志").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, "_").slice(0, 80) || "运行日志";
 }
 
 function bindAdaptiveResultCharts() {

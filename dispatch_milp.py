@@ -142,6 +142,62 @@ def solve_built_milp(
     )
 
 
+def emit_builder_diagnostics(builder: MilpModelBuilder, log: LogSink | None, label: str = "MILP") -> None:
+    if not log:
+        return
+    objective = builder.objective_array()
+    lower_bounds = builder.lower_bounds_array()
+    upper_bounds = builder.upper_bounds_array()
+    constraint_lower = builder.constraint_lower_array()
+    constraint_upper = builder.constraint_upper_array()
+    integrality = builder.integrality_array()
+    finite_variable_upper = np.isfinite(upper_bounds)
+    finite_constraint_lower = np.isfinite(constraint_lower)
+    finite_constraint_upper = np.isfinite(constraint_upper)
+    equality_constraints = finite_constraint_lower & finite_constraint_upper & np.isclose(constraint_lower, constraint_upper)
+    binary_variables = sum(
+        1
+        for index in range(len(objective))
+        if integrality[index] and abs(lower_bounds[index]) < 1e-9 and abs(upper_bounds[index] - 1.0) < 1e-9
+    )
+    emit(
+        log,
+        "info",
+        (
+            f"{label}变量详情：连续变量={len(objective) - int(np.count_nonzero(integrality))}个，"
+            f"整数变量={int(np.count_nonzero(integrality))}个，其中二进制变量={binary_variables}个，"
+            f"有限上界变量={int(np.count_nonzero(finite_variable_upper))}个，"
+            f"目标函数非零项={int(np.count_nonzero(np.abs(objective) > 1e-12))}个"
+        ),
+        None,
+    )
+    emit(
+        log,
+        "info",
+        (
+            f"{label}约束详情：等式约束={int(np.count_nonzero(equality_constraints))}条，"
+            f"仅上界约束={int(np.count_nonzero(finite_constraint_upper & ~equality_constraints))}条，"
+            f"仅下界约束={int(np.count_nonzero(finite_constraint_lower & ~equality_constraints))}条，"
+            f"稀疏矩阵密度={matrix_density(builder):.6g}"
+        ),
+        None,
+    )
+
+
+def matrix_density(builder: MilpModelBuilder) -> float:
+    total_slots = builder.variable_count * builder.constraint_count
+    return 0.0 if total_slots <= 0 else builder.nonzero_count / total_slots
+
+
+def emit(log: LogSink | None, level: str, message: str, progress: int | None = None) -> None:
+    if not log:
+        return
+    event = {"level": level, "message": message}
+    if progress is not None:
+        event["progress"] = progress
+    log(event)
+
+
 def add_power_balance_constraint(
     builder: MilpModelBuilder,
     *,

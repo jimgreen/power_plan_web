@@ -55,13 +55,20 @@ def run_optimization(
     emit_model_input_summary(model, log)
     emit_device_candidate_summary(model, log)
     emit(log, "info", "已加入台数上下限、建设成本、柴油成本和绿电占比约束", 15)
-    solution = solve_planning_model(model, log)
-    emit(log, "info", "优化求解完成，正在整理规划结果和8760曲线", 85)
-
-    planning_rows = planning_rows_from_solution(model, solution)
-    dispatch_rows = dispatch_rows_from_solution(model, solution)
-    totals = dispatch_totals(dispatch_rows)
-    costs = cost_summary_from_solution(model, solution, totals)
+    direct_result = direct_zero_load_result(model, log)
+    if direct_result is None:
+        solution = solve_planning_model(model, log)
+        emit(log, "info", "优化求解完成，正在整理规划结果和8760曲线", 85)
+        planning_rows = planning_rows_from_solution(model, solution)
+        dispatch_rows = dispatch_rows_from_solution(model, solution)
+        totals = dispatch_totals(dispatch_rows)
+        costs = cost_summary_from_solution(model, solution, totals)
+    else:
+        planning_rows = direct_result["planning_rows"]
+        dispatch_rows = direct_result["dispatch_rows"]
+        totals = direct_result["totals"]
+        costs = direct_result["costs"]
+        emit(log, "info", "解析规划结果完成，正在整理规划结果和8760曲线", 85)
     emit_solution_summary(planning_rows, totals, costs, log)
     results = build_results(planning_rows, dispatch_rows, totals, costs, model)
     metrics = build_metrics(totals, costs)
@@ -381,6 +388,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         f"模型规模：变量{variable_count}个（整数{integer_variable_count}个），约束{constraint_count}条，非零系数{builder.nonzero_count}个",
         20,
     )
+    dispatch_milp.emit_builder_diagnostics(builder, log, "规划求解MILP")
     emit(
         log,
         "info",
@@ -390,7 +398,13 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     emit(log, "info", "求解设备台数和全年运行联合混合整数线性规划", 25)
     result = dispatch_milp.solve_built_milp(
         builder,
-        options={"time_limit": model["optimization_time_limit_seconds"], "mip_rel_gap": 0.01, "disp": False},
+        options={
+            "time_limit": model["optimization_time_limit_seconds"],
+            "mip_rel_gap": 0.01,
+            "disp": False,
+            "solver_log": True,
+            "solver_log_interval": 2.0,
+        },
         log=log,
         problem_name="规划求解",
         solve_fn=solve_milp,
@@ -546,6 +560,129 @@ def emit_solution_summary(
         ),
         95,
     )
+
+
+def direct_zero_load_result(model: dict[str, Any], log: LogSink | None = None) -> dict[str, Any] | None:
+    """Return the optimum directly when the full-year load is zero."""
+
+    if any(float(load) > 1e-9 for load in model["loads"]):
+        return None
+    quantities = {
+        (device["key"], device["index"]): int(device["quantity_lower"])
+        for devices in model["device_rows"].values()
+        for device in devices
+    }
+    emit(log, "info", "全年负荷为0，使用台数下限和解析调度快速生成规划结果", 25)
+    planning_rows = planning_rows_from_quantities(model, quantities)
+    dispatch_rows = dispatch_rows_from_quantities(model, quantities)
+    totals = dispatch_totals(dispatch_rows)
+    costs = cost_summary_from_quantities(model, quantities, totals)
+    return {
+        "planning_rows": planning_rows,
+        "dispatch_rows": dispatch_rows,
+        "totals": totals,
+        "costs": costs,
+    }
+
+
+def planning_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[str, int], int]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for key in DEVICE_SPECS:
+        for device in model["device_rows"][key]:
+            quantity = int(quantities.get((device["key"], device["index"]), 0))
+            capacity = round(device["capacity"], 4)
+            rows.append(
+                {
+                    "设备类型": device["label"],
+                    "名称": device["name"],
+                    "设计台数": quantity,
+                    "单台容量": capacity,
+                    "总容量": round(quantity * capacity, 4),
+                    "单位": device["unit"],
+                }
+            )
+    return rows
+
+
+def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[str, int], int]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    storage_energy_capacity = sum(
+        device["capacity"] * quantities.get((device["key"], device["index"]), 0)
+        for device in model["device_rows"]["storage_battery_packs"]
+    )
+    hydrogen_capacity = sum(
+        device["capacity"] * quantities.get((device["key"], device["index"]), 0)
+        for device in model["device_rows"]["hydrogen_tanks"]
+    )
+    initial_storage = round(storage_energy_capacity * model["initial_storage_soc_ratio"], 4)
+    initial_hydrogen = round(hydrogen_capacity * model["initial_hydrogen_storage_ratio"], 4)
+    for hour, source_row in enumerate(model["time_series"]):
+        load = round(float(model["loads"][hour]), 4)
+        wind_available = sum(
+            model["wind_available_per_unit"][device["id"]][hour] * quantities.get((device["key"], device["index"]), 0)
+            for device in model["device_rows"]["wind_turbines"]
+        )
+        pv_available = sum(
+            model["pv_available_per_unit"][device["id"]][hour] * quantities.get((device["key"], device["index"]), 0)
+            for device in model["device_rows"]["photovoltaics"]
+        )
+        renewable_available = wind_available + pv_available
+        hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
+        rows.append(
+            {
+                "hour_index": hour_index,
+                "datetime": source_row.get("datetime", f"H{hour_index:04d}"),
+                "wind_speed": round(numeric(source_row.get("wind_speed"), 0.0), 4),
+                "solar_irradiance": round(numeric(source_row.get("solar_irradiance"), 0.0), 4),
+                "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
+                "load": load,
+                "diesel_power": 0.0,
+                "wind_available": round(wind_available, 4),
+                "wind_power": 0.0,
+                "pv_available": round(pv_available, 4),
+                "pv_power": 0.0,
+                "renewable_available": round(renewable_available, 4),
+                "renewable_ratio": 0.0,
+                "storage_power": 0.0,
+                "storage_charge": 0.0,
+                "storage_discharge": 0.0,
+                "storage_soc": initial_storage,
+                "diesel_on": 0,
+                "hydrogen_production_power": 0.0,
+                "hydrogen_production": 0.0,
+                "electrolyzer_on": 0,
+                "fuel_cell_power": 0.0,
+                "hydrogen_storage": initial_hydrogen,
+                "wind_curtailed_power": round(wind_available, 4),
+                "pv_curtailed_power": round(pv_available, 4),
+                "curtailed_power": round(renewable_available, 4),
+                "renewable_curtailed_rate": round(estimate.percent(renewable_available, renewable_available), 4),
+                "unmet_load": 0.0,
+                "diesel_consumption": 0.0,
+            }
+        )
+    return rows
+
+
+def cost_summary_from_quantities(
+    model: dict[str, Any],
+    quantities: dict[tuple[str, int], int],
+    totals: dict[str, float],
+) -> dict[str, float]:
+    construction_cost = 0.0
+    for devices in model["device_rows"].values():
+        for device in devices:
+            construction_cost += quantities.get((device["key"], device["index"]), 0) * device["annual_cost"]
+    diesel_cost = totals["diesel_consumption"] * model["diesel_price"]
+    total_cost = construction_cost + diesel_cost
+    load_energy = totals.get("load_energy", 0.0)
+    levelized_cost = total_cost * 10000 / load_energy if load_energy else 0.0
+    return {
+        "annualized_construction_cost": round(construction_cost, 4),
+        "annual_diesel_cost": round(diesel_cost, 4),
+        "annual_total_cost": round(total_cost, 4),
+        "levelized_cost": round(levelized_cost, 6),
+    }
 
 
 def planning_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> list[dict[str, Any]]:

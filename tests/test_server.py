@@ -249,6 +249,25 @@ class PowerPlanServerTest(unittest.TestCase):
             server.USER_STORE = original_store
             db_path.unlink(missing_ok=True)
 
+    def test_optimization_runtime_can_clear_logs(self):
+        runtime = server.OptimizationRuntime("测试方案")
+        runtime._append_log_unlocked("info", "待清空日志")
+
+        payload = runtime.apply("clear_logs", scheme="测试方案")
+
+        self.assertEqual(payload["logs"], [])
+        self.assertEqual(runtime.snapshot()["logs"], [])
+
+    def test_evaluation_runtime_can_clear_logs(self):
+        runtime = server.EvaluationRuntime("测试方案")
+        runtime.result_filename = "case_results.xlsx"
+        runtime._append_log_unlocked("info", "待清空日志")
+
+        payload = runtime.apply("clear_logs", scheme="测试方案", filename="case_results.xlsx")
+
+        self.assertEqual(payload["logs"], [])
+        self.assertEqual(runtime.snapshot()["logs"], [])
+
     def test_api_response_is_json_for_known_endpoint(self):
         status, headers, body = server.handle_api_path("/api/overview")
 
@@ -1788,7 +1807,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('assets/optimize.js', html)
         self.assertIn('href="optimize.html">规划求解</a>', planning_html)
         self.assertIn(".optimization-panel", css)
-        self.assertIn("grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr)) 14px minmax(120px, var(--optimization-log-height, 24vh))", css)
+        self.assertIn("grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr))", css)
         self.assertIn(".log-view-tabs", css)
         self.assertIn(".log-view-tab", css)
         self.assertIn(".log-view-panel", css)
@@ -1818,7 +1837,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("scheduleOptimizationPolling", script)
         self.assertIn("state.pollDelay = data.status === \"运行中\" ? 1000 : 4000", script)
         self.assertIn("renderOptimizationLogs", script)
-        self.assertIn("bindLogViewTabs", script)
+        self.assertIn("bindLogContextMenu", script)
+        self.assertIn("clearOptimizationLogs", script)
+        self.assertIn("saveOptimizationLogs", script)
         self.assertIn("optimizationCurveViewer", script)
         self.assertIn("loadOptimizationCurveData", script)
         self.assertIn("/api/comparison/data", script)
@@ -1846,7 +1867,7 @@ class PowerPlanServerTest(unittest.TestCase):
         index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
 
-        self.assertIn("assets/planning.css?v=20260510-dark-hud", html)
+        self.assertIn("assets/planning.css?v=20260513-log-menu", html)
         self.assertIn('<a class="active" href="evaluation.html">方案评估</a>', html)
         self.assertIn('href="evaluation.html">方案评估</a>', planning_html)
         self.assertIn('href="evaluation.html">方案评估</a>', optimize_html)
@@ -2061,25 +2082,21 @@ class PowerPlanServerTest(unittest.TestCase):
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
         self.assertIn('id="optimizationResultResizeHandle"', html)
-        self.assertIn('id="optimizationLogResizeHandle"', html)
+        self.assertNotIn('id="optimizationLogResizeHandle"', html)
         self.assertIn('role="separator"', html)
         self.assertIn('aria-label="调整规划结果高度"', html)
-        self.assertIn('aria-label="调整运行日志高度"', html)
         self.assertIn('aria-orientation="horizontal"', html)
         self.assertIn("bindOptimizationResultResizeHandle", script)
-        self.assertIn("bindOptimizationLogResizeHandle", script)
+        self.assertNotIn("bindOptimizationLogResizeHandle", script)
         self.assertIn("lockOptimizationCommandHeight", script)
         self.assertIn("--optimization-command-height", script)
-        self.assertIn("optimizationResizableContentHeight() - safeHeight", script)
         self.assertIn("optimizationResultHeight", script)
-        self.assertIn("optimizationLogHeight", script)
         self.assertIn("--optimization-result-height", script)
-        self.assertIn("--optimization-log-height", script)
         self.assertIn("pointerdown", script)
         self.assertIn("setPointerCapture", script)
         self.assertIn("ArrowUp", script)
         self.assertIn("ArrowDown", script)
-        result_resize_script = script.split("function bindOptimizationResultResizeHandle()", 1)[1].split("function bindOptimizationLogResizeHandle()", 1)[0]
+        result_resize_script = script.split("function bindOptimizationResultResizeHandle()", 1)[1].split("function bindResizeHandleKeys", 1)[0]
         self.assertIn("applyHeight(startHeight - (moveEvent.clientY - startY))", result_resize_script)
         self.assertNotIn("applyHeight(startHeight + moveEvent.clientY - startY)", result_resize_script)
         self.assertIn(".optimization-result-resize-handle", css)
@@ -2117,7 +2134,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".overview-ratio-stack", css)
         ratio_stack_css = css.split(".overview-ratio-stack {", 1)[1].split("}", 1)[0]
         self.assertIn("display: grid", ratio_stack_css)
-        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", ratio_stack_css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr)", ratio_stack_css)
         self.assertIn("overflow: auto", ratio_stack_css)
         ratio_card_css = css.split(".ratio-disk-card {", 1)[1].split("}", 1)[0]
         self.assertIn("grid-template-rows: minmax(0, 1fr) auto", ratio_card_css)

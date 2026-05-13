@@ -2,14 +2,64 @@
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 from typing import Any, Callable
+import time
 
 import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, milp
 
 
 LogSink = Callable[[dict[str, Any]], None]
+CUSTOM_SOLVER_OPTIONS = {
+    "solver_log",
+    "solver_log_prefix",
+    "solver_log_line_limit",
+    "solver_log_interval",
+}
+
+
+class SolverLogStream:
+    """File-like stream that forwards solver text output to the UI log sink."""
+
+    def __init__(
+        self,
+        log: LogSink | None,
+        *,
+        prefix: str = "",
+        level: str = "info",
+        max_line_length: int = 1200,
+    ) -> None:
+        self.log = log
+        self.prefix = prefix
+        self.level = level
+        self.max_line_length = max(120, int(max_line_length or 1200))
+        self._buffer = ""
+
+    def write(self, text: object) -> int:
+        chunk = str(text or "")
+        if not chunk:
+            return 0
+        self._buffer += chunk.replace("\r", "\n")
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._emit_line(line)
+        return len(chunk)
+
+    def flush(self) -> None:
+        if self._buffer:
+            line = self._buffer
+            self._buffer = ""
+            self._emit_line(line)
+
+    def _emit_line(self, line: str) -> None:
+        clean_line = " ".join(str(line or "").strip().split())
+        if not clean_line:
+            return
+        if len(clean_line) > self.max_line_length:
+            clean_line = clean_line[: self.max_line_length - 3] + "..."
+        emit(self.log, self.level, f"{self.prefix}{clean_line}", None)
 
 
 def solve_milp(
@@ -28,6 +78,16 @@ def solve_milp(
 
     options = dict(options or {})
     solver = str(options.pop("solver", "auto") or "auto").strip().lower()
+    emit_solver_input_summary(
+        objective,
+        integrality,
+        lower_bounds,
+        upper_bounds,
+        constraint_lower,
+        constraint_upper,
+        solver,
+        log,
+    )
 
     if solver in ("auto", ""):
         try:
@@ -84,6 +144,8 @@ def solve_milp(
             constraint_lower,
             constraint_upper,
             options,
+            log,
+            problem_name,
         )
 
     if solver in ("gurobi", "grb"):
@@ -138,9 +200,138 @@ def solve_milp(
             constraint_lower,
             constraint_upper,
             options,
+            log,
+            problem_name,
         )
 
     raise ValueError(f"未知MILP求解器：{solver}")
+
+
+def emit_solver_input_summary(
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+    solver: str,
+    log: LogSink | None,
+) -> None:
+    objective = np.asarray(objective, dtype=float)
+    integrality = np.asarray(integrality, dtype=int)
+    lower_bounds = np.asarray(lower_bounds, dtype=float)
+    upper_bounds = np.asarray(upper_bounds, dtype=float)
+    constraint_lower = np.asarray(constraint_lower, dtype=float)
+    constraint_upper = np.asarray(constraint_upper, dtype=float)
+    finite_lower = np.isfinite(constraint_lower)
+    finite_upper = np.isfinite(constraint_upper)
+    equality = finite_lower & finite_upper & np.isclose(constraint_lower, constraint_upper)
+    binary_count = sum(
+        1
+        for index in range(len(objective))
+        if is_binary_integer(int(integrality[index]), float(lower_bounds[index]), float(upper_bounds[index]))
+    )
+    integer_count = int(np.count_nonzero(integrality))
+    nonzero_objective_count = int(np.count_nonzero(np.abs(objective) > 1e-12))
+    emit(
+        log,
+        "info",
+        (
+            "求解器输入："
+            f"solver={solver or 'auto'}，"
+            f"变量={len(objective)}个，二进制={binary_count}个，整数={integer_count}个，"
+            f"目标非零项={nonzero_objective_count}个，"
+            f"等式约束={int(np.count_nonzero(equality))}条，"
+            f"上界约束={int(np.count_nonzero(finite_upper & ~equality))}条，"
+            f"下界约束={int(np.count_nonzero(finite_lower & ~equality))}条"
+        ),
+        None,
+    )
+
+
+def solver_log_requested(options: dict[str, Any]) -> bool:
+    return bool(options.get("solver_log", True))
+
+
+def solver_log_enabled(options: dict[str, Any], log: LogSink | None) -> bool:
+    return solver_log_requested(options) and log is not None
+
+
+def solver_log_line_limit(options: dict[str, Any]) -> int:
+    try:
+        return int(options.get("solver_log_line_limit", 1200))
+    except (TypeError, ValueError):
+        return 1200
+
+
+def solver_log_interval(options: dict[str, Any]) -> float:
+    try:
+        return max(0.2, float(options.get("solver_log_interval", 2.0)))
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def scipy_milp_options(options: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in options.items() if key not in CUSTOM_SOLVER_OPTIONS}
+
+
+def gurobi_progress_callback(gp: Any, log: LogSink | None, options: dict[str, Any]) -> Callable[[Any, int], None]:
+    interval = solver_log_interval(options)
+    last_emit = {"time": 0.0}
+
+    def callback(model: Any, where: int) -> None:
+        if where not in (gp.GRB.Callback.MIP, gp.GRB.Callback.MIPSOL):
+            return
+        now = time.monotonic()
+        if now - last_emit["time"] < interval and where != gp.GRB.Callback.MIPSOL:
+            return
+        last_emit["time"] = now
+        try:
+            if where == gp.GRB.Callback.MIPSOL:
+                incumbent = model.cbGet(gp.GRB.Callback.MIPSOL_OBJ)
+                emit(log, "info", f"Gurobi找到新可行解：目标值={format_solver_number(incumbent)}", None)
+                return
+            node_count = model.cbGet(gp.GRB.Callback.MIP_NODCNT)
+            best_objective = model.cbGet(gp.GRB.Callback.MIP_OBJBST)
+            best_bound = model.cbGet(gp.GRB.Callback.MIP_OBJBND)
+            solution_count = model.cbGet(gp.GRB.Callback.MIP_SOLCNT)
+            gap_text = gurobi_gap_text(best_objective, best_bound)
+            emit(
+                log,
+                "info",
+                (
+                    "Gurobi迭代："
+                    f"节点={format_solver_number(node_count)}，"
+                    f"可行解={format_solver_number(solution_count)}，"
+                    f"当前最优={format_solver_number(best_objective)}，"
+                    f"最优界={format_solver_number(best_bound)}，"
+                    f"Gap={gap_text}"
+                ),
+                None,
+            )
+        except Exception as exc:
+            emit(log, "warn", f"Gurobi迭代日志读取失败：{exc}", None)
+
+    return callback
+
+
+def gurobi_gap_text(best_objective: float, best_bound: float) -> str:
+    if not np.isfinite(best_objective) or not np.isfinite(best_bound):
+        return "-"
+    denominator = max(1.0, abs(float(best_objective)))
+    return f"{abs(float(best_objective) - float(best_bound)) / denominator * 100:.4g}%"
+
+
+def format_solver_number(value: Any) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if not np.isfinite(number):
+        return "-"
+    if abs(number) >= 10000 or (0 < abs(number) < 0.001):
+        return f"{number:.4e}"
+    return f"{number:.6g}"
 
 
 def solve_milp_with_gurobi(
@@ -185,7 +376,11 @@ def solve_milp_with_gurobi(
     variables = model.addMVar(len(objective), lb=lower_bounds, ub=upper_bounds, vtype=vtypes, name="x")
     model.setObjective(objective @ variables, gp.GRB.MINIMIZE)
     add_gurobi_constraints(model, matrix, variables, constraint_lower, constraint_upper)
-    model.optimize()
+    callback = gurobi_progress_callback(gp, log, options) if solver_log_enabled(options, log) else None
+    if callback:
+        model.optimize(callback)
+    else:
+        model.optimize()
 
     status_name = gurobi_status_name(gp, model.Status)
     has_solution = int(model.SolCount) > 0
@@ -228,10 +423,20 @@ def solve_milp_with_cplex(
     model = cplex.Cplex()
     model.set_problem_name(problem_name or "MILP")
     model.objective.set_sense(model.objective.sense.minimize)
-    model.set_log_stream(None)
-    model.set_error_stream(None)
-    model.set_warning_stream(None)
-    model.set_results_stream(None)
+    cplex_log_stream = (
+        SolverLogStream(log, prefix="CPLEX: ", max_line_length=solver_log_line_limit(options))
+        if solver_log_enabled(options, log)
+        else None
+    )
+    cplex_warning_stream = (
+        SolverLogStream(log, prefix="CPLEX警告: ", level="warn", max_line_length=solver_log_line_limit(options))
+        if solver_log_enabled(options, log)
+        else None
+    )
+    model.set_log_stream(cplex_log_stream)
+    model.set_error_stream(cplex_warning_stream)
+    model.set_warning_stream(cplex_warning_stream)
+    model.set_results_stream(cplex_log_stream)
 
     time_limit = options.get("time_limit")
     if time_limit is not None:
@@ -253,6 +458,10 @@ def solve_milp_with_cplex(
     )
     add_cplex_constraints(cplex, model, matrix, constraint_lower, constraint_upper)
     model.solve()
+    if cplex_log_stream:
+        cplex_log_stream.flush()
+    if cplex_warning_stream:
+        cplex_warning_stream.flush()
 
     status = model.solution.get_status()
     status_string = model.solution.get_status_string()
@@ -300,7 +509,14 @@ def solve_milp_with_mosek(
     has_integer = bool(np.any(integrality))
     with mosek.Env() as env:
         with env.Task(0, 0) as task:
-            configure_mosek_task(mosek, task, options, problem_name)
+            configure_mosek_task(mosek, task, options, problem_name, log)
+            mosek_log_stream = (
+                SolverLogStream(log, prefix="MOSEK: ", max_line_length=solver_log_line_limit(options))
+                if solver_log_enabled(options, log)
+                else None
+            )
+            if mosek_log_stream:
+                task.set_Stream(mosek.streamtype.log, mosek_log_stream.write)
             task.appendvars(len(objective))
             for index in range(len(objective)):
                 task.putcj(index, float(objective[index]))
@@ -322,6 +538,8 @@ def solve_milp_with_mosek(
 
             task.putobjsense(mosek.objsense.minimize)
             task.optimize()
+            if mosek_log_stream:
+                mosek_log_stream.flush()
             solution_type, problem_status, solution_status, solution, objective_value = get_mosek_solution(
                 mosek,
                 task,
@@ -349,8 +567,53 @@ def solve_milp_with_scipy(
     constraint_lower: np.ndarray,
     constraint_upper: np.ndarray,
     options: dict[str, Any],
+    log: LogSink | None = None,
+    problem_name: str = "MILP",
 ) -> Any:
-    result = milp(
+    emit(log, "info", f"调用SciPy HiGHS求解器求解混合整数线性规划：{problem_name}", None)
+    scipy_options = scipy_milp_options(options)
+    solver_output = solver_log_enabled(options, log)
+    if solver_output:
+        scipy_options["disp"] = True
+        stream = SolverLogStream(log, prefix="HiGHS: ", max_line_length=solver_log_line_limit(options))
+        with redirect_stdout(stream), redirect_stderr(stream):
+            result = run_scipy_milp(
+                objective,
+                integrality,
+                lower_bounds,
+                upper_bounds,
+                constraint_matrix,
+                constraint_lower,
+                constraint_upper,
+                scipy_options,
+            )
+        stream.flush()
+    else:
+        result = run_scipy_milp(
+            objective,
+            integrality,
+            lower_bounds,
+            upper_bounds,
+            constraint_matrix,
+            constraint_lower,
+            constraint_upper,
+            scipy_options,
+        )
+    result.solver = "scipy"
+    return result
+
+
+def run_scipy_milp(
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    constraint_matrix: Any,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+    options: dict[str, Any],
+) -> Any:
+    return milp(
         np.asarray(objective, dtype=float),
         integrality=np.asarray(integrality, dtype=int),
         bounds=Bounds(np.asarray(lower_bounds, dtype=float), np.asarray(upper_bounds, dtype=float)),
@@ -361,8 +624,6 @@ def solve_milp_with_scipy(
         ),
         options=options,
     )
-    result.solver = "scipy"
-    return result
 
 
 def add_gurobi_constraints(model: Any, matrix: Any, variables: Any, lower: np.ndarray, upper: np.ndarray) -> None:
@@ -389,10 +650,13 @@ def finite_cplex_bounds(values: np.ndarray, infinity: float) -> np.ndarray:
     return np.where(np.isposinf(values), infinity, np.where(np.isneginf(values), -infinity, values))
 
 
-def configure_mosek_task(mosek_module: Any, task: Any, options: dict[str, Any], problem_name: str) -> None:
-    task.putintparam(mosek_module.iparam.log, 0)
+def configure_mosek_task(mosek_module: Any, task: Any, options: dict[str, Any], problem_name: str, log: LogSink | None) -> None:
+    if solver_log_enabled(options, log):
+        task.putintparam(mosek_module.iparam.log, 1)
+    else:
+        task.putintparam(mosek_module.iparam.log, 0)
     if hasattr(mosek_module.iparam, "log_mio"):
-        task.putintparam(mosek_module.iparam.log_mio, 0)
+        task.putintparam(mosek_module.iparam.log_mio, 1 if solver_log_enabled(options, log) else 0)
     if problem_name:
         task.puttaskname(problem_name)
     time_limit = options.get("time_limit")

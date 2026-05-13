@@ -71,7 +71,9 @@ def run_estimation(scheme_payload: dict[str, Any], planning_result_rows: list[di
     emit(log, "info", "开始8760点混合整数线性优化调度", 0)
     model = build_dispatch_model(scheme_payload, planning_result_rows)
     emit(log, "info", "已建立全年联合优化模型：柴发启停、制氢启停、储能、氢储、弃电和切负荷", 10)
-    dispatch_rows = solve_dispatch_model(model, log)
+    dispatch_rows = direct_dispatch_rows(model, log)
+    if dispatch_rows is None:
+        dispatch_rows = solve_dispatch_model(model, log)
     totals = dispatch_totals(dispatch_rows, model["fuel_rate"], model["electric_to_hydrogen_efficiency"])
     totals = {key: round(value, 4) for key, value in totals.items()}
     green_ratio = totals["renewable_ratio"]
@@ -347,6 +349,116 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
     }
 
 
+def direct_dispatch_rows(model: dict[str, Any], log: LogSink | None = None) -> list[dict[str, Any]] | None:
+    """Return an exact per-hour optimum when no storage or hydrogen coupling is present."""
+
+    coupled_capacities = (
+        "storage_power_capacity",
+        "storage_energy_capacity",
+        "electrolyzer_power_upper",
+        "hydrogen_tank_capacity",
+        "fuel_cell_power_capacity",
+    )
+    if any(numeric(model.get(key), 0.0) > 1e-9 for key in coupled_capacities):
+        return None
+
+    emit(log, "info", "检测到无储能/氢能跨时段耦合，使用逐时解析调度快速求解", 20)
+    rows: list[dict[str, Any]] = []
+    for hour, source_row in enumerate(model["time_series"]):
+        load = round(float(model["loads"][hour]), 4)
+        wind_available = round(float(model["wind_available"][hour]), 4)
+        pv_available = round(float(model["pv_available"][hour]), 4)
+        renewable_available = round(wind_available + pv_available, 4)
+        renewable_used, diesel_power, unmet_load, diesel_on = direct_hour_dispatch(
+            load,
+            renewable_available,
+            model["diesel_power_upper"],
+            model["diesel_units"],
+            model["diesel_unit_power_upper"],
+            model["diesel_unit_power_lower"],
+        )
+        wind_power, pv_power = allocate_renewable_power(renewable_used, wind_available, pv_available)
+        wind_curtailed = max(0.0, round(wind_available - wind_power, 4))
+        pv_curtailed = max(0.0, round(pv_available - pv_power, 4))
+        curtailed_power = round(wind_curtailed + pv_curtailed, 4)
+        hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
+        rows.append(
+            {
+                "hour_index": hour_index,
+                "datetime": source_row.get("datetime", f"H{hour_index:04d}"),
+                "wind_speed": round(float(model["wind_speed"][hour]), 4),
+                "solar_irradiance": round(float(model["solar_irradiance"][hour]), 4),
+                "temperature": round(float(model["temperature"][hour]), 4),
+                "load": load,
+                "diesel_power": diesel_power,
+                "wind_available": wind_available,
+                "wind_power": wind_power,
+                "pv_available": pv_available,
+                "pv_power": pv_power,
+                "renewable_available": renewable_available,
+                "renewable_ratio": round(percent(wind_power + pv_power, load), 4),
+                "storage_power": 0.0,
+                "storage_charge": 0.0,
+                "storage_discharge": 0.0,
+                "storage_soc": 0.0,
+                "diesel_on": diesel_on,
+                "hydrogen_production_power": 0.0,
+                "electrolyzer_on": 0,
+                "fuel_cell_power": 0.0,
+                "hydrogen_storage": 0.0,
+                "wind_curtailed_power": wind_curtailed,
+                "pv_curtailed_power": pv_curtailed,
+                "curtailed_power": curtailed_power,
+                "renewable_curtailed_rate": round(percent(curtailed_power, renewable_available), 4),
+                "unmet_load": unmet_load,
+            }
+        )
+    emit(log, "info", "逐时解析调度完成，正在整理8760点调度曲线", 85)
+    return rows
+
+
+def direct_hour_dispatch(
+    load: float,
+    renewable_available: float,
+    diesel_power_upper: float,
+    diesel_units: int,
+    diesel_unit_power_upper: float,
+    diesel_unit_power_lower: float,
+) -> tuple[float, float, float, int]:
+    renewable_used = min(max(0.0, renewable_available), max(0.0, load))
+    residual = max(0.0, load - renewable_used)
+    diesel_power = 0.0
+    diesel_on = 0
+    if residual > 1e-9 and diesel_power_upper > 1e-9 and diesel_units > 0 and diesel_unit_power_upper > 1e-9:
+        diesel_power = min(diesel_power_upper, residual)
+        diesel_on = max(1, min(diesel_units, int(math.ceil(diesel_power / diesel_unit_power_upper - 1e-9))))
+        minimum_power = diesel_on * max(0.0, diesel_unit_power_lower)
+        if minimum_power > diesel_power + 1e-9:
+            extra_power = minimum_power - diesel_power
+            if extra_power <= renewable_used + 1e-9:
+                renewable_used -= extra_power
+                diesel_power = minimum_power
+            elif minimum_power <= load + 1e-9:
+                diesel_power = minimum_power
+                renewable_used = max(0.0, load - diesel_power)
+            else:
+                diesel_power = 0.0
+                diesel_on = 0
+                renewable_used = min(max(0.0, renewable_available), max(0.0, load))
+        diesel_power = min(diesel_power, diesel_power_upper)
+    unmet_load = max(0.0, load - renewable_used - diesel_power)
+    if diesel_power <= 1e-9:
+        diesel_power = 0.0
+        diesel_on = 0
+    return round(renewable_used, 4), round(diesel_power, 4), round(unmet_load, 4), diesel_on
+
+
+def allocate_renewable_power(renewable_used: float, wind_available: float, pv_available: float) -> tuple[float, float]:
+    wind_power = min(max(0.0, wind_available), max(0.0, renewable_used))
+    pv_power = min(max(0.0, pv_available), max(0.0, renewable_used - wind_power))
+    return round(wind_power, 4), round(pv_power, 4)
+
+
 def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> list[dict[str, Any]]:
     loads = model["loads"]
     n = len(loads)
@@ -468,13 +580,26 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
             fixed_initial_value=initial_hydrogen,
         )
 
+    emit(
+        log,
+        "info",
+        f"评估模型规模：变量{builder.variable_count}个（整数{builder.integer_variable_count}个），约束{builder.constraint_count}条，非零系数{builder.nonzero_count}个",
+        18,
+    )
+    dispatch_milp.emit_builder_diagnostics(builder, log, "方案评估MILP")
     emit(log, "info", "求解8760点联合混合整数线性优化问题", 20)
     model["variables"] = builder.variables
     model["objective"] = builder.objective
     model["integrality"] = builder.integrality
     result = dispatch_milp.solve_built_milp(
         builder,
-        options={"time_limit": 120, "mip_rel_gap": 0.01, "disp": False},
+        options={
+            "time_limit": 120,
+            "mip_rel_gap": 0.01,
+            "disp": False,
+            "solver_log": True,
+            "solver_log_interval": 2.0,
+        },
         log=log,
         problem_name="方案评估",
         solve_fn=solve_milp,

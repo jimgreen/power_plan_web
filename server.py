@@ -392,6 +392,12 @@ class OptimizationRuntime:
 
     def apply(self, action: str, scheme: str = "") -> dict:
         target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
+        if action == "clear_logs":
+            with self._lock:
+                self.scheme = target_scheme
+                self._logs.clear()
+                return self._payload_unlocked()
+
         if action == "start":
             with self._lock:
                 if self.status == "运行中":
@@ -860,8 +866,8 @@ class OptimizationRuntime:
 
     def _append_log_unlocked(self, level: str, message: str) -> None:
         self._logs.append({"time": _now_text(), "level": level, "message": message})
-        if len(self._logs) > 120:
-            del self._logs[:-120]
+        if len(self._logs) > 2000:
+            del self._logs[:-2000]
 
     def _export_results_once_unlocked(self) -> None:
         if self._results_exported:
@@ -1523,6 +1529,14 @@ class EvaluationRuntime:
 
     def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
         target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
+        if action == "clear_logs":
+            with self._lock:
+                self.scheme = target_scheme
+                if filename:
+                    self.result_filename = str(filename or "").strip()
+                self._logs.clear()
+                return self._payload_unlocked()
+
         if action == "start":
             target_filename = selected_evaluation_result_filename(target_scheme, filename)
             if not target_filename:
@@ -1666,8 +1680,8 @@ class EvaluationRuntime:
 
     def _append_log_unlocked(self, level: str, message: str) -> None:
         self._logs.append({"time": _now_text(), "level": level, "message": message})
-        if len(self._logs) > 200:
-            del self._logs[:-200]
+        if len(self._logs) > 2000:
+            del self._logs[:-2000]
 
 
 class EvaluationRuntimeManager:

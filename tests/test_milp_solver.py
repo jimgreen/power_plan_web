@@ -112,6 +112,31 @@ class MilpSolverTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             milp_solver.solve_milp(*args, options={"solver": "unknown"}, problem_name="测试模型")
 
+    def test_solver_log_stream_emits_complete_lines(self):
+        events = []
+        stream = milp_solver.SolverLogStream(events.append, prefix="求解器: ")
+
+        stream.write("root relaxation\nnode 1")
+        stream.write(" incumbent\n\nnode 2\n")
+        stream.flush()
+
+        self.assertEqual(
+            [event["message"] for event in events],
+            ["求解器: root relaxation", "求解器: node 1 incumbent", "求解器: node 2"],
+        )
+
+    def test_scipy_solver_log_is_forwarded_when_enabled(self):
+        args = self._tiny_problem()
+        events = []
+
+        result = milp_solver.solve_milp(*args, options={"solver": "scipy", "solver_log": True}, log=events.append, problem_name="测试模型")
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.solver, "scipy")
+        messages = "\n".join(event["message"] for event in events)
+        self.assertIn("调用SciPy HiGHS求解器", messages)
+        self.assertTrue("HiGHS" in messages or "Presolving" in messages or "Solving report" in messages)
+
 
 if __name__ == "__main__":
     unittest.main()
