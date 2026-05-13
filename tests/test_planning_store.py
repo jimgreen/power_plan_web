@@ -1,6 +1,8 @@
 import shutil
+import struct
 import sys
 import unittest
+import zipfile
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -145,6 +147,35 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(len(payload["time_series"]), 8760)
         self.assertNotIn("diesel_generators", payload)
         self.assertNotIn("planning_parameters", payload)
+
+    def test_read_scheme_repairs_corrupted_time_series_sheet_and_keeps_other_parameters(self):
+        self.store.create_scheme("方案A")
+        payload = self.store.read_scheme("方案A")
+        payload["time_series"][0]["load"] = 88.8
+        payload["diesel_generators"][0]["quantity_upper"] = 3
+        payload["planning_parameters"][0]["diesel_price"] = 1.23
+        self.store.write_scheme("方案A", payload)
+        workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
+        corrupt_zip_member(workbook_path, "xl/worksheets/sheet1.xml")
+
+        repaired = self.store.read_scheme("方案A")
+
+        self.assertEqual(len(repaired["time_series"]), 8760)
+        self.assertEqual(repaired["time_series"][0]["load"], 0)
+        self.assertEqual(repaired["diesel_generators"][0]["quantity_upper"], 3)
+        self.assertEqual(repaired["planning_parameters"][0]["diesel_price"], 1.23)
+        self.assertTrue(
+            any(
+                item["level"] == "warn" and "8760时序数据" in item["message"] and "已重建" in item["message"]
+                for item in repaired["validation"]
+            )
+        )
+        self.assertTrue(any(workbook_path.parent.glob("parameters.corrupt-*.xlsx.bak")))
+        overview = self.store.read_scheme_overview("方案A")
+        self.assertEqual(overview["time_series_count"], 8760)
+        reread = self.store.read_scheme("方案A")
+        self.assertEqual(len(reread["time_series"]), 8760)
+        self.assertFalse(any("已重建" in item["message"] for item in reread["validation"]))
 
     def test_default_time_series_includes_temperature(self):
         payload = planning_store.default_payload("方案A")
@@ -342,6 +373,25 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertTrue(any("电储能充电效率(0.0-1.0)必须大于0" in item["message"] for item in messages))
         self.assertTrue(any("电储能放电效率(0.0-1.0)不能大于1" in item["message"] for item in messages))
         self.assertTrue(any("频率安全上限不能小于频率安全下限" in item["message"] for item in messages))
+
+
+def corrupt_zip_member(path: Path, member_name: str) -> None:
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo(member_name)
+        if info.compress_size <= 0:
+            raise AssertionError(f"cannot corrupt empty member: {member_name}")
+        data_offset = info.header_offset + 30
+        with path.open("rb") as handle:
+            handle.seek(info.header_offset + 26)
+            name_length, extra_length = struct.unpack("<HH", handle.read(4))
+            data_offset += name_length + extra_length
+    with path.open("r+b") as handle:
+        handle.seek(data_offset + min(10, info.compress_size - 1))
+        original = handle.read(1)
+        if not original:
+            raise AssertionError(f"cannot read member byte: {member_name}")
+        handle.seek(-1, 1)
+        handle.write(bytes([original[0] ^ 0xFF]))
 
 
 if __name__ == "__main__":

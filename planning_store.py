@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 import unicodedata
+import zipfile
+import gc
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree
 
 from openpyxl import Workbook, load_workbook
 
@@ -16,6 +21,11 @@ from openpyxl import Workbook, load_workbook
 WEB_ROOT = Path(__file__).resolve().parent
 DEFAULT_SCHEME_ROOT = WEB_ROOT / "planning_schemes"
 WORKBOOK_NAME = "parameters.xlsx"
+WORKBOOK_XML = "xl/workbook.xml"
+WORKBOOK_RELS_XML = "xl/_rels/workbook.xml.rels"
+MAIN_XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+REL_XML_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PACKAGE_REL_XML_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
     "time_series": ("8760时序数据", ["hour_index", "datetime", "wind_speed", "solar_irradiance", "load", "temperature"]),
@@ -408,7 +418,7 @@ class PlanningStore:
         if not path.exists():
             raise FileNotFoundError(f"方案参数文件不存在: {path}")
         payload = read_workbook(path, clean)
-        payload["validation"] = validate_payload(payload)
+        payload["validation"] = payload.get("validation", []) + validate_payload(payload)
         payload["time_series_loaded"] = True
         payload["time_series_count"] = len(payload.get("time_series", []))
         return payload
@@ -421,7 +431,7 @@ class PlanningStore:
         payload = read_workbook(path, clean, include_keys=[key for key in SHEET_SPECS if key != "time_series"])
         payload["time_series_loaded"] = False
         payload["time_series_count"] = count_sheet_rows(path, SHEET_SPECS["time_series"][0])
-        payload["validation"] = validate_payload(payload, require_time_series=False)
+        payload["validation"] = payload.get("validation", []) + validate_payload(payload, require_time_series=False)
         return payload
 
     def read_time_series(self, name: str) -> dict[str, Any]:
@@ -432,7 +442,7 @@ class PlanningStore:
         payload = read_workbook(path, clean, include_keys=["time_series"])
         payload["time_series_loaded"] = True
         payload["time_series_count"] = len(payload.get("time_series", []))
-        payload["validation"] = validate_payload(payload)
+        payload["validation"] = payload.get("validation", []) + validate_payload(payload)
         return payload
 
 
@@ -450,8 +460,39 @@ def build_workbook(payload: dict[str, Any]) -> Workbook:
     return workbook
 
 
+class TimeSeriesSheetReadError(Exception):
+    """Raised when only the 8760 time-series worksheet cannot be read."""
+
+
 def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None) -> dict[str, Any]:
     selected_keys = set(include_keys) if include_keys is not None else set(SHEET_SPECS)
+    repair_messages: list[dict[str, str]] = []
+    if is_time_series_zip_member_corrupted(path):
+        repair_messages.append(repair_time_series_sheet(path, "8760时序数据工作表压缩内容损坏"))
+    for attempt in range(2):
+        try:
+            payload = read_workbook_once(path, scheme, selected_keys)
+            payload["validation"] = repair_messages + payload.get("validation", [])
+            return payload
+        except TimeSeriesSheetReadError as exc:
+            if attempt > 0:
+                raise ValueError(f"参数文件损坏，8760时序数据工作表无法修复：{path}") from exc
+            reason = str(exc)
+            del exc
+            gc.collect()
+            repair_messages.append(repair_time_series_sheet(path, reason))
+        except Exception as exc:
+            if attempt == 0 and is_time_series_zip_member_corrupted(path):
+                reason = str(exc)
+                del exc
+                gc.collect()
+                repair_messages.append(repair_time_series_sheet(path, reason))
+                continue
+            raise ValueError(f"参数文件损坏或无法读取：{path}。请恢复备份或重新导入8760时序数据。原始错误：{exc}") from exc
+    raise ValueError(f"参数文件损坏或无法读取：{path}")
+
+
+def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict[str, Any]:
     workbook = load_workbook(path, data_only=True, read_only=True)
     payload: dict[str, Any] = {"scheme": scheme, "validation": [], "capacity_limits": []}
     try:
@@ -464,7 +505,12 @@ def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None
                     payload["validation"].append({"level": "error", "message": f"缺少工作表: {sheet_name}"})
                 continue
             sheet = workbook[sheet_name]
-            header_values = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1), [])]
+            try:
+                header_values = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1), [])]
+            except Exception as exc:
+                if key == "time_series":
+                    raise TimeSeriesSheetReadError(str(exc)) from exc
+                raise
             has_named_header = any(value is not None for value in header_values)
             header_index = {
                 str(value): index
@@ -472,39 +518,183 @@ def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None
                 if value is not None and str(value) in headers
             }
             rows = []
-            for values in sheet.iter_rows(min_row=2, values_only=True):
-                if values is None or all(value is None for value in values):
-                    continue
-                row = {}
-                for index, header in enumerate(headers):
-                    if header in header_index:
-                        source_index = header_index[header]
-                    elif has_named_header:
-                        row[header] = field_default(header, "")
+            try:
+                for values in sheet.iter_rows(min_row=2, values_only=True):
+                    if values is None or all(value is None for value in values):
                         continue
-                    else:
-                        source_index = index
-                    row[header] = (
-                        values[source_index]
-                        if source_index < len(values) and values[source_index] is not None
-                        else field_default(header, "")
-                    )
-                if key == "planning_parameters" and "optimization_time_limit_minutes" not in header_index:
-                    legacy_index = next(
-                        (
-                            index
-                            for index, value in enumerate(header_values)
-                            if value is not None and str(value) == "optimization_time_limit_seconds"
-                        ),
-                        None,
-                    )
-                    if legacy_index is not None and legacy_index < len(values) and values[legacy_index] not in (None, ""):
-                        row["optimization_time_limit_minutes"] = numeric(values[legacy_index], 3600) / 60
-                rows.append(row)
+                    row = {}
+                    for index, header in enumerate(headers):
+                        if header in header_index:
+                            source_index = header_index[header]
+                        elif has_named_header:
+                            row[header] = field_default(header, "")
+                            continue
+                        else:
+                            source_index = index
+                        row[header] = (
+                            values[source_index]
+                            if source_index < len(values) and values[source_index] is not None
+                            else field_default(header, "")
+                        )
+                    if key == "planning_parameters" and "optimization_time_limit_minutes" not in header_index:
+                        legacy_index = next(
+                            (
+                                index
+                                for index, value in enumerate(header_values)
+                                if value is not None and str(value) == "optimization_time_limit_seconds"
+                            ),
+                            None,
+                        )
+                        if legacy_index is not None and legacy_index < len(values) and values[legacy_index] not in (None, ""):
+                            row["optimization_time_limit_minutes"] = numeric(values[legacy_index], 3600) / 60
+                    rows.append(row)
+            except Exception as exc:
+                if key == "time_series":
+                    raise TimeSeriesSheetReadError(str(exc)) from exc
+                raise
             payload[key] = (rows or default_rows_for_key(key)) if key == "planning_parameters" else rows
     finally:
         workbook.close()
     return payload
+
+
+def is_time_series_zip_member_corrupted(path: Path) -> bool:
+    try:
+        sheet_member = time_series_sheet_member(path)
+        return corrupted_zip_member(path) == sheet_member
+    except Exception:
+        return False
+
+
+def corrupted_zip_member(path: Path) -> str | None:
+    with zipfile.ZipFile(path) as archive:
+        for name in archive.namelist():
+            try:
+                archive.read(name)
+            except Exception:
+                return name
+    return None
+
+
+def repair_time_series_sheet(path: Path, reason: str) -> dict[str, str]:
+    sheet_member = time_series_sheet_member(path)
+    backup_path = backup_corrupted_workbook(path)
+    replacement_xml = build_time_series_sheet_xml().encode("utf-8")
+    tmp_path = path.with_name(f".{path.name}.repairing")
+    try:
+        with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            replaced = False
+            for info in source.infolist():
+                if info.filename == sheet_member:
+                    target.writestr(info, replacement_xml)
+                    replaced = True
+                    continue
+                target.writestr(info, source.read(info.filename))
+            if not replaced:
+                raise ValueError(f"未找到8760时序数据工作表: {sheet_member}")
+        replace_workbook_with_retry(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    return {
+        "level": "warn",
+        "message": (
+            "检测到参数文件中的8760时序数据工作表损坏，"
+            "已保留其它参数，已重建默认8760时序数据；"
+            f"原文件已备份为 {backup_path.name}。原始错误：{reason}"
+        ),
+    }
+
+
+def replace_workbook_with_retry(source: Path, target: Path, attempts: int = 20, delay_seconds: float = 0.1) -> None:
+    last_error: PermissionError | None = None
+    for _ in range(attempts):
+        try:
+            source.replace(target)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            gc.collect()
+            time.sleep(delay_seconds)
+    raise PermissionError(f"参数文件被占用，无法写回修复后的工作簿：{target}") from last_error
+
+
+def backup_corrupted_workbook(path: Path) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    backup_path = path.with_name(f"{path.stem}.corrupt-{timestamp}{path.suffix}.bak")
+    counter = 1
+    while backup_path.exists():
+        backup_path = path.with_name(f"{path.stem}.corrupt-{timestamp}-{counter}{path.suffix}.bak")
+        counter += 1
+    shutil.copy2(path, backup_path)
+    return backup_path
+
+
+def time_series_sheet_member(path: Path) -> str:
+    sheet_name = SHEET_SPECS["time_series"][0]
+    with zipfile.ZipFile(path) as archive:
+        workbook_root = ElementTree.fromstring(archive.read(WORKBOOK_XML))
+        relation_id = ""
+        for sheet in workbook_root.findall(f".//{{{MAIN_XML_NS}}}sheet"):
+            if sheet.attrib.get("name") == sheet_name:
+                relation_id = sheet.attrib.get(f"{{{REL_XML_NS}}}id", "")
+                break
+        if not relation_id:
+            raise ValueError(f"未找到工作表: {sheet_name}")
+        rels_root = ElementTree.fromstring(archive.read(WORKBOOK_RELS_XML))
+        for relationship in rels_root.findall(f".//{{{PACKAGE_REL_XML_NS}}}Relationship"):
+            if relationship.attrib.get("Id") == relation_id:
+                target = relationship.attrib.get("Target", "")
+                if not target:
+                    break
+                normalized = target.lstrip("/")
+                if not normalized.startswith("xl/"):
+                    normalized = f"xl/{normalized}"
+                return normalized.replace("\\", "/")
+    raise ValueError(f"未找到工作表关系: {sheet_name}")
+
+
+def build_time_series_sheet_xml() -> str:
+    headers = SHEET_SPECS["time_series"][1]
+    rows = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        f'<worksheet xmlns="{MAIN_XML_NS}">',
+        '<dimension ref="A1:F8761"/>',
+        '<sheetData>',
+        f'<row r="1">{"".join(inline_cell(column_name(index), 1, header) for index, header in enumerate(headers, start=1))}</row>',
+    ]
+    for row_index, row in enumerate(default_time_series(), start=2):
+        rows.append(
+            f'<row r="{row_index}">'
+            f'<c r="A{row_index}" t="n"><v>{row["hour_index"]}</v></c>'
+            f'{inline_cell("B", row_index, row["datetime"])}'
+            f'<c r="C{row_index}" t="n"><v>{row["wind_speed"]}</v></c>'
+            f'<c r="D{row_index}" t="n"><v>{row["solar_irradiance"]}</v></c>'
+            f'<c r="E{row_index}" t="n"><v>{row["load"]}</v></c>'
+            f'<c r="F{row_index}" t="n"><v>{row["temperature"]}</v></c>'
+            "</row>"
+        )
+    rows.extend(["</sheetData>", "</worksheet>"])
+    return "".join(rows)
+
+
+def inline_cell(column: str, row: int, value: Any) -> str:
+    text = (
+        str(value)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    return f'<c r="{column}{row}" t="inlineStr"><is><t>{text}</t></is></c>'
+
+
+def column_name(index: int) -> str:
+    name = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        name = chr(65 + remainder) + name
+    return name
 
 
 def count_sheet_rows(path: Path, sheet_name: str) -> int:
@@ -513,7 +703,9 @@ def count_sheet_rows(path: Path, sheet_name: str) -> int:
         if sheet_name not in workbook.sheetnames:
             return 0
         sheet = workbook[sheet_name]
-        return max(0, (sheet.max_row or 1) - 1)
+        if sheet.max_row and sheet.max_row > 1:
+            return sheet.max_row - 1
+        return sum(1 for _ in sheet.iter_rows(min_row=2, values_only=True))
     finally:
         workbook.close()
 
