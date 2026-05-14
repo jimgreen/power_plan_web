@@ -207,6 +207,8 @@ def add_power_balance_constraint(
     consumption_indices: list[int] | None = None,
     unmet_index: int | None = None,
 ) -> None:
+    # One equality row per hour keeps load, generation, storage and shedding
+    # in a single accounting frame.
     terms: dict[int, float] = {}
     for index in generation_indices:
         terms[index] = terms.get(index, 0.0) + 1.0
@@ -227,6 +229,8 @@ def add_availability_constraint(
     fixed_available: float = 0.0,
     available_terms: dict[int, float] | None = None,
 ) -> None:
+    # Weather-derived availability is split between actual output and
+    # curtailment, so the two variables always sum to the same resource total.
     terms: dict[int, float] = {curtailed_index: 1.0}
     for index in production_indices:
         terms[index] = terms.get(index, 0.0) + 1.0
@@ -242,6 +246,8 @@ def add_capacity_upper_constraint(
     capacity_terms: dict[int, float] | None = None,
     fixed_capacity: float | None = None,
 ) -> None:
+    # This helper is reused by multiple device families whenever an output
+    # needs to be capped by a scalar or affine capacity expression.
     terms: dict[int, float] = {value_index: 1.0}
     for column, coefficient in (capacity_terms or {}).items():
         terms[column] = terms.get(column, 0.0) - coefficient
@@ -258,6 +264,8 @@ def add_unit_commitment_constraints(
     power_lower: float,
     quantity_index: int | None = None,
 ) -> None:
+    # Diesel and electrolyzer rows share the same commitment shape, so one
+    # generic helper keeps the device-specific code short.
     if quantity_index is not None:
         builder.add_constraint({**{index: 1.0 for index in on_indices}, quantity_index: -1.0}, -np.inf, 0.0)
     builder.add_constraint(
@@ -290,7 +298,11 @@ def add_storage_constraints(
     fixed_energy_capacity: float | None = None,
     initial_ratio: float = 0.5,
     fixed_initial_value: float | None = None,
-) -> None:
+    soc_lower_ratio: float = 0.0,
+    soc_upper_ratio: float = 1.0,
+) -> dict[str, int]:
+    # Storage is the most coupled device family in the model: charge/discharge
+    # binaries, SOC dynamics and SOC threshold flags all come from this block.
     if power_capacity_terms is not None or fixed_power_capacity is not None:
         add_capacity_upper_constraint(
             builder,
@@ -307,6 +319,33 @@ def add_storage_constraints(
     builder.add_constraint({charge_index: 1.0, charge_on_index: -float(power_capacity_upper)}, -np.inf, 0.0)
     builder.add_constraint({discharge_index: 1.0, discharge_on_index: -float(power_capacity_upper)}, -np.inf, 0.0)
     builder.add_constraint({charge_on_index: 1.0, discharge_on_index: 1.0}, -np.inf, 1.0)
+    lower_margin_index = builder.add_var(("storage_soc_lower_margin", soc_index), 0.0, 1.0, integer=True)
+    upper_margin_index = builder.add_var(("storage_soc_upper_margin", soc_index), 0.0, 1.0, integer=True)
+    storage_energy_upper = storage_energy_capacity_upper(builder, energy_capacity_terms, fixed_energy_capacity)
+    soc_lower_ratio = min(1.0, max(0.0, float(soc_lower_ratio)))
+    soc_upper_ratio = min(1.0, max(soc_lower_ratio, float(soc_upper_ratio)))
+    lower_threshold_terms = scaled_terms(energy_capacity_terms, soc_lower_ratio)
+    upper_threshold_terms = scaled_terms(energy_capacity_terms, soc_upper_ratio)
+    add_soc_threshold_indicator_constraints(
+        builder,
+        soc_index=soc_index,
+        indicator_index=lower_margin_index,
+        threshold_terms=lower_threshold_terms,
+        fixed_threshold=soc_lower_ratio * float(fixed_energy_capacity or 0.0),
+        big_m=storage_energy_upper,
+        relation="above",
+    )
+    add_soc_threshold_indicator_constraints(
+        builder,
+        soc_index=soc_index,
+        indicator_index=upper_margin_index,
+        threshold_terms=upper_threshold_terms,
+        fixed_threshold=soc_upper_ratio * float(fixed_energy_capacity or 0.0),
+        big_m=storage_energy_upper,
+        relation="below",
+    )
+    builder.add_constraint({discharge_on_index: 1.0, lower_margin_index: -1.0}, -np.inf, 0.0)
+    builder.add_constraint({charge_on_index: 1.0, upper_margin_index: -1.0}, -np.inf, 0.0)
     if energy_capacity_terms is not None or fixed_energy_capacity is not None:
         add_capacity_upper_constraint(
             builder,
@@ -333,6 +372,133 @@ def add_storage_constraints(
     else:
         terms[previous_soc_index] = terms.get(previous_soc_index, 0.0) - 1.0
         builder.add_constraint(terms, 0.0, 0.0)
+    return {"soc_above_lower": lower_margin_index, "soc_below_upper": upper_margin_index}
+
+
+def scaled_terms(terms: dict[int, float] | None, multiplier: float) -> dict[int, float]:
+    # Copy and scale coefficient dictionaries without mutating the caller.
+    return {column: coefficient * float(multiplier) for column, coefficient in (terms or {}).items()}
+
+
+def storage_energy_capacity_upper(
+    builder: MilpModelBuilder,
+    energy_capacity_terms: dict[int, float] | None,
+    fixed_energy_capacity: float | None = None,
+) -> float:
+    # Big-M values should reflect the maximum feasible storage energy so the
+    # threshold binaries remain permissive enough to stay feasible.
+    if fixed_energy_capacity is not None:
+        return max(0.0, float(fixed_energy_capacity))
+    if not energy_capacity_terms:
+        return 0.0
+    total = 0.0
+    for column, coefficient in energy_capacity_terms.items():
+        upper = builder.upper_bounds[column] if column < len(builder.upper_bounds) else 1.0
+        if np.isfinite(upper):
+            total += max(0.0, float(coefficient)) * max(0.0, float(upper))
+    return max(0.0, total)
+
+
+def add_soc_threshold_indicator_constraints(
+    builder: MilpModelBuilder,
+    *,
+    soc_index: int,
+    indicator_index: int,
+    threshold_terms: dict[int, float] | None = None,
+    fixed_threshold: float = 0.0,
+    big_m: float = 0.0,
+    relation: str,
+) -> None:
+    # These indicator rows approximate "SOC above the lower bound" and "SOC
+    # below the upper bound" with a finite Big-M.
+    epsilon = 1e-6
+    safe_m = max(float(big_m), abs(float(fixed_threshold)), 1.0) + epsilon
+    base_terms: dict[int, float] = {soc_index: 1.0}
+    for column, coefficient in (threshold_terms or {}).items():
+        base_terms[column] = base_terms.get(column, 0.0) - float(coefficient)
+    if relation == "above":
+        builder.add_constraint({**base_terms, indicator_index: -safe_m}, float(fixed_threshold) + epsilon - safe_m, np.inf)
+    elif relation == "below":
+        builder.add_constraint({**base_terms, indicator_index: safe_m}, -np.inf, float(fixed_threshold) + safe_m - epsilon)
+    else:
+        raise ValueError(f"unknown SOC threshold relation: {relation}")
+
+
+def add_grid_support_requirement(
+    builder: MilpModelBuilder,
+    *,
+    diesel_on_indices: list[int],
+    grid_storage_on_indices: list[int],
+) -> bool:
+    # Keep at least one controllable source online across the diesel and
+    # grid-forming storage fleets.
+    terms = {index: 1.0 for index in [*diesel_on_indices, *grid_storage_on_indices]}
+    if terms:
+        builder.add_constraint(terms, 1.0, np.inf)
+        return True
+    return False
+
+
+def add_grid_storage_on_constraints(
+    builder: MilpModelBuilder,
+    *,
+    on_indices: list[int],
+    quantity_index: int | None = None,
+) -> None:
+    # A grid-forming storage unit can only count as online if its parent row is
+    # actually built.
+    if quantity_index is not None and on_indices:
+        builder.add_constraint({**{index: 1.0 for index in on_indices}, quantity_index: -1.0}, -np.inf, 0.0)
+
+
+def add_post_disturbance_balance_constraints(
+    builder: MilpModelBuilder,
+    *,
+    load: float,
+    load_up_factor: float,
+    load_down_factor: float,
+    renewable_down_factor: float,
+    diesel_power_indices: list[int],
+    diesel_on_terms: dict[int, float],
+    grid_storage_charge_index: int,
+    grid_storage_discharge_index: int,
+    grid_storage_up_on_terms: dict[int, float],
+    grid_storage_down_on_terms: dict[int, float],
+    wind_power_indices: list[int],
+    pv_power_indices: list[int],
+) -> None:
+    # This block turns the disturbance-security rules into linear reserve
+    # inequalities for each hour.
+    renewable_power_indices = [*wind_power_indices, *pv_power_indices]
+    up_terms: dict[int, float] = {}
+    down_terms: dict[int, float] = {}
+    for index, upper in diesel_on_terms.items():
+        up_terms[index] = up_terms.get(index, 0.0) + float(upper)
+    for index in diesel_power_indices:
+        up_terms[index] = up_terms.get(index, 0.0) - 1.0
+        down_terms[index] = down_terms.get(index, 0.0) + 1.0
+    for index, capacity in grid_storage_up_on_terms.items():
+        up_terms[index] = up_terms.get(index, 0.0) + float(capacity)
+    for index, capacity in grid_storage_down_on_terms.items():
+        down_terms[index] = down_terms.get(index, 0.0) + float(capacity)
+    up_terms[grid_storage_discharge_index] = up_terms.get(grid_storage_discharge_index, 0.0) - 1.0
+    up_terms[grid_storage_charge_index] = up_terms.get(grid_storage_charge_index, 0.0) + 1.0
+    down_terms[grid_storage_discharge_index] = down_terms.get(grid_storage_discharge_index, 0.0) + 1.0
+    down_terms[grid_storage_charge_index] = down_terms.get(grid_storage_charge_index, 0.0) - 1.0
+
+    if load_up_factor > 0:
+        builder.add_constraint(up_terms, max(0.0, float(load) * float(load_up_factor)), np.inf)
+    if renewable_down_factor > 0 and renewable_power_indices:
+        terms = dict(up_terms)
+        for index in renewable_power_indices:
+            terms[index] = terms.get(index, 0.0) - float(renewable_down_factor)
+        builder.add_constraint(terms, 0.0, np.inf)
+    for index in renewable_power_indices:
+        terms = dict(up_terms)
+        terms[index] = terms.get(index, 0.0) - 1.0
+        builder.add_constraint(terms, 0.0, np.inf)
+    if load_down_factor > 0:
+        builder.add_constraint(down_terms, max(0.0, float(load) * float(load_down_factor)), np.inf)
 
 
 def add_storage_cycle_constraint(

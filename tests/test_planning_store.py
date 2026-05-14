@@ -54,6 +54,10 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(payload["planning_parameters"][0]["storage_charge_efficiency"], 0.95)
         self.assertEqual(payload["planning_parameters"][0]["storage_discharge_efficiency"], 0.95)
         self.assertFalse(payload["planning_parameters"][0]["storage_frequency_regulation_enabled"])
+        self.assertEqual(payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"], 1)
+        self.assertEqual(payload["planning_parameters"][0]["load_up_disturbance_factor"], 0)
+        self.assertEqual(payload["planning_parameters"][0]["load_down_disturbance_factor"], 0)
+        self.assertEqual(payload["planning_parameters"][0]["renewable_down_disturbance_factor"], 0)
         self.assertEqual(payload["validation"][0]["level"], "ok")
         for key in planning_store.DEFAULT_DEVICE_ROWS:
             self.assertIn("quantity_lower", payload[key][0])
@@ -65,6 +69,10 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("generation_efficiency", payload["photovoltaics"][0])
         self.assertNotIn("cut_in_wind_speed", payload["photovoltaics"][0])
         self.assertNotIn("cut_out_wind_speed", payload["photovoltaics"][0])
+        self.assertIn("is_grid_forming", payload["storage_pcs"][0])
+        self.assertEqual(payload["storage_pcs"][0]["is_grid_forming"], 0)
+        self.assertEqual(payload["storage_battery_packs"][0]["soc_upper"], 0.9)
+        self.assertEqual(payload["storage_battery_packs"][0]["soc_lower"], 0.1)
 
     def test_list_copy_and_rename_schemes(self):
         self.store.create_scheme("方案A")
@@ -98,6 +106,9 @@ class PlanningStoreTest(unittest.TestCase):
         payload["diesel_generators"][0]["quantity_lower"] = 1
         payload["diesel_generators"][0]["quantity_upper"] = 3
         payload["hydrogen_tanks"][0]["hydrogen_tank_capacity"] = 300
+        payload["storage_pcs"][0]["is_grid_forming"] = 1
+        payload["storage_battery_packs"][0]["soc_upper"] = 0.85
+        payload["storage_battery_packs"][0]["soc_lower"] = 0.15
         payload["planning_parameters"][0]["diesel_price"] = 0.76
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 90
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.25
@@ -105,6 +116,9 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.9
         payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.88
         payload["planning_parameters"][0]["storage_frequency_regulation_enabled"] = True
+        payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
+        payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.2
+        payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.3
 
         self.store.write_scheme("方案A", payload)
         saved = self.store.read_scheme("方案A")
@@ -114,6 +128,9 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["diesel_generators"][0]["quantity_lower"], 1)
         self.assertEqual(saved["diesel_generators"][0]["quantity_upper"], 3)
         self.assertEqual(saved["hydrogen_tanks"][0]["hydrogen_tank_capacity"], 300)
+        self.assertEqual(saved["storage_pcs"][0]["is_grid_forming"], 1)
+        self.assertEqual(saved["storage_battery_packs"][0]["soc_upper"], 0.85)
+        self.assertEqual(saved["storage_battery_packs"][0]["soc_lower"], 0.15)
         self.assertNotIn("generation_efficiency", saved["photovoltaics"][0])
         self.assertNotIn("design_life_years", saved["planning_parameters"][0])
         self.assertEqual(saved["planning_parameters"][0]["diesel_price"], 0.76)
@@ -123,6 +140,9 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["planning_parameters"][0]["storage_charge_efficiency"], 0.9)
         self.assertEqual(saved["planning_parameters"][0]["storage_discharge_efficiency"], 0.88)
         self.assertTrue(saved["planning_parameters"][0]["storage_frequency_regulation_enabled"])
+        self.assertEqual(saved["planning_parameters"][0]["load_up_disturbance_factor"], 0.1)
+        self.assertEqual(saved["planning_parameters"][0]["load_down_disturbance_factor"], 0.2)
+        self.assertEqual(saved["planning_parameters"][0]["renewable_down_disturbance_factor"], 0.3)
 
     def test_read_scheme_overview_defers_time_series_rows(self):
         self.store.create_scheme("方案A")
@@ -201,6 +221,23 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("power_lower", payload["hydrogen_electrolyzers"][0])
         self.assertEqual(payload["hydrogen_electrolyzers"][0]["power_lower"], 0)
 
+    def test_storage_rows_include_grid_forming_and_soc_limits(self):
+        payload = planning_store.default_payload("方案A")
+        pcs_headers = planning_store.SHEET_SPECS["storage_pcs"][1]
+        battery_headers = planning_store.SHEET_SPECS["storage_battery_packs"][1]
+
+        self.assertIn("is_grid_forming", pcs_headers)
+        self.assertLess(pcs_headers.index("quantity_upper"), pcs_headers.index("is_grid_forming"))
+        self.assertLess(pcs_headers.index("is_grid_forming"), pcs_headers.index("design_life_years"))
+        self.assertEqual(payload["storage_pcs"][0]["is_grid_forming"], 0)
+        self.assertIn("soc_upper", battery_headers)
+        self.assertIn("soc_lower", battery_headers)
+        self.assertLess(battery_headers.index("battery_capacity"), battery_headers.index("soc_upper"))
+        self.assertLess(battery_headers.index("soc_upper"), battery_headers.index("soc_lower"))
+        self.assertLess(battery_headers.index("soc_lower"), battery_headers.index("cost"))
+        self.assertEqual(payload["storage_battery_packs"][0]["soc_upper"], 0.9)
+        self.assertEqual(payload["storage_battery_packs"][0]["soc_lower"], 0.1)
+
     def test_wind_turbine_rows_include_rated_wind_speed_between_cut_in_and_cut_out(self):
         payload = planning_store.default_payload("方案A")
         headers = planning_store.SHEET_SPECS["wind_turbines"][1]
@@ -264,6 +301,35 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(row["initial_hydrogen_storage_ratio"], 0.5)
         self.assertEqual(row["storage_charge_efficiency"], 0.95)
         self.assertEqual(row["storage_discharge_efficiency"], 0.95)
+        self.assertEqual(row["load_up_disturbance_factor"], 0)
+        self.assertEqual(row["load_down_disturbance_factor"], 0)
+        self.assertEqual(row["renewable_down_disturbance_factor"], 0)
+
+    def test_read_legacy_single_disturbance_factor_maps_to_split_fields(self):
+        self.store.create_scheme("方案A")
+        workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        time_sheet = workbook.create_sheet("8760时序数据")
+        time_sheet.append(planning_store.SHEET_SPECS["time_series"][1])
+        for row in planning_store.default_time_series():
+            time_sheet.append([row.get(header, "") for header in planning_store.SHEET_SPECS["time_series"][1]])
+        for key, (sheet_name, headers) in planning_store.SHEET_SPECS.items():
+            if key in {"time_series", "planning_parameters"}:
+                continue
+            sheet = workbook.create_sheet(sheet_name)
+            sheet.append(headers)
+        planning_sheet = workbook.create_sheet("规划参数")
+        planning_sheet.append(["diesel_price", "load_disturbance_factor"])
+        planning_sheet.append([1.2, 0.12])
+        workbook.save(workbook_path)
+
+        payload = self.store.read_scheme("方案A")
+        row = payload["planning_parameters"][0]
+
+        self.assertEqual(row["load_up_disturbance_factor"], 0.12)
+        self.assertEqual(row["load_down_disturbance_factor"], 0.12)
+        self.assertEqual(row["renewable_down_disturbance_factor"], 0.0)
 
     def test_read_legacy_photovoltaic_sheet_does_not_shift_removed_capacity_columns(self):
         self.store.create_scheme("方案A")
@@ -323,6 +389,9 @@ class PlanningStoreTest(unittest.TestCase):
         payload["wind_turbines"][0]["rated_wind_speed"] = 0
         payload["wind_turbines"][0]["cut_out_wind_speed"] = -0.2
         payload["storage_battery_packs"][0]["battery_capacity"] = 0
+        payload["storage_battery_packs"][0]["soc_upper"] = 1.2
+        payload["storage_battery_packs"][0]["soc_lower"] = -0.1
+        payload["storage_pcs"][0]["is_grid_forming"] = 2
         payload["hydrogen_electrolyzers"][0]["electric_to_hydrogen_efficiency"] = 0
         payload["hydrogen_electrolyzers"][0]["power_lower"] = -0.1
         payload["fuel_cells"][0]["hydrogen_to_electric_efficiency"] = 0
@@ -336,6 +405,9 @@ class PlanningStoreTest(unittest.TestCase):
             "成本(万元/台)必须为非负浮点数",
             "功率容量(kW)必须为正实数",
             "电池容量(kWh)必须为正实数",
+            "SOC上限(0.0-1.0)必须在0到1之间",
+            "SOC下限(0.0-1.0)必须在0到1之间",
+            "是否构网必须为0或1",
             "电-氢效率(Nm3/kWh)必须为正实数",
             "氢-电效率(kWh/Nm3)必须为正实数",
             "油耗率(kg/kWh)必须为正实数",
@@ -373,6 +445,9 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 1.1
         payload["planning_parameters"][0]["storage_charge_efficiency"] = 0
         payload["planning_parameters"][0]["storage_discharge_efficiency"] = 1.1
+        payload["planning_parameters"][0]["load_up_disturbance_factor"] = -0.1
+        payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.6
+        payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = "bad"
         payload["planning_parameters"][0]["frequency_security_upper"] = 1.1
         payload["planning_parameters"][0]["frequency_security_lower"] = 1.3
 
@@ -384,7 +459,19 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertTrue(any("初始氢储SOC(0.0-1.0)不能大于1" in item["message"] for item in messages))
         self.assertTrue(any("电储能充电效率(0.0-1.0)必须大于0" in item["message"] for item in messages))
         self.assertTrue(any("电储能放电效率(0.0-1.0)不能大于1" in item["message"] for item in messages))
+        self.assertTrue(any("负荷向上扰动系数(0.0-0.5)不能小于0" in item["message"] for item in messages))
+        self.assertTrue(any("负荷向下扰动系数(0.0-0.5)不能大于0.5" in item["message"] for item in messages))
+        self.assertTrue(any("新能源向下扰动系数(0.0-0.5)必须为数值" in item["message"] for item in messages))
         self.assertTrue(any("频率安全上限不能小于频率安全下限" in item["message"] for item in messages))
+
+    def test_validate_storage_soc_upper_not_below_lower(self):
+        payload = planning_store.default_payload("方案A")
+        payload["storage_battery_packs"][0]["soc_upper"] = 0.2
+        payload["storage_battery_packs"][0]["soc_lower"] = 0.8
+
+        messages = planning_store.validate_payload(payload)
+
+        self.assertTrue(any("SOC上限不能小于SOC下限" in item["message"] for item in messages))
 
 
 def corrupt_zip_member(path: Path, member_name: str) -> None:

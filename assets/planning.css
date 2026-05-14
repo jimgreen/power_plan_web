@@ -2216,6 +2216,35 @@ body.modal-open {
   border-bottom: 1px solid #e5eeeb;
 }
 
+.map-provider-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e5eeeb;
+  background: #f6fbfa;
+}
+
+.map-provider-tab {
+  padding: 7px 14px;
+  border: 1px solid #d7e4e0;
+  border-radius: 10px;
+  background: #edf4f2;
+  color: #24413d;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.map-provider-tab.active {
+  border-color: #21a8c7;
+  background: #dff7fb;
+  color: #0d5263;
+}
+
+.map-provider-tab.disabled {
+  opacity: 0.55;
+}
+
 .map-picker-foot {
   border-top: 1px solid #e5eeeb;
   border-bottom: 0;

@@ -94,8 +94,8 @@ class DispatchMilpTest(unittest.TestCase):
             initial_ratio=0.5,
         )
 
-        self.assertEqual(builder.variable_count, 10)
-        self.assertEqual(builder.integer_variable_count, 5)
+        self.assertEqual(builder.variable_count, 12)
+        self.assertEqual(builder.integer_variable_count, 7)
         self.assertGreaterEqual(builder.constraint_count, 9)
         self.assertGreater(builder.nonzero_count, 0)
 

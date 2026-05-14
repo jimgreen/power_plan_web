@@ -186,6 +186,33 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn(("storage_charge_on", 0), variables)
         self.assertIn(("storage_discharge_on", 0), variables)
 
+    def test_planning_model_tracks_grid_forming_storage_and_soc_limits(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
+        payload["diesel_generators"][0].update(
+            {"capacity": 10, "power_upper": 10, "power_lower": 0, "quantity_lower": 0, "quantity_upper": 1}
+        )
+        payload["storage_pcs"][0].update(
+            {"power_capacity": 10, "quantity_lower": 0, "quantity_upper": 2, "is_grid_forming": 1}
+        )
+        payload["storage_battery_packs"][0].update(
+            {"battery_capacity": 100, "quantity_lower": 1, "quantity_upper": 1, "soc_upper": 0.8, "soc_lower": 0.2}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        self.assertTrue(model["post_disturbance_power_balance_enabled"])
+        self.assertEqual(model["storage_soc_upper_ratio"], 0.8)
+        self.assertEqual(model["storage_soc_lower_ratio"], 0.2)
+        self.assertIn(("grid_storage_on", 0, 0, 0), variables)
+        self.assertIn(("grid_storage_on", 0, 0, 1), variables)
+
     def test_planning_optimization_uses_initial_storage_ratios_from_planning_parameters(self):
         payload = self._payload()
         for row in payload["time_series"]:

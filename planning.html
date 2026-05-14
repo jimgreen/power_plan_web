@@ -139,6 +139,11 @@
                 <label>地名<input id="weatherPlace" type="text" placeholder="例如：上海"></label>
                 <button id="geocodePlace" type="button">获取坐标</button>
               </div>
+              <div class="map-provider-tabs" role="tablist" aria-label="地图接口切换">
+                <button class="map-provider-tab active" type="button" data-map-provider="amap" aria-selected="true">高德地图</button>
+                <button class="map-provider-tab" type="button" data-map-provider="baidu" aria-selected="false">百度地图</button>
+                <button class="map-provider-tab" type="button" data-map-provider="google" aria-selected="false">谷歌地图</button>
+              </div>
               <div id="mapPickerCanvas" class="map-picker-canvas"></div>
               <div class="map-picker-foot">
                 <span id="mapPickerHint">根据地名查找坐标，或点击地图选点。</span>

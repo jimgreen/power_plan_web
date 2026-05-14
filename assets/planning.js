@@ -8,6 +8,7 @@ const state = {
   mapPoint: null,
   mapInstance: null,
   mapMarker: null,
+  mapProvider: "amap",
   chartMeta: null,
   timeChartManualHeight: null,
   layoutObserver: null,
@@ -20,8 +21,8 @@ const deviceSpecs = [
   ["diesel_generators", "柴发", ["name", "capacity", "cost", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["wind_turbines", "风机", ["name", "capacity", "cost", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["photovoltaics", "光伏", ["name", "capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "is_grid_forming", "design_life_years"]],
+  ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "soc_upper", "soc_lower", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["hydrogen_electrolyzers", "电制氢", ["name", "power_capacity", "power_lower", "cost", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["hydrogen_tanks", "储氢罐", ["name", "hydrogen_tank_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["fuel_cells", "燃料电池", ["name", "power_capacity", "cost", "hydrogen_to_electric_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
@@ -43,11 +44,13 @@ const planningParameterSpecs = [
   ["storage_charge_efficiency", "电储能充电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
   ["storage_discharge_efficiency", "电储能放电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
   ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: false }],
-  ["load_disturbance_factor", "负荷扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
+  ["load_up_disturbance_factor", "负荷向上扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
+  ["load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
+  ["renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: false }],
   ["frequency_security_upper", "频率安全上限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.5 }],
   ["frequency_security_lower", "频率安全下限(0.9-1.0)", "number", { min: 0.9, max: 1, defaultValue: 1.0 }],
-  ["post_disturbance_power_balance_enabled", "是否考虑扰动后功率平衡", "boolean", { defaultValue: false }],
+  ["post_disturbance_power_balance_enabled", "考虑扰动后平衡", "number", { min: 0, max: 1, integer: true, defaultValue: 1 }],
   ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: false }],
   ["load_disturbance_enabled", "是否考虑负荷扰动", "boolean", { defaultValue: false }],
 ];
@@ -82,6 +85,8 @@ const labels = {
   capacity: "功率容量(kW)",
   power_capacity: "功率容量(kW)",
   battery_capacity: "电池容量(kWh)",
+  soc_upper: "SOC上限",
+  soc_lower: "SOC下限",
   hydrogen_tank_capacity: "氢储容量(Nm3)",
   quantity_lower: "数据下限(台)",
   quantity_upper: "数据上限(台)",
@@ -90,6 +95,7 @@ const labels = {
   power_upper: "功率上限(kW)",
   power_lower: "功率下限(kW)",
   fuel_rate: "油耗率(kg/kWh)",
+  is_grid_forming: "是否构网",
   cut_in_wind_speed: "切入风速(m/s)",
   rated_wind_speed: "额定风速(m/s)",
   cut_out_wind_speed: "切出风速(m/s)",
@@ -100,6 +106,9 @@ const labels = {
 const deviceFieldDefaults = {
   design_life_years: 20,
   rated_wind_speed: 12,
+  is_grid_forming: 0,
+  soc_upper: 0.9,
+  soc_lower: 0.1,
 };
 
 const deviceFieldRules = {
@@ -110,6 +119,9 @@ const deviceFieldRules = {
   capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
   power_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
   battery_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电池容量(kWh)必须为正实数" },
+  soc_upper: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC上限(0.0-1.0)必须在0到1之间" },
+  soc_lower: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC下限(0.0-1.0)必须在0到1之间" },
+  is_grid_forming: { integer: true, min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="1"', 'inputmode="numeric"', 'pattern="[01]"'], message: "是否构网必须为0或1" },
   hydrogen_tank_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢储容量(Nm3)必须为正实数" },
   electric_to_hydrogen_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电-氢效率(Nm3/kWh)必须为正实数" },
   hydrogen_to_electric_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢-电效率(kWh/Nm3)必须为正实数" },
@@ -186,6 +198,9 @@ function bindActions() {
   document.getElementById("openCoordinatePicker").addEventListener("click", openCoordinatePicker);
   document.getElementById("closeMapPicker").addEventListener("click", closeMapPicker);
   document.getElementById("confirmMapPoint").addEventListener("click", confirmMapPoint);
+  document.querySelectorAll("[data-map-provider]").forEach((button) => {
+    button.addEventListener("click", () => selectMapProvider(button.dataset.mapProvider));
+  });
   document.querySelectorAll("[data-curve]").forEach((button) => {
     button.addEventListener("click", () => selectCurve(button.dataset.curve));
   });
@@ -894,14 +909,45 @@ async function openCoordinatePicker() {
   showModalInBody(modal);
   setMapPickerHint("根据地名查找坐标，或点击地图选点。");
   const config = await loadMapConfig();
-  if (!config || !config.amap_key) {
-    setMapPickerHint("可按地名查找；未配置地图 Key。");
+  if (!config) return;
+  state.mapProvider = chooseAvailableMapProvider(config, state.mapProvider);
+  renderMapProviderTabs(config);
+  if (!mapProviderKey(config, state.mapProvider)) {
+    setMapPickerHint(`可按地名查找；未配置${mapProviderLabel(state.mapProvider)} Key。`);
+    return;
+  }
+  await loadSelectedMapProvider();
+}
+
+async function selectMapProvider(provider) {
+  if (!provider || provider === state.mapProvider) return;
+  state.mapProvider = provider;
+  const config = await loadMapConfig();
+  renderMapProviderTabs(config);
+  await loadSelectedMapProvider();
+}
+
+async function loadSelectedMapProvider() {
+  const config = await loadMapConfig();
+  if (!config) return;
+  const key = mapProviderKey(config, state.mapProvider);
+  resetMapCanvas();
+  if (!key) {
+    setMapPickerHint(`可按地名查找；未配置${mapProviderLabel(state.mapProvider)} Key。`);
     return;
   }
   try {
-    await loadAmapScript(config.amap_key);
-    initAmapPicker();
-    setMapPickerHint("根据地名查找坐标，或点击地图选点。");
+    if (state.mapProvider === "baidu") {
+      await loadBaiduMapScript(key);
+      initBaiduMapPicker();
+    } else if (state.mapProvider === "google") {
+      await loadGoogleMapScript(key);
+      initGoogleMapPicker();
+    } else {
+      await loadAmapScript(key);
+      initAmapPicker();
+    }
+    setMapPickerHint(`当前接口：${mapProviderLabel(state.mapProvider)}。根据地名查找坐标，或点击地图选点。`);
   } catch (error) {
     setMapPickerHint(`地图加载失败：${error.message || error}`);
   }
@@ -920,6 +966,44 @@ async function loadMapConfig() {
   return state.mapConfig;
 }
 
+function chooseAvailableMapProvider(config, preferred) {
+  if (mapProviderKey(config, preferred)) return preferred;
+  const provider = (config?.providers || []).find((item) => item.enabled);
+  return provider?.key || preferred || "amap";
+}
+
+function mapProviderKey(config, provider) {
+  if (!config) return "";
+  if (provider === "baidu") return config.baidu_key || "";
+  if (provider === "google") return config.google_key || "";
+  return config.amap_key || "";
+}
+
+function mapProviderLabel(provider) {
+  if (provider === "baidu") return "百度地图";
+  if (provider === "google") return "谷歌地图";
+  return "高德地图";
+}
+
+function renderMapProviderTabs(config) {
+  document.querySelectorAll("[data-map-provider]").forEach((button) => {
+    const provider = button.dataset.mapProvider;
+    const active = provider === state.mapProvider;
+    const enabled = Boolean(mapProviderKey(config, provider));
+    button.classList.toggle("active", active);
+    button.classList.toggle("disabled", !enabled);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+    button.title = enabled ? `${mapProviderLabel(provider)}接口` : `${mapProviderLabel(provider)}未配置 Key`;
+  });
+}
+
+function resetMapCanvas() {
+  state.mapInstance = null;
+  state.mapMarker = null;
+  const canvas = document.getElementById("mapPickerCanvas");
+  if (canvas) canvas.innerHTML = "";
+}
+
 function loadAmapScript(key) {
   if (window.AMap) return Promise.resolve();
   if (window.__powerPlanAmapLoading) return window.__powerPlanAmapLoading;
@@ -932,6 +1016,49 @@ function loadAmapScript(key) {
     document.head.appendChild(script);
   });
   return window.__powerPlanAmapLoading;
+}
+
+function loadBaiduMapScript(key) {
+  if (window.BMapGL) return Promise.resolve();
+  if (window.__powerPlanBaiduLoading) return window.__powerPlanBaiduLoading;
+  window.__powerPlanBaiduLoading = new Promise((resolve, reject) => {
+    const callbackName = `powerPlanBaiduMapLoaded_${Date.now()}`;
+    window[callbackName] = () => {
+      delete window[callbackName];
+      resolve();
+    };
+    const script = document.createElement("script");
+    script.src = `https://api.map.baidu.com/api?v=1.0&type=webgl&ak=${encodeURIComponent(key)}&callback=${callbackName}`;
+    script.async = true;
+    script.onerror = () => {
+      delete window[callbackName];
+      reject(new Error("百度地图脚本加载失败"));
+    };
+    document.head.appendChild(script);
+  });
+  return window.__powerPlanBaiduLoading;
+}
+
+function loadGoogleMapScript(key) {
+  if (window.google?.maps) return Promise.resolve();
+  if (window.__powerPlanGoogleLoading) return window.__powerPlanGoogleLoading;
+  window.__powerPlanGoogleLoading = new Promise((resolve, reject) => {
+    const callbackName = `powerPlanGoogleMapLoaded_${Date.now()}`;
+    window[callbackName] = () => {
+      delete window[callbackName];
+      resolve();
+    };
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&loading=async&callback=${callbackName}`;
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => {
+      delete window[callbackName];
+      reject(new Error("谷歌地图脚本加载失败"));
+    };
+    document.head.appendChild(script);
+  });
+  return window.__powerPlanGoogleLoading;
 }
 
 function initAmapPicker() {
@@ -956,15 +1083,53 @@ function initAmapPicker() {
   setTimeout(() => state.mapInstance.resize?.(), 80);
 }
 
+function initBaiduMapPicker() {
+  const latitude = Number(document.getElementById("weatherLatitude").value);
+  const longitude = Number(document.getElementById("weatherLongitude").value);
+  const center = Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? new window.BMapGL.Point(longitude, latitude)
+    : new window.BMapGL.Point(116.39723, 39.9075);
+  state.mapInstance = new window.BMapGL.Map("mapPickerCanvas");
+  state.mapInstance.centerAndZoom(center, 5);
+  state.mapInstance.enableScrollWheelZoom(true);
+  state.mapMarker = new window.BMapGL.Marker(center);
+  state.mapInstance.addOverlay(state.mapMarker);
+  state.mapInstance.addEventListener("click", (event) => {
+    setMapPoint(event.latlng.lat, event.latlng.lng);
+  });
+}
+
+function initGoogleMapPicker() {
+  const latitude = Number(document.getElementById("weatherLatitude").value);
+  const longitude = Number(document.getElementById("weatherLongitude").value);
+  const center = Number.isFinite(latitude) && Number.isFinite(longitude)
+    ? { lat: latitude, lng: longitude }
+    : { lat: 39.9075, lng: 116.39723 };
+  state.mapInstance = new window.google.maps.Map(document.getElementById("mapPickerCanvas"), {
+    zoom: 5,
+    center,
+  });
+  state.mapMarker = new window.google.maps.Marker({ position: center, map: state.mapInstance });
+  state.mapInstance.addListener("click", (event) => {
+    setMapPoint(event.latLng.lat(), event.latLng.lng());
+  });
+}
+
 function setMapPoint(latitude, longitude, source = "map") {
   state.mapPoint = { latitude, longitude };
   document.getElementById("weatherLatitude").value = Number(latitude).toFixed(6);
   document.getElementById("weatherLongitude").value = Number(longitude).toFixed(6);
-  if (state.mapInstance) {
+  if (state.mapProvider === "baidu" && state.mapInstance && window.BMapGL) {
+    const point = new window.BMapGL.Point(longitude, latitude);
+    state.mapInstance.centerAndZoom(point, state.mapInstance.getZoom ? state.mapInstance.getZoom() : 5);
+    if (state.mapMarker) state.mapMarker.setPosition(point);
+  } else if (state.mapProvider === "google" && state.mapInstance && window.google?.maps) {
+    const point = { lat: latitude, lng: longitude };
+    state.mapInstance.setCenter(point);
+    if (state.mapMarker) state.mapMarker.setPosition(point);
+  } else if (state.mapInstance) {
     state.mapInstance.setCenter([longitude, latitude]);
-  }
-  if (state.mapMarker) {
-    state.mapMarker.setPosition([longitude, latitude]);
+    if (state.mapMarker) state.mapMarker.setPosition([longitude, latitude]);
   }
   const sourceText = source === "geocode" ? "地名坐标" : "地图坐标";
   setMapPickerHint(`${sourceText}：${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`);
@@ -1688,6 +1853,9 @@ function collectSaveWarnings() {
       if (validateDeviceFieldValue(row.quantity_lower, deviceFieldRules.quantity_lower) && validateDeviceFieldValue(row.quantity_upper, deviceFieldRules.quantity_upper) && Number(row.quantity_upper) < Number(row.quantity_lower)) {
         messages.push({ level: "error", message: `${title}第${index + 1}行数据上限不能小于数据下限` });
       }
+      if (key === "storage_battery_packs" && validateDeviceFieldValue(row.soc_upper, deviceFieldRules.soc_upper) && validateDeviceFieldValue(row.soc_lower, deviceFieldRules.soc_lower) && Number(row.soc_upper) < Number(row.soc_lower)) {
+        messages.push({ level: "error", message: `${title}第${index + 1}行SOC上限不能小于SOC下限` });
+      }
     });
   });
   messages.push(...collectPlanningParameterWarnings());
@@ -1741,6 +1909,8 @@ function validateDeviceFieldValue(value, rule) {
   if (rule.integer && (!/^\d+$/.test(text) || !Number.isInteger(number))) return false;
   if (rule.positive && number <= 0) return false;
   if (rule.nonNegative && number < 0) return false;
+  if (rule.min !== undefined && number < rule.min) return false;
+  if (rule.max !== undefined && number > rule.max) return false;
   return true;
 }
 

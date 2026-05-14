@@ -201,6 +201,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Station Wind-Solar-Hydrogen-Storage-Diesel Planning System", i18n_script)
         self.assertIn("Scenario Evaluation", i18n_script)
         self.assertIn("Result Comparison", i18n_script)
+        self.assertIn("Load Up Disturbance Factor", i18n_script)
+        self.assertIn("Load Down Disturbance Factor", i18n_script)
+        self.assertIn("Renewable Down Disturbance Factor", i18n_script)
         self.assertIn("MutationObserver", i18n_script)
         self.assertIn("patchDialogs", i18n_script)
         self.assertIn("data-admin-only", planning_html)
@@ -510,9 +513,13 @@ class PowerPlanServerTest(unittest.TestCase):
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.8
         payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.91
         payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.89
+        payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
         payload["diesel_generators"][0]["capacity"] = 100
         payload["diesel_generators"][0]["power_lower"] = 20
         payload["diesel_generators"][0]["power_upper"] = 100
+        payload["storage_pcs"][0]["is_grid_forming"] = 1
+        payload["storage_battery_packs"][0]["soc_upper"] = 0.8
+        payload["storage_battery_packs"][0]["soc_lower"] = 0.2
         payload["hydrogen_electrolyzers"][0]["power_capacity"] = 30
         payload["hydrogen_electrolyzers"][0]["power_lower"] = 5
         result_rows = [
@@ -538,10 +545,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn(("electrolyzer_on", 0), variables)
         self.assertIn(("storage_charge_on", 0), variables)
         self.assertIn(("storage_discharge_on", 0), variables)
+        self.assertIn(("grid_storage_on_unit", 0, 0), variables)
         self.assertEqual(model["initial_storage_soc_ratio"], 0.2)
         self.assertEqual(model["initial_hydrogen_storage_ratio"], 0.8)
         self.assertEqual(model["storage_charge_efficiency"], 0.91)
         self.assertEqual(model["storage_discharge_efficiency"], 0.89)
+        self.assertTrue(model["post_disturbance_power_balance_enabled"])
+        self.assertEqual(model["storage_soc_upper_ratio"], 0.8)
+        self.assertEqual(model["storage_soc_lower_ratio"], 0.2)
 
     def test_pv_generation_uses_capacity_times_irradiance_without_efficiency_parameter(self):
         self.assertAlmostEqual(estimate.pv_generation(500, 100, {"generation_efficiency": 0.1}), 50.0)
@@ -1793,6 +1804,28 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(data["amap_key"], "test-key")
         self.assertEqual(data["preferred_provider"], "amap")
 
+    def test_planning_map_config_has_default_amap_key(self):
+        self.assertEqual(server.DEFAULT_AMAP_WEB_SERVICE_KEY, "21db26646aac8fed4620eaa36f210018")
+        self.assertEqual(server.DEFAULT_BAIDU_MAP_BROWSER_KEY, "ebp62kY5I2KTRF6WVn3byZ9VZCc3uuE8")
+
+    def test_planning_map_config_exposes_baidu_and_google_keys_when_configured(self):
+        original_baidu_key = server.BAIDU_MAP_BROWSER_KEY
+        original_google_key = server.GOOGLE_MAPS_BROWSER_KEY
+        server.BAIDU_MAP_BROWSER_KEY = "baidu-test-key"
+        server.GOOGLE_MAPS_BROWSER_KEY = "google-test-key"
+        try:
+            status, headers, body = server.handle_planning_api_path("/api/planning/map-config", "GET", b"")
+        finally:
+            server.BAIDU_MAP_BROWSER_KEY = original_baidu_key
+            server.GOOGLE_MAPS_BROWSER_KEY = original_google_key
+
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["baidu_key"], "baidu-test-key")
+        self.assertEqual(data["google_key"], "google-test-key")
+        self.assertIn({"key": "baidu", "label": "百度地图", "enabled": True}, data["providers"])
+        self.assertIn({"key": "google", "label": "谷歌地图", "enabled": True}, data["providers"])
+
     def test_planning_geocode_endpoint_falls_back_to_nominatim(self):
         class FakeResponse:
             def __init__(self, payload):
@@ -2572,11 +2605,13 @@ class PowerPlanServerTest(unittest.TestCase):
             "电储能充电效率(0.0-1.0)",
             "电储能放电效率(0.0-1.0)",
             "储能是否参与调频",
-            "负荷扰动系数(0.0-0.5)",
+            "考虑扰动后平衡",
+            "负荷向上扰动系数(0.0-0.5)",
+            "负荷向下扰动系数(0.0-0.5)",
+            "新能源向下扰动系数(0.0-0.5)",
             "是否考虑频率安全约束",
             "频率安全上限(1.0-1.5)",
             "频率安全下限(0.9-1.0)",
-            "是否考虑扰动后功率平衡",
             "是否考虑新能源N-1",
             "是否考虑负荷扰动",
         ):
@@ -2644,6 +2679,9 @@ class PowerPlanServerTest(unittest.TestCase):
             "cut_in_wind_speed",
             "rated_wind_speed",
             "cut_out_wind_speed",
+            "is_grid_forming",
+            "soc_upper",
+            "soc_lower",
         ):
             self.assertIn(field, script)
         for message in (
@@ -2660,6 +2698,9 @@ class PowerPlanServerTest(unittest.TestCase):
             "切入风速(m/s)必须为非负实数",
             "额定风速(m/s)必须为正实数",
             "切出风速(m/s)必须为非负实数",
+            "是否构网必须为0或1",
+            "SOC上限(0.0-1.0)必须在0到1之间",
+            "SOC下限(0.0-1.0)必须在0到1之间",
         ):
             self.assertIn(message, script)
 
@@ -2887,6 +2928,10 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn(label, import_modal)
         for label in ("随机曲线", "模式1", "模式2", "模式3", "负荷最大值", "负荷最小值", "负荷平均值", "确定", "取消"):
             self.assertIn(label, html)
+        for label in ("高德地图", "百度地图", "谷歌地图"):
+            self.assertIn(label, modal)
+        for provider in ('data-map-provider="amap"', 'data-map-provider="baidu"', 'data-map-provider="google"'):
+            self.assertIn(provider, modal)
         self.assertNotIn('id="weatherPlace"', weather_bar)
         self.assertNotIn('id="geocodePlace"', weather_bar)
         self.assertNotIn(">地图选点</button>", weather_bar)
@@ -2898,6 +2943,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/weather-history", script)
         self.assertIn("/api/planning/time-series/import", script)
         self.assertIn("/api/planning/load-curve/generate", script)
+        self.assertIn("selectMapProvider", script)
+        self.assertIn("loadBaiduMapScript", script)
+        self.assertIn("initBaiduMapPicker", script)
+        self.assertIn("loadGoogleMapScript", script)
+        self.assertIn("initGoogleMapPicker", script)
         self.assertIn("importTimeSeriesFile", script)
         self.assertIn("openTimeSeriesImportModal", script)
         self.assertIn("openTimeSeriesImportFile", script)
@@ -2926,7 +2976,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("loadAmapScript", script)
         self.assertIn("initAmapPicker", script)
         self.assertIn("setMapPoint", script)
-        self.assertIn("未配置地图 Key", script)
+        self.assertIn("未配置${mapProviderLabel(state.mapProvider)} Key", script)
         self.assertIn("geocodePlace", script)
         self.assertIn("fetchWeatherHistory", script)
         self.assertIn("validateWeatherInputs", script)
@@ -2947,6 +2997,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".time-series-import-dialog", css)
         self.assertIn(".time-series-import-toolbar", css)
         self.assertIn(".time-series-import-preview", css)
+        self.assertIn(".map-provider-tabs", css)
+        self.assertIn(".map-provider-tab", css)
         self.assertIn("body.modal-open", css)
         self.assertIn(".load-generator-dialog", css)
         self.assertIn(".load-generator-preview", css)

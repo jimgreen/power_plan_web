@@ -53,6 +53,8 @@ SESSION_COOKIE_NAME = "power_plan_session"
 SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 NASA_POWER_HOURLY_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 AMAP_GEOCODING_URL = "https://restapi.amap.com/v3/geocode/geo"
+DEFAULT_AMAP_WEB_SERVICE_KEY = "21db26646aac8fed4620eaa36f210018"
+DEFAULT_BAIDU_MAP_BROWSER_KEY = "ebp62kY5I2KTRF6WVn3byZ9VZCc3uuE8"
 OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 OPTIMIZATION_RESULT_WORKBOOK_NAME = "optimization_results.xlsx"
@@ -98,7 +100,19 @@ TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
 TIME_SERIES_IMPORT_OPTIONAL_COLUMNS = {
     "datetime": ["datetime", "time", "时间", "日期时间", "时刻"],
 }
-AMAP_WEB_SERVICE_KEY = os.environ.get("POWER_PLAN_AMAP_KEY") or os.environ.get("AMAP_WEB_SERVICE_KEY") or os.environ.get("AMAP_KEY")
+AMAP_WEB_SERVICE_KEY = (
+    os.environ.get("POWER_PLAN_AMAP_KEY")
+    or os.environ.get("AMAP_WEB_SERVICE_KEY")
+    or os.environ.get("AMAP_KEY")
+    or DEFAULT_AMAP_WEB_SERVICE_KEY
+)
+BAIDU_MAP_BROWSER_KEY = (
+    os.environ.get("POWER_PLAN_BAIDU_MAP_KEY")
+    or os.environ.get("BAIDU_MAP_BROWSER_KEY")
+    or os.environ.get("BAIDU_MAP_AK")
+    or DEFAULT_BAIDU_MAP_BROWSER_KEY
+)
+GOOGLE_MAPS_BROWSER_KEY = os.environ.get("POWER_PLAN_GOOGLE_MAPS_KEY") or os.environ.get("GOOGLE_MAPS_BROWSER_KEY") or os.environ.get("GOOGLE_MAPS_API_KEY")
 NASA_POWER_PARAMETERS = {
     "wind_speed": "WS10M",
     "solar_irradiance": "ALLSKY_SFC_SW_DWN",
@@ -2768,7 +2782,21 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                 )
             )
         if path == "/api/planning/map-config" and method == "GET":
-            return _json_response({"amap_key": AMAP_WEB_SERVICE_KEY, "preferred_provider": "amap" if AMAP_WEB_SERVICE_KEY else "manual"})
+            providers = [
+                {"key": "amap", "label": "高德地图", "enabled": bool(AMAP_WEB_SERVICE_KEY)},
+                {"key": "baidu", "label": "百度地图", "enabled": bool(BAIDU_MAP_BROWSER_KEY)},
+                {"key": "google", "label": "谷歌地图", "enabled": bool(GOOGLE_MAPS_BROWSER_KEY)},
+            ]
+            preferred = next((provider["key"] for provider in providers if provider["enabled"]), "manual")
+            return _json_response(
+                {
+                    "amap_key": AMAP_WEB_SERVICE_KEY,
+                    "baidu_key": BAIDU_MAP_BROWSER_KEY,
+                    "google_key": GOOGLE_MAPS_BROWSER_KEY,
+                    "providers": providers,
+                    "preferred_provider": preferred,
+                }
+            )
         if path == "/api/planning/weather-history" and method == "POST":
             payload = _read_json_body(body)
             return _json_response(

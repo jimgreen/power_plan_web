@@ -76,6 +76,8 @@ def solve_milp(
 ) -> SimpleNamespace:
     """Solve a MILP using the selected solver, or auto fallback order."""
 
+    # The solver adapter keeps backend selection and logging behavior in one
+    # place so planning and evaluation can share the same solve entry point.
     options = dict(options or {})
     solver = str(options.pop("solver", "auto") or "auto").strip().lower()
     emit_solver_input_summary(
@@ -90,6 +92,8 @@ def solve_milp(
     )
 
     if solver in ("auto", ""):
+        # Auto mode prefers the commercial solvers first because they usually
+        # handle the yearly model size better than the open-source fallback.
         try:
             return solve_milp_with_gurobi(
                 objective,
@@ -217,6 +221,8 @@ def emit_solver_input_summary(
     solver: str,
     log: LogSink | None,
 ) -> None:
+    # Record a compact view of the model before solving so runtime logs are
+    # useful even when the backend solver itself is noisy.
     objective = np.asarray(objective, dtype=float)
     integrality = np.asarray(integrality, dtype=int)
     lower_bounds = np.asarray(lower_bounds, dtype=float)

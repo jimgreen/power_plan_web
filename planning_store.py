@@ -27,6 +27,8 @@ MAIN_XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_XML_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL_XML_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
+# Sheet order and column order are part of the on-disk contract. The browser,
+# workbook reader, and workbook writer all depend on this exact schema.
 SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
     "time_series": ("8760时序数据", ["hour_index", "datetime", "wind_speed", "solar_irradiance", "load", "temperature"]),
     "diesel_generators": (
@@ -70,11 +72,11 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
     ),
     "storage_pcs": (
         "储能PCS参数",
-        ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"],
+        ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "is_grid_forming", "design_life_years"],
     ),
     "storage_battery_packs": (
         "储能电池组参数",
-        ["name", "battery_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"],
+        ["name", "battery_capacity", "soc_upper", "soc_lower", "cost", "quantity_lower", "quantity_upper", "design_life_years"],
     ),
     "hydrogen_electrolyzers": (
         "电制氢参数",
@@ -123,7 +125,9 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "storage_charge_efficiency",
             "storage_discharge_efficiency",
             "storage_frequency_regulation_enabled",
-            "load_disturbance_factor",
+            "load_up_disturbance_factor",
+            "load_down_disturbance_factor",
+            "renewable_down_disturbance_factor",
             "frequency_security_constraint_enabled",
             "frequency_security_upper",
             "frequency_security_lower",
@@ -134,6 +138,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
     ),
 }
 
+# Default rows seed a new scheme and also supply fallback values for older
+# workbooks that are missing newly added columns.
 DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
     "diesel_generators": [
         {
@@ -175,12 +181,15 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "cost": 0,
             "quantity_lower": 0,
             "quantity_upper": 0,
+            "is_grid_forming": 0,
         }
     ],
     "storage_battery_packs": [
         {
             "name": "储能电池组1",
             "battery_capacity": 200,
+            "soc_upper": 0.9,
+            "soc_lower": 0.1,
             "cost": 0,
             "quantity_lower": 0,
             "quantity_upper": 0,
@@ -218,6 +227,8 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
     ],
 }
 
+# Planning parameters live in a single global row instead of repeating per
+# device family.
 DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "diesel_price": 0,
     "green_power_ratio_lower": 0,
@@ -227,11 +238,13 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "storage_charge_efficiency": 0.95,
     "storage_discharge_efficiency": 0.95,
     "storage_frequency_regulation_enabled": False,
-    "load_disturbance_factor": 0,
+    "load_up_disturbance_factor": 0,
+    "load_down_disturbance_factor": 0,
+    "renewable_down_disturbance_factor": 0,
     "frequency_security_constraint_enabled": False,
     "frequency_security_upper": 1.5,
     "frequency_security_lower": 1.0,
-    "post_disturbance_power_balance_enabled": False,
+    "post_disturbance_power_balance_enabled": 1,
     "renewable_n_1_enabled": False,
     "load_disturbance_enabled": False,
 }
@@ -240,6 +253,9 @@ FIELD_DEFAULTS: dict[str, Any] = {
     **DEFAULT_PLANNING_PARAMETERS,
     "design_life_years": 20,
     "rated_wind_speed": 12,
+    "is_grid_forming": 0,
+    "soc_upper": 0.9,
+    "soc_lower": 0.1,
 }
 
 DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
@@ -250,6 +266,9 @@ DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
     "capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
     "power_capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
     "battery_capacity": {"positive": True, "message": "电池容量(kWh)必须为正实数"},
+    "soc_upper": {"min": 0, "max": 1, "message": "SOC上限(0.0-1.0)必须在0到1之间"},
+    "soc_lower": {"min": 0, "max": 1, "message": "SOC下限(0.0-1.0)必须在0到1之间"},
+    "is_grid_forming": {"integer": True, "min": 0, "max": 1, "message": "是否构网必须为0或1"},
     "hydrogen_tank_capacity": {"positive": True, "message": "氢储容量(Nm3)必须为正实数"},
     "electric_to_hydrogen_efficiency": {"positive": True, "message": "电-氢效率(Nm3/kWh)必须为正实数"},
     "hydrogen_to_electric_efficiency": {"positive": True, "message": "氢-电效率(kWh/Nm3)必须为正实数"},
@@ -293,6 +312,8 @@ def default_time_series() -> list[dict[str, Any]]:
 
 
 def default_payload(scheme: str) -> dict[str, Any]:
+    # Build a complete in-memory scheme so the UI can render immediately after
+    # a create action without special-casing missing sheets.
     payload: dict[str, Any] = {"scheme": scheme, "time_series": default_time_series(), "validation": []}
     for key in DEFAULT_DEVICE_ROWS:
         payload[key] = [with_field_defaults(row, SHEET_SPECS[key][1]) for row in DEFAULT_DEVICE_ROWS[key]]
@@ -314,6 +335,8 @@ def field_default(header: str, fallback: Any = "") -> Any:
 
 
 def with_field_defaults(row: dict[str, Any], headers: list[str]) -> dict[str, Any]:
+    # Fill gaps from the current schema so newer columns appear in older
+    # workbooks without requiring a manual migration.
     normalized = deepcopy(row)
     for header in headers:
         if header not in normalized:
@@ -551,6 +574,26 @@ def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict
                         )
                         if legacy_index is not None and legacy_index < len(values) and values[legacy_index] not in (None, ""):
                             row["optimization_time_limit_minutes"] = numeric(values[legacy_index], 3600) / 60
+                    if key == "planning_parameters" and not any(
+                        field in header_index
+                        for field in ("load_up_disturbance_factor", "load_down_disturbance_factor", "renewable_down_disturbance_factor")
+                    ):
+                        # Older schemes may still store a single load disturbance
+                        # factor. Fan it out to the new split fields so those
+                        # workbooks keep behaving sensibly after the schema change.
+                        legacy_load_index = next(
+                            (
+                                index
+                                for index, value in enumerate(header_values)
+                                if value is not None and str(value) == "load_disturbance_factor"
+                            ),
+                            None,
+                        )
+                        if legacy_load_index is not None and legacy_load_index < len(values) and values[legacy_load_index] not in (None, ""):
+                            legacy_load = numeric(values[legacy_load_index], 0.0)
+                            row["load_up_disturbance_factor"] = legacy_load
+                            row["load_down_disturbance_factor"] = legacy_load
+                            row["renewable_down_disturbance_factor"] = 0.0
                     rows.append(row)
             except Exception as exc:
                 if key == "time_series":
@@ -736,6 +779,8 @@ def numeric(value: Any, default: float = 0.0) -> float:
 
 
 def validate_device_field_value(value: Any, rule: dict[str, Any]) -> bool:
+    # Keep browser-side and server-side numeric validation in sync by using the
+    # same small rule dictionary for both paths.
     if rule.get("integer"):
         if not is_non_negative_integer_value(value):
             return False
@@ -753,10 +798,16 @@ def validate_device_field_value(value: Any, rule: dict[str, Any]) -> bool:
         return False
     if rule.get("non_negative") and number < 0:
         return False
+    if "min" in rule and number < float(rule["min"]):
+        return False
+    if "max" in rule and number > float(rule["max"]):
+        return False
     return True
 
 
 def validate_payload(payload: dict[str, Any], require_time_series: bool = True) -> list[dict[str, str]]:
+    # Validation is layered so row field errors, cross-field consistency, and
+    # global parameter issues can be reported independently.
     messages: list[dict[str, str]] = []
     if require_time_series:
         time_series = payload.get("time_series", [])
@@ -780,6 +831,15 @@ def validate_payload(payload: dict[str, Any], require_time_series: bool = True) 
                 and float(row.get("quantity_lower")) > float(row.get("quantity_upper"))
             ):
                 messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行数据上限不能小于数据下限"})
+            if key == "storage_battery_packs":
+                soc_upper = row.get("soc_upper", "")
+                soc_lower = row.get("soc_lower", "")
+                if (
+                    validate_device_field_value(soc_upper, DEVICE_FIELD_RULES["soc_upper"])
+                    and validate_device_field_value(soc_lower, DEVICE_FIELD_RULES["soc_lower"])
+                    and float(soc_upper) < float(soc_lower)
+                ):
+                    messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行SOC上限不能小于SOC下限"})
     messages.extend(validate_planning_parameters(payload))
     return messages
 
@@ -794,6 +854,8 @@ def first_planning_parameter_row(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]]:
+    # The planning-parameter sheet is a one-row table, so this helper owns all
+    # scalar range checks for optimization and security settings.
     row = first_planning_parameter_row(payload)
     messages: list[dict[str, str]] = []
 
@@ -817,6 +879,9 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
     number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
     number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
+    post_disturbance = number_in_range("post_disturbance_power_balance_enabled", "考虑扰动后平衡", 0, 1)
+    if post_disturbance is not None and not float(post_disturbance).is_integer():
+        messages.append({"level": "error", "message": "考虑扰动后平衡必须为0或1"})
     for key, label in (
         ("storage_charge_efficiency", "电储能充电效率(0.0-1.0)"),
         ("storage_discharge_efficiency", "电储能放电效率(0.0-1.0)"),
@@ -824,7 +889,9 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         efficiency = number_in_range(key, label, 0, 1)
         if efficiency is not None and efficiency <= 0:
             messages.append({"level": "error", "message": f"{label}必须大于0"})
-    number_in_range("load_disturbance_factor", "负荷扰动系数(0.0-0.5)", 0, 0.5)
+    number_in_range("load_up_disturbance_factor", "负荷向上扰动系数(0.0-0.5)", 0, 0.5)
+    number_in_range("load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", 0, 0.5)
+    number_in_range("renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", 0, 0.5)
     frequency_upper = number_in_range("frequency_security_upper", "频率安全上限(1.0-1.5)", 1, 1.5)
     frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(0.9-1.0)", 0.9, 1)
     if frequency_upper is not None and frequency_lower is not None and frequency_upper < frequency_lower:
