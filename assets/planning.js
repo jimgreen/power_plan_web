@@ -43,16 +43,16 @@ const planningParameterSpecs = [
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["storage_charge_efficiency", "电储能充电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
   ["storage_discharge_efficiency", "电储能放电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
-  ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: false }],
+  ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: 0 }],
   ["load_up_disturbance_factor", "负荷向上扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
-  ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: false }],
+  ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: 0 }],
   ["frequency_security_upper", "频率安全上限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.5 }],
   ["frequency_security_lower", "频率安全下限(0.9-1.0)", "number", { min: 0.9, max: 1, defaultValue: 1.0 }],
-  ["post_disturbance_power_balance_enabled", "考虑扰动后平衡", "number", { min: 0, max: 1, integer: true, defaultValue: 1 }],
-  ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: false }],
-  ["load_disturbance_enabled", "是否考虑负荷扰动", "boolean", { defaultValue: false }],
+  ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
+  ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: 0 }],
+  ["load_disturbance_enabled", "是否考虑负荷扰动", "boolean", { defaultValue: 0 }],
 ];
 
 const visibleDevices = new Set(deviceSpecs.map(([key]) => key));
@@ -1531,7 +1531,7 @@ function renderPlanningParameters() {
 function planningParameterControl(key, type, options, value) {
   if (type === "boolean") {
     const checked = truthyPlanningValue(value);
-    return `<select class="planning-bool-select" data-planning-key="${key}" data-planning-type="boolean"><option value="true" ${checked ? "selected" : ""}>是</option><option value="false" ${checked ? "" : "selected"}>否</option></select>`;
+    return `<select class="planning-bool-select" data-planning-key="${key}" data-planning-type="boolean"><option value="1" ${checked ? "selected" : ""}>是</option><option value="0" ${checked ? "" : "selected"}>否</option></select>`;
   }
   const attrs = [
     `data-planning-key="${key}"`,
@@ -1546,7 +1546,7 @@ function planningParameterControl(key, type, options, value) {
 function onPlanningParameterInput(event) {
   const input = event.target;
   const row = planningParameterRow();
-  row[input.dataset.planningKey] = input.dataset.planningType === "boolean" ? truthyPlanningValue(input.value) : input.type === "checkbox" ? input.checked : coerceInput(input.value);
+  row[input.dataset.planningKey] = input.dataset.planningType === "boolean" ? numericBooleanPlanningValue(input.value) : input.type === "checkbox" ? input.checked : coerceInput(input.value);
   renderLimitSummary();
   renderSummary();
 }
@@ -1571,7 +1571,7 @@ function normalizePlanningParameterRow(row) {
   const normalized = { ...defaultPlanningParameterRow(), ...(row || {}) };
   planningParameterSpecs.forEach(([key, , type]) => {
     if (type === "boolean") {
-      normalized[key] = truthyPlanningValue(normalized[key]);
+      normalized[key] = numericBooleanPlanningValue(normalized[key]);
     }
   });
   return normalized;
@@ -1602,6 +1602,10 @@ function truthyPlanningValue(value) {
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
   return ["true", "1", "yes", "y", "是"].includes(String(value).trim().toLowerCase());
+}
+
+function numericBooleanPlanningValue(value) {
+  return truthyPlanningValue(value) ? 1 : 0;
 }
 
 function renderLimitSummary() {

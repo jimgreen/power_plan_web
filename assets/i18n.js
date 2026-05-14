@@ -43,7 +43,7 @@
     "电储能充电效率(0.0-1.0)": "Battery Charge Efficiency (0.0-1.0)",
     "电储能放电效率(0.0-1.0)": "Battery Discharge Efficiency (0.0-1.0)",
     "储能是否参与调频": "Storage Participates in Frequency Regulation",
-    "考虑扰动后平衡": "Post-Disturbance Balance",
+    "是否考虑扰动后平衡约束": "Post-Disturbance Balance Constraint",
     "负荷向上扰动系数(0.0-0.5)": "Load Up Disturbance Factor (0.0-0.5)",
     "负荷向下扰动系数(0.0-0.5)": "Load Down Disturbance Factor (0.0-0.5)",
     "新能源向下扰动系数(0.0-0.5)": "Renewable Down Disturbance Factor (0.0-0.5)",
@@ -225,7 +225,7 @@
     wrap.innerHTML = `<span>语言</span><select id="languageSelect" aria-label="语言 / Language">${LANGUAGES.map((item) => `<option value="${item.code}">${item.label}</option>`).join("")}</select>`;
     const target = document.querySelector(".topbar .user-status") || document.querySelector(".home-user-status") || document.querySelector(".auth-card");
     if (target?.classList.contains("auth-card")) {
-      target.insertBefore(wrap, target.firstElementChild);
+      target.parentNode.insertBefore(wrap, target);
     } else if (target) {
       target.parentNode.insertBefore(wrap, target);
     } else {
@@ -260,14 +260,17 @@
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
     nodes.forEach((node) => {
-      node.nodeValue = translateText(node.nodeValue, language);
+      const translated = translateText(node.nodeValue, language);
+      if (translated !== node.nodeValue) node.nodeValue = translated;
     });
   }
 
   function translateAttributes(root, language) {
     root.querySelectorAll("[aria-label], [placeholder], [title]").forEach((element) => {
       ["aria-label", "placeholder", "title"].forEach((name) => {
-        if (element.hasAttribute(name)) element.setAttribute(name, translateText(element.getAttribute(name), language));
+        if (!element.hasAttribute(name)) return;
+        const translated = translateText(element.getAttribute(name), language);
+        if (translated !== element.getAttribute(name)) element.setAttribute(name, translated);
       });
     });
   }

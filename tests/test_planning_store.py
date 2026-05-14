@@ -53,7 +53,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.5)
         self.assertEqual(payload["planning_parameters"][0]["storage_charge_efficiency"], 0.95)
         self.assertEqual(payload["planning_parameters"][0]["storage_discharge_efficiency"], 0.95)
-        self.assertFalse(payload["planning_parameters"][0]["storage_frequency_regulation_enabled"])
+        self.assertEqual(payload["planning_parameters"][0]["storage_frequency_regulation_enabled"], 0)
         self.assertEqual(payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"], 1)
         self.assertEqual(payload["planning_parameters"][0]["load_up_disturbance_factor"], 0)
         self.assertEqual(payload["planning_parameters"][0]["load_down_disturbance_factor"], 0)
@@ -115,7 +115,7 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.75
         payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.9
         payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.88
-        payload["planning_parameters"][0]["storage_frequency_regulation_enabled"] = True
+        payload["planning_parameters"][0]["storage_frequency_regulation_enabled"] = 1
         payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
         payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.2
         payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.3
@@ -139,7 +139,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.75)
         self.assertEqual(saved["planning_parameters"][0]["storage_charge_efficiency"], 0.9)
         self.assertEqual(saved["planning_parameters"][0]["storage_discharge_efficiency"], 0.88)
-        self.assertTrue(saved["planning_parameters"][0]["storage_frequency_regulation_enabled"])
+        self.assertEqual(saved["planning_parameters"][0]["storage_frequency_regulation_enabled"], 1)
         self.assertEqual(saved["planning_parameters"][0]["load_up_disturbance_factor"], 0.1)
         self.assertEqual(saved["planning_parameters"][0]["load_down_disturbance_factor"], 0.2)
         self.assertEqual(saved["planning_parameters"][0]["renewable_down_disturbance_factor"], 0.3)

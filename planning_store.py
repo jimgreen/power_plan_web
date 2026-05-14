@@ -237,16 +237,24 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "initial_hydrogen_storage_ratio": 0.5,
     "storage_charge_efficiency": 0.95,
     "storage_discharge_efficiency": 0.95,
-    "storage_frequency_regulation_enabled": False,
+    "storage_frequency_regulation_enabled": 0,
     "load_up_disturbance_factor": 0,
     "load_down_disturbance_factor": 0,
     "renewable_down_disturbance_factor": 0,
-    "frequency_security_constraint_enabled": False,
+    "frequency_security_constraint_enabled": 0,
     "frequency_security_upper": 1.5,
     "frequency_security_lower": 1.0,
     "post_disturbance_power_balance_enabled": 1,
-    "renewable_n_1_enabled": False,
-    "load_disturbance_enabled": False,
+    "renewable_n_1_enabled": 0,
+    "load_disturbance_enabled": 0,
+}
+
+PLANNING_BOOLEAN_FIELDS = {
+    "storage_frequency_regulation_enabled",
+    "frequency_security_constraint_enabled",
+    "post_disturbance_power_balance_enabled",
+    "renewable_n_1_enabled",
+    "load_disturbance_enabled",
 }
 
 FIELD_DEFAULTS: dict[str, Any] = {
@@ -334,6 +342,25 @@ def field_default(header: str, fallback: Any = "") -> Any:
     return deepcopy(FIELD_DEFAULTS.get(header, fallback))
 
 
+def truthy_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "是"}
+
+
+def numeric_boolean_value(value: Any) -> int:
+    return 1 if truthy_flag(value) else 0
+
+
+def normalize_planning_parameter_row(row: dict[str, Any]) -> dict[str, Any]:
+    normalized = with_field_defaults(row, SHEET_SPECS["planning_parameters"][1])
+    for field in PLANNING_BOOLEAN_FIELDS:
+        normalized[field] = numeric_boolean_value(normalized.get(field, 0))
+    return normalized
+
+
 def with_field_defaults(row: dict[str, Any], headers: list[str]) -> dict[str, Any]:
     # Fill gaps from the current schema so newer columns appear in older
     # workbooks without requiring a manual migration.
@@ -352,6 +379,14 @@ def sanitize_payload_names(payload: dict[str, Any]) -> dict[str, Any]:
         for row in rows:
             if isinstance(row, dict) and "name" in row:
                 row["name"] = sanitize_scheme_name(row.get("name", ""))
+    rows = payload.get("planning_parameters")
+    if isinstance(rows, dict):
+        payload["planning_parameters"] = [normalize_planning_parameter_row(rows)]
+    elif isinstance(rows, list):
+        payload["planning_parameters"] = [
+            normalize_planning_parameter_row(row) if isinstance(row, dict) else normalize_planning_parameter_row({})
+            for row in rows
+        ]
     return payload
 
 
@@ -599,7 +634,10 @@ def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict
                 if key == "time_series":
                     raise TimeSeriesSheetReadError(str(exc)) from exc
                 raise
-            payload[key] = (rows or default_rows_for_key(key)) if key == "planning_parameters" else rows
+            if key == "planning_parameters":
+                payload[key] = [normalize_planning_parameter_row(row) for row in (rows or default_rows_for_key(key))]
+            else:
+                payload[key] = rows
     finally:
         workbook.close()
     return payload
@@ -879,9 +917,9 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
     number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
     number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
-    post_disturbance = number_in_range("post_disturbance_power_balance_enabled", "考虑扰动后平衡", 0, 1)
+    post_disturbance = number_in_range("post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", 0, 1)
     if post_disturbance is not None and not float(post_disturbance).is_integer():
-        messages.append({"level": "error", "message": "考虑扰动后平衡必须为0或1"})
+        messages.append({"level": "error", "message": "是否考虑扰动后平衡约束必须为0或1"})
     for key, label in (
         ("storage_charge_efficiency", "电储能充电效率(0.0-1.0)"),
         ("storage_discharge_efficiency", "电储能放电效率(0.0-1.0)"),

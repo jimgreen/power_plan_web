@@ -3623,8 +3623,17 @@ td {
 .auth-shell {
   min-height: 100vh;
   display: grid;
-  place-items: center;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
   padding: 24px;
+}
+
+.auth-shell > .language-switch {
+  justify-self: end;
+  width: min(420px, 100%);
+  max-width: 420px;
+  justify-content: flex-end;
 }
 
 .auth-card {

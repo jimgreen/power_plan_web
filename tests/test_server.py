@@ -206,11 +206,16 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Renewable Down Disturbance Factor", i18n_script)
         self.assertIn("MutationObserver", i18n_script)
         self.assertIn("patchDialogs", i18n_script)
+        self.assertIn("target.parentNode.insertBefore(wrap, target)", i18n_script)
+        self.assertNotIn("target.insertBefore(wrap, target.firstElementChild)", i18n_script)
+        self.assertIn("const translated = translateText(node.nodeValue, language);", i18n_script)
+        self.assertIn("if (translated !== node.nodeValue) node.nodeValue = translated;", i18n_script)
         self.assertIn("data-admin-only", planning_html)
         self.assertIn("data-admin-only", optimize_html)
         self.assertIn("data-admin-only", index_html)
         self.assertIn(".user-status", css)
         self.assertIn(".language-switch", css)
+        self.assertIn(".auth-shell > .language-switch", css)
         user_status_css = css.split(".user-status {", 1)[1].split("}", 1)[0]
         self.assertIn("border: 0", user_status_css)
         self.assertIn(".auth-card", css)
@@ -1512,7 +1517,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertNotIn("design_life_years", created["planning_parameters"][0])
 
             created["time_series"][0]["load"] = 123.4
-            created["planning_parameters"][0]["storage_frequency_regulation_enabled"] = True
+            created["planning_parameters"][0]["storage_frequency_regulation_enabled"] = 1
             status, headers, body = server.handle_planning_api_path(
                 "/api/planning/schemes/方案A",
                 "PUT",
@@ -1524,7 +1529,7 @@ class PowerPlanServerTest(unittest.TestCase):
             loaded = json.loads(body.decode("utf-8"))
             self.assertEqual(loaded["time_series"][0]["load"], 123.4)
             self.assertNotIn("design_life_years", loaded["planning_parameters"][0])
-            self.assertTrue(loaded["planning_parameters"][0]["storage_frequency_regulation_enabled"])
+            self.assertEqual(loaded["planning_parameters"][0]["storage_frequency_regulation_enabled"], 1)
 
             status, headers, body = server.handle_planning_api_path("/api/planning/schemes/方案A/overview", "GET", b"")
             overview = json.loads(body.decode("utf-8"))
@@ -2605,7 +2610,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "电储能充电效率(0.0-1.0)",
             "电储能放电效率(0.0-1.0)",
             "储能是否参与调频",
-            "考虑扰动后平衡",
+            "是否考虑扰动后平衡约束",
             "负荷向上扰动系数(0.0-0.5)",
             "负荷向下扰动系数(0.0-0.5)",
             "新能源向下扰动系数(0.0-0.5)",
@@ -2623,10 +2628,13 @@ class PowerPlanServerTest(unittest.TestCase):
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
         self.assertIn("planning-bool-select", script)
-        self.assertIn('<option value="true"', script)
-        self.assertIn('<option value="false"', script)
+        self.assertIn('<option value="1"', script)
+        self.assertIn('<option value="0"', script)
+        self.assertNotIn('<option value="true"', script)
+        self.assertNotIn('<option value="false"', script)
         self.assertIn(">是</option>", script)
         self.assertIn(">否</option>", script)
+        self.assertIn("numericBooleanPlanningValue", script)
         self.assertIn('input.type === "checkbox"', script)
         self.assertIn('input.tagName === "SELECT"', script)
         self.assertNotIn('type="checkbox" data-planning-key', script)
