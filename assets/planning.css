@@ -283,6 +283,23 @@ button:disabled {
   font-weight: 800;
 }
 
+.result-file-warnings {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.result-file-warnings[hidden] {
+  display: none;
+}
+
+.result-file-warnings .validation-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .evaluation-result-action-buttons {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -378,11 +395,16 @@ button:disabled {
 .comparison-tab-bar {
   min-width: 0;
   min-height: 0;
-  display: flex;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   padding: 10px;
   overflow: hidden;
+}
+
+.comparison-result-warnings {
+  max-height: 68px;
+  overflow: auto;
 }
 
 .comparison-tabs {
@@ -612,6 +634,44 @@ button:disabled {
   overflow: auto;
 }
 
+.curve-group-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  background: rgba(246, 250, 249, 0.96);
+}
+
+.curve-group-tab {
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #e7f2ef;
+  color: #0d5c59;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.curve-group-tab.active {
+  background: #0d5c59;
+  color: #ffffff;
+}
+
+.curve-group-tab:hover,
+.curve-group-tab:focus-visible {
+  outline: none;
+  background: rgba(13, 92, 89, 0.16);
+  color: #102b2a;
+}
+
 .comparison-curve-name-list ul {
   display: grid;
   gap: 4px;
@@ -672,6 +732,18 @@ button:disabled {
   height: 100%;
   min-height: 0;
   display: block;
+}
+
+.annual-stat-table {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+}
+
+.annual-stat-table table {
+  min-width: 560px;
+  table-layout: fixed;
 }
 
 .comparison-curve-legend {
@@ -2982,12 +3054,17 @@ h2,
 }
 
 .scheme-item,
+.curve-group-tab,
 .validation-item,
 .empty-summary {
   border: 1px solid rgba(20, 190, 255, 0.24);
   background: linear-gradient(180deg, rgba(5, 34, 70, 0.56), rgba(4, 19, 42, 0.54));
   color: var(--hud-muted-strong);
   box-shadow: inset 0 0 16px rgba(24, 175, 255, 0.1);
+}
+
+.curve-group-tabs {
+  background: var(--hud-surface);
 }
 
 .scheme-item {
@@ -3009,15 +3086,32 @@ h2,
     0 0 20px rgba(0, 190, 255, 0.24);
 }
 
+.curve-group-tab.active {
+  border-color: rgba(108, 238, 255, 0.9);
+  background:
+    radial-gradient(circle at 0 0, rgba(44, 225, 255, 0.22), transparent 50%),
+    linear-gradient(180deg, rgba(4, 76, 140, 0.78), rgba(3, 34, 86, 0.82));
+  color: #ffffff;
+  box-shadow:
+    inset 0 0 18px rgba(24, 175, 255, 0.42),
+    0 0 20px rgba(0, 190, 255, 0.24);
+}
+
 .scheme-item:hover,
-.scheme-item:focus-visible {
+.scheme-item:focus-visible,
+.curve-group-tab:hover,
+.curve-group-tab:focus-visible {
   border-color: rgba(108, 238, 255, 0.72);
-  border-left-color: var(--hud-cyan);
   background: rgba(33, 213, 255, 0.12);
   color: #ffffff;
   box-shadow:
     inset 0 0 14px rgba(24, 175, 255, 0.24),
     0 0 18px rgba(0, 190, 255, 0.16);
+}
+
+.scheme-item:hover,
+.scheme-item:focus-visible {
+  border-left-color: var(--hud-cyan);
 }
 
 .validation-item.ok {
@@ -3039,6 +3133,7 @@ h2,
 
 .data-table,
 .comparison-table,
+.annual-stat-table,
 .optimization-overview-table,
 .green-result-table,
 .safety-result-table,
@@ -3462,6 +3557,38 @@ td {
   background: rgba(5, 34, 70, 0.72);
   color: var(--hud-text);
   font: inherit;
+}
+
+.language-switch {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  padding: 8px 10px;
+  border: 1px solid rgba(21, 211, 255, 0.34);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(33, 213, 255, 0.12), transparent 66%),
+    linear-gradient(180deg, rgba(5, 34, 70, 0.38), rgba(4, 19, 42, 0.28));
+  color: var(--hud-muted-strong);
+  box-shadow: inset 0 0 14px rgba(24, 175, 255, 0.1);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.language-switch select {
+  min-width: 88px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.auth-card .language-switch {
+  justify-self: end;
 }
 
 .auth-shell {

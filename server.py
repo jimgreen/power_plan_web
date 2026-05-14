@@ -20,6 +20,8 @@ import shutil
 import sqlite3
 import threading
 import time
+import traceback
+import zlib
 from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
@@ -31,10 +33,12 @@ from contextlib import closing
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, unquote, urlparse
 from urllib.request import urlopen
+from zipfile import BadZipFile
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import InvalidFileException
 
 import estimate
 import plan_optimizer
@@ -55,6 +59,35 @@ OPTIMIZATION_RESULT_WORKBOOK_NAME = "optimization_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
 PLANNING_RESULT_SHEET_NAME = "规划结果"
 PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
+COMPARISON_CURVE_GROUPS = {
+    "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
+    "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
+    "monthly": {"title": "月度统计", "sheet": "供能月曲线", "limit": None},
+}
+COMPARISON_CURVE_X_HEADERS = {"小时", "hour_index", "时间", "datetime", "day", "month", "日期", "月份"}
+RESULT_CURVE_FIELD_LABELS = {
+    "load_energy": "负荷总电量",
+    "diesel_energy": "柴发总发电量",
+    "wind_energy": "风机总发电量",
+    "pv_energy": "光伏总发电量",
+    "storage_charge_energy": "电储能总储电量",
+    "storage_discharge_energy": "电储能总放电量",
+    "hydrogen_production_energy": "电制氢总用电量",
+    "hydrogen_storage_increase": "氢储总增加量",
+    "hydrogen_storage_decrease": "氢储总消耗量",
+    "fuel_cell_energy": "燃料电池总发电量",
+    "wind_available_energy": "风力最大可发电量",
+    "pv_available_energy": "光伏最大可发电量",
+    "renewable_available_energy": "新能源最大可发电量",
+    "renewable_energy": "新能源实发电量",
+    "wind_curtailed_energy": "弃风总电量",
+    "pv_curtailed_energy": "弃光总电量",
+    "curtailed_energy": "新能源总弃电量",
+    "unmet_load_energy": "切负荷总电量",
+    "renewable_ratio": "新能源占比",
+    "renewable_curtailed_rate": "新能源弃电率",
+}
+RESULT_WORKBOOK_READ_ERRORS = (BadZipFile, zlib.error, OSError, EOFError, KeyError, InvalidFileException)
 TIME_SERIES_IMPORT_ROW_COUNT = 8760
 TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
     "wind_speed": ("风速", ["wind_speed", "wind", "风速", "风速(m/s)", "风速ms", "ws10m"]),
@@ -1081,17 +1114,32 @@ def list_evaluation_result_files(scheme: str) -> list[dict]:
     files = []
     for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
         if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
-            files.append({"name": path.name, "modified_at": path.stat().st_mtime})
+            item = {"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""}
+            error_message = result_workbook_error_message(path)
+            if error_message:
+                item["readable"] = False
+                item["message"] = error_message
+            files.append(item)
     return files
 
 
 def selected_evaluation_result_filename(scheme: str, filename: str = "") -> str:
     files = list_evaluation_result_files(scheme)
     names = [item["name"] for item in files]
+    readable_names = [item["name"] for item in files if item.get("readable", True)]
     selected = str(filename or "").strip()
     if selected and selected in names:
         return selected
-    return names[0] if names else ""
+    return readable_names[0] if readable_names else ""
+
+
+def result_workbook_error_message(path: Path) -> str:
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+        workbook.close()
+        return ""
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return "结果文件无法读取，可能已损坏或格式不正确"
 
 
 def evaluation_result_path(scheme: str, filename: str) -> Path:
@@ -1111,7 +1159,10 @@ def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dic
     result_path = evaluation_result_path(scheme, filename)
     if not result_path.exists():
         return []
-    workbook = load_workbook(result_path, read_only=True, data_only=True)
+    try:
+        workbook = load_workbook(result_path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"结果文件无法读取: {result_path.name}") from exc
     try:
         if PLANNING_RESULT_SHEET_NAME not in workbook.sheetnames:
             return []
@@ -1131,6 +1182,13 @@ def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dic
         return result_rows
     finally:
         workbook.close()
+
+
+def read_evaluation_planning_result_rows_for_response(scheme: str, filename: str) -> list[dict]:
+    try:
+        return read_evaluation_planning_result_rows(scheme, filename)
+    except ValueError:
+        return []
 
 
 def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], bytes]:
@@ -1153,8 +1211,8 @@ def build_comparison_payload(items: list[dict]) -> dict:
     capacity_tables: list[list[dict]] = []
     energy_tables: list[list[dict]] = []
     safety_tables: list[list[dict]] = []
-    curve_names: list[str] = []
-    curve_series: dict[str, list[dict]] = {}
+    annual_tables: list[list[dict]] = []
+    curve_groups = empty_comparison_curve_groups()
 
     for index, item in enumerate(items):
         if not isinstance(item, dict):
@@ -1181,17 +1239,10 @@ def build_comparison_payload(items: list[dict]) -> dict:
         capacity_tables.append(workbook_data["capacity"])
         energy_tables.append(workbook_data["energy"])
         safety_tables.append(workbook_data["safety"])
-        for name in workbook_data["curves"]:
-            if name not in curve_names:
-                curve_names.append(name)
-            curve_series.setdefault(name, []).append(
-                {
-                    "label": label,
-                    "scheme": scheme,
-                    "filename": filename,
-                    "points": workbook_data["curves"][name],
-                }
-            )
+        annual_tables.append(workbook_data["annual"])
+        append_comparison_curve_groups(curve_groups, workbook_data["curve_groups"], label, scheme, filename)
+
+    hourly_group = curve_groups["hourly"]
 
     return {
         "items": selected_items,
@@ -1200,22 +1251,57 @@ def build_comparison_payload(items: list[dict]) -> dict:
             "energy": merge_comparison_rows(energy_tables, selected_items, "指标"),
             "safety": merge_comparison_rows(safety_tables, selected_items, "指标"),
         },
-        "curves": curve_names,
-        "series": curve_series,
+        "curve_groups": curve_groups,
+        "annual_table": merge_comparison_rows(annual_tables, selected_items, "指标"),
+        "curves": hourly_group["curves"],
+        "series": hourly_group["series"],
     }
 
 
 def read_comparison_workbook(path: Path) -> dict:
-    workbook = load_workbook(path, read_only=True, data_only=True)
     try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"结果文件无法读取: {path.name}") from exc
+    try:
+        curve_groups = {
+            key: read_curve_sheet(workbook, config["sheet"], config["limit"])
+            for key, config in COMPARISON_CURVE_GROUPS.items()
+        }
         return {
             "capacity": read_named_sheet_rows(workbook, "规划结果"),
             "energy": read_named_sheet_rows(workbook, "供能分析"),
             "safety": read_named_sheet_rows(workbook, "安全评估"),
-            "curves": read_dispatch_curves(workbook),
+            "annual": read_annual_comparison_rows(workbook),
+            "curve_groups": curve_groups,
+            "curves": curve_groups["hourly"],
         }
     finally:
         workbook.close()
+
+
+def empty_comparison_curve_groups() -> dict:
+    return {
+        key: {"title": config["title"], "curves": [], "series": {}}
+        for key, config in COMPARISON_CURVE_GROUPS.items()
+    }
+
+
+def append_comparison_curve_groups(target_groups: dict, source_groups: dict, label: str, scheme: str, filename: str) -> None:
+    for key, config in COMPARISON_CURVE_GROUPS.items():
+        target_group = target_groups.setdefault(key, {"title": config["title"], "curves": [], "series": {}})
+        source_group = source_groups.get(key, {}) if isinstance(source_groups, dict) else {}
+        for name, points in source_group.items():
+            if name not in target_group["curves"]:
+                target_group["curves"].append(name)
+            target_group["series"].setdefault(name, []).append(
+                {
+                    "label": label,
+                    "scheme": scheme,
+                    "filename": filename,
+                    "points": points,
+                }
+            )
 
 
 def read_named_sheet_rows(workbook, sheet_name: str) -> list[dict]:
@@ -1237,28 +1323,44 @@ def read_named_sheet_rows(workbook, sheet_name: str) -> list[dict]:
     return result_rows
 
 
+def read_annual_comparison_rows(workbook) -> list[dict]:
+    rows = read_named_sheet_rows(workbook, "规划年指标")
+    if rows:
+        return rows
+    return read_named_sheet_rows(workbook, "供能分析")
+
+
 def read_dispatch_curves(workbook) -> dict[str, list[dict]]:
-    if "调度结果" not in workbook.sheetnames:
+    return read_curve_sheet(workbook, "调度结果", 8760)
+
+
+def read_curve_sheet(workbook, sheet_name: str, limit: int | None = None) -> dict[str, list[dict]]:
+    if sheet_name not in workbook.sheetnames:
         return {}
-    sheet = workbook["调度结果"]
+    sheet = workbook[sheet_name]
     rows_iter = sheet.iter_rows(values_only=True)
     headers = [str(value or "").strip() for value in next(rows_iter, [])]
     curves: dict[str, list[dict]] = {}
     for header in headers:
-        if header and header not in {"小时", "hour_index", "时间", "datetime"}:
-            curves[header] = []
+        if header and header not in COMPARISON_CURVE_X_HEADERS:
+            curves[result_curve_display_name(header)] = []
     for row_index, row in enumerate(rows_iter, start=1):
-        if row_index > 8760:
+        if limit is not None and row_index > limit:
             break
         x_value = row[0] if len(row) > 0 and row[0] not in (None, "") else row_index
         for column_index, header in enumerate(headers):
-            if header not in curves:
+            display_name = result_curve_display_name(header)
+            if display_name not in curves:
                 continue
             value = row[column_index] if column_index < len(row) else None
             number = _numeric_or_none(value)
             if number is not None:
-                curves[header].append({"x": x_value, "y": number})
+                curves[display_name].append({"x": x_value, "y": number})
     return curves
+
+
+def result_curve_display_name(header: str) -> str:
+    return RESULT_CURVE_FIELD_LABELS.get(str(header or "").strip(), str(header or "").strip())
 
 
 def merge_comparison_rows(tables: list[list[dict]], items: list[dict], key_field: str) -> list[dict]:
@@ -1386,7 +1488,7 @@ def handle_evaluation_results_api_path(
                 {
                     "selected": selected,
                     "results": list_evaluation_result_files(scheme),
-                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, selected),
+                    "planning_result_rows": read_evaluation_planning_result_rows_for_response(scheme, selected),
                 }
             )
 
@@ -1409,7 +1511,7 @@ def handle_evaluation_results_api_path(
                 {
                     "selected": selected,
                     "results": list_evaluation_result_files(scheme),
-                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, selected),
+                    "planning_result_rows": read_evaluation_planning_result_rows_for_response(scheme, selected),
                 }
             )
 
@@ -1417,13 +1519,19 @@ def handle_evaluation_results_api_path(
             source_path = evaluation_result_path(scheme, filename)
             if not source_path.exists():
                 raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
+            source_error = result_workbook_error_message(source_path)
+            if source_error:
+                raise ValueError(f"复制失败，当前结果文件无法读取: {source_path.name}")
             target_filename = evaluation_result_filename_from_name(str(payload.get("target_name", "")))
             target_path = evaluation_result_path(scheme, target_filename)
             if target_path.exists():
-                return _json_response(
-                    {"error": "exists", "message": f"复制失败，结果文件已存在: {target_path.name}"},
-                    HTTPStatus.CONFLICT,
-                )
+                if not result_workbook_error_message(target_path):
+                    return _json_response(
+                        {"error": "exists", "message": f"复制失败，结果文件已存在: {target_path.name}"},
+                        HTTPStatus.CONFLICT,
+                    )
+                if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+                    raise ValueError("默认结果文件不允许覆盖")
             shutil.copy2(source_path, target_path)
             return _json_response(
                 {
@@ -2775,6 +2883,17 @@ def _redirect_response(location: str) -> tuple[int, dict[str, str], bytes]:
     return HTTPStatus.FOUND, {"Location": location, "Content-Type": "text/plain; charset=utf-8"}, b""
 
 
+def safe_api_call(handler) -> tuple[int, dict[str, str], bytes]:
+    try:
+        return handler()
+    except Exception as exc:
+        traceback.print_exc()
+        return _json_response(
+            {"error": "internal_error", "message": f"后台处理失败: {exc}"},
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+        )
+
+
 def resolve_static_path(request_path: str) -> Path:
     parsed_path = unquote(urlparse(request_path).path)
     if parsed_path == "/":
@@ -2802,18 +2921,18 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             token = _session_token_from_cookie(self.headers.get("Cookie"))
             current_user = USER_STORE.user_for_session(token)
             if parsed.path.startswith("/api/auth/"):
-                status, headers, body = handle_auth_api_path(parsed.path, "GET", b"", token)
+                status, headers, body = safe_api_call(lambda: handle_auth_api_path(parsed.path, "GET", b"", token))
                 self._send(status, headers, body)
                 return
             if parsed.path.startswith("/api/users"):
-                status, headers, body = handle_users_api_path(parsed.path, "GET", b"", current_user)
+                status, headers, body = safe_api_call(lambda: handle_users_api_path(parsed.path, "GET", b"", current_user))
                 self._send(status, headers, body)
                 return
             if parsed.path != "/api/health" and not current_user:
                 status, headers, body = _unauthorized_response()
                 self._send(status, headers, body)
                 return
-            status, headers, body = handle_api_path(parsed.path, parsed.query)
+            status, headers, body = safe_api_call(lambda: handle_api_path(parsed.path, parsed.query))
             self._send(status, headers, body)
             return
 
@@ -2857,11 +2976,11 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             token = _session_token_from_cookie(self.headers.get("Cookie"))
             current_user = USER_STORE.user_for_session(token)
             if parsed.path.startswith("/api/auth/"):
-                status, headers, response_body = handle_auth_api_path(parsed.path, "POST", body, token)
+                status, headers, response_body = safe_api_call(lambda: handle_auth_api_path(parsed.path, "POST", body, token))
                 self._send(status, headers, response_body)
                 return
             if parsed.path.startswith("/api/users"):
-                status, headers, response_body = handle_users_api_path(parsed.path, "POST", body, current_user)
+                status, headers, response_body = safe_api_call(lambda: handle_users_api_path(parsed.path, "POST", body, current_user))
                 self._send(status, headers, response_body)
                 return
             if not current_user:
@@ -2869,18 +2988,18 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 self._send(status, headers, response_body)
                 return
             if parsed.path.startswith("/api/planning/"):
-                status, headers, response_body = handle_planning_api_path(parsed.path, "POST", body)
+                status, headers, response_body = safe_api_call(lambda: handle_planning_api_path(parsed.path, "POST", body))
                 self._send(status, headers, response_body)
                 return
             if parsed.path == "/api/evaluation/control":
-                status, headers, response_body = handle_control_path(parsed.path, body)
+                status, headers, response_body = safe_api_call(lambda: handle_control_path(parsed.path, body))
                 self._send(status, headers, response_body)
                 return
             if parsed.path.startswith("/api/evaluation/"):
-                status, headers, response_body = handle_evaluation_results_api_path(parsed.path, "POST", body)
+                status, headers, response_body = safe_api_call(lambda: handle_evaluation_results_api_path(parsed.path, "POST", body))
                 self._send(status, headers, response_body)
                 return
-            status, headers, response_body = handle_control_path(parsed.path, body)
+            status, headers, response_body = safe_api_call(lambda: handle_control_path(parsed.path, body))
             self._send(status, headers, response_body)
             return
         self._send_text(HTTPStatus.NOT_FOUND, "Not Found")
@@ -2892,7 +3011,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
         token = _session_token_from_cookie(self.headers.get("Cookie"))
         current_user = USER_STORE.user_for_session(token)
         if parsed.path.startswith("/api/users"):
-            status, headers, response_body = handle_users_api_path(parsed.path, "PUT", body, current_user)
+            status, headers, response_body = safe_api_call(lambda: handle_users_api_path(parsed.path, "PUT", body, current_user))
             self._send(status, headers, response_body)
             return
         if parsed.path.startswith("/api/") and not current_user:
@@ -2900,7 +3019,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             self._send(status, headers, response_body)
             return
         if parsed.path.startswith("/api/planning/"):
-            status, headers, response_body = handle_planning_api_path(parsed.path, "PUT", body)
+            status, headers, response_body = safe_api_call(lambda: handle_planning_api_path(parsed.path, "PUT", body))
             self._send(status, headers, response_body)
             return
         self._send_text(HTTPStatus.NOT_FOUND, "Not Found")
@@ -2910,7 +3029,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
         token = _session_token_from_cookie(self.headers.get("Cookie"))
         current_user = USER_STORE.user_for_session(token)
         if parsed.path.startswith("/api/users"):
-            status, headers, response_body = handle_users_api_path(parsed.path, "DELETE", b"", current_user)
+            status, headers, response_body = safe_api_call(lambda: handle_users_api_path(parsed.path, "DELETE", b"", current_user))
             self._send(status, headers, response_body)
             return
         if parsed.path.startswith("/api/") and not current_user:
@@ -2918,7 +3037,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             self._send(status, headers, response_body)
             return
         if parsed.path.startswith("/api/planning/"):
-            status, headers, response_body = handle_planning_api_path(parsed.path, "DELETE", b"")
+            status, headers, response_body = safe_api_call(lambda: handle_planning_api_path(parsed.path, "DELETE", b""))
             self._send(status, headers, response_body)
             return
         self._send_text(HTTPStatus.NOT_FOUND, "Not Found")

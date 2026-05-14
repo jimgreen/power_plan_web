@@ -71,8 +71,8 @@ document.addEventListener("DOMContentLoaded", () => {
     ? window.ResultCurveViewer.create({
         listId: "evaluationCurveNameList",
         chartId: "evaluationCurveChart",
-        emptyText: "暂无8760曲线",
-        promptText: "请选择8760曲线",
+        emptyText: "暂无小时级曲线",
+        promptText: "请选择小时级曲线",
       })
     : null;
   bindLogViewTabs();
@@ -101,11 +101,16 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
-  const data = await response.json();
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+  } catch (error) {
+    throw new Error("请求后台失败，请检查 WEB 服务是否正常运行，或查看服务器错误日志。");
+  }
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(data.message || data.error || "请求失败");
     error.payload = data;
@@ -144,7 +149,7 @@ function renderSchemes() {
       state.optimization = defaultOptimizationState(state.currentScheme);
       renderOptimization(state.optimization);
       state.curveDataKey = "";
-      state.evaluationCurveViewer?.clear("正在加载8760曲线");
+      state.evaluationCurveViewer?.clear("正在加载小时级曲线");
       loadEvaluationResults()
         .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
         .catch(showError);
@@ -183,7 +188,7 @@ function bindEvaluationResultActions() {
   document.getElementById("evaluationResultSelect").addEventListener("change", (event) => {
     state.selectedResultFile = event.target.value || "";
     state.curveDataKey = "";
-    state.evaluationCurveViewer?.clear("正在加载8760曲线");
+    state.evaluationCurveViewer?.clear("正在加载小时级曲线");
     updateEvaluationResultActions();
     loadEvaluationResults(state.selectedResultFile)
       .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
@@ -208,8 +213,8 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
   const selectedParam = selected ? `&filename=${encodeURIComponent(selected)}` : "";
   const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(state.currentScheme)}${selectedParam}`);
   state.resultFiles = data.results || [];
-  const names = state.resultFiles.map((item) => item.name);
-  state.selectedResultFile = data.selected || (names.includes(selected) ? selected : names[0] || "");
+  const readableNames = state.resultFiles.filter((item) => item.readable !== false).map((item) => item.name);
+  state.selectedResultFile = data.selected || (readableNames.includes(selected) ? selected : readableNames[0] || "");
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
   renderEvaluationPlanningResultTable();
@@ -240,11 +245,31 @@ function bindLogViewTabs() {
 
 function renderEvaluationResults() {
   const select = document.getElementById("evaluationResultSelect");
-  select.innerHTML = state.resultFiles.length
-    ? state.resultFiles.map((item) => `<option value="${escapeHtml(item.name)}">${escapeHtml(resultDisplayName(item.name))}</option>`).join("")
-    : '<option value="">暂无结果文件</option>';
+  if (!state.resultFiles.length) {
+    select.innerHTML = '<option value="">暂无结果文件</option>';
+  } else {
+    const placeholder = state.selectedResultFile ? "" : '<option value="">暂无可读取结果文件</option>';
+    select.innerHTML = placeholder + state.resultFiles.map(renderEvaluationResultOption).join("");
+  }
   select.value = state.selectedResultFile;
+  renderEvaluationResultWarnings();
   updateEvaluationResultActions();
+}
+
+function renderEvaluationResultOption(item) {
+  const unreadable = item.readable === false;
+  const label = `${resultDisplayName(item.name)}${unreadable ? "（无法读取）" : ""}`;
+  return `<option value="${escapeHtml(item.name)}">${escapeHtml(label)}</option>`;
+}
+
+function renderEvaluationResultWarnings() {
+  const host = document.getElementById("evaluationResultWarnings");
+  if (!host) return;
+  const unreadable = state.resultFiles.filter((item) => item.readable === false);
+  host.innerHTML = unreadable
+    .map((item) => `<div class="validation-item error">结果文件 ${escapeHtml(item.name)} ${escapeHtml(item.message || "无法读取，请重新生成或删除该文件。")}</div>`)
+    .join("");
+  host.hidden = unreadable.length === 0;
 }
 
 function resultDisplayName(filename) {
@@ -314,21 +339,27 @@ function selectedResultIsDefault() {
   return state.selectedResultFile === "optimization_results.xlsx";
 }
 
+function selectedResultIsReadable() {
+  const selected = state.resultFiles.find((item) => item.name === state.selectedResultFile);
+  return !selected || selected.readable !== false;
+}
+
 function updateEvaluationResultActions() {
   const hasScheme = Boolean(state.currentScheme);
   const hasSelection = Boolean(state.selectedResultFile);
+  const canEditWorkbook = selectedResultIsReadable() && !selectedResultIsDefault();
   const deleteButton = document.getElementById("deleteEvaluationResult");
   const copyButton = document.getElementById("copyEvaluationResult");
   const saveButton = document.getElementById("saveEvaluationResult");
   deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection;
-  saveButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection;
-  copyButton.disabled = !hasScheme || !hasSelection;
+  saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection;
+  copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection;
   [deleteButton, copyButton, saveButton].forEach((button) => {
     button.classList.toggle("is-disabled", button.disabled);
     button.setAttribute("aria-disabled", String(button.disabled));
   });
   document.querySelectorAll("[data-planning-count-index]").forEach((input) => {
-    input.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection;
+    input.disabled = !canEditWorkbook || !hasScheme || !hasSelection;
   });
 }
 
@@ -503,7 +534,7 @@ async function loadEvaluationCurveData() {
   const key = `${state.currentScheme}/${state.selectedResultFile}/${runKey}`;
   if (state.curveDataKey === key) return;
   state.curveDataKey = key;
-  state.evaluationCurveViewer.clear("正在加载8760曲线");
+  state.evaluationCurveViewer.clear("正在加载小时级曲线");
   const items = [{ scheme: state.currentScheme, filename: state.selectedResultFile }];
   try {
     const data = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
@@ -511,7 +542,7 @@ async function loadEvaluationCurveData() {
     state.evaluationCurveViewer.setData(data);
   } catch (error) {
     state.curveDataKey = "";
-    state.evaluationCurveViewer.clear(error.payload?.message || error.message || "暂无8760曲线");
+    state.evaluationCurveViewer.clear(error.payload?.message || error.message || "暂无小时级曲线");
   }
 }
 

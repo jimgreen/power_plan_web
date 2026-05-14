@@ -66,8 +66,8 @@ document.addEventListener("DOMContentLoaded", () => {
     ? window.ResultCurveViewer.create({
         listId: "optimizationCurveNameList",
         chartId: "optimizationCurveChart",
-        emptyText: "暂无8760曲线",
-        promptText: "请选择8760曲线",
+        emptyText: "暂无小时级曲线",
+        promptText: "请选择小时级曲线",
       })
     : null;
   bindResultTabs();
@@ -126,7 +126,7 @@ function renderSchemes() {
       state.optimization = defaultOptimizationState(state.currentScheme);
       renderOptimization(state.optimization);
       state.curveDataKey = "";
-      state.optimizationCurveViewer?.clear("正在加载8760曲线");
+      state.optimizationCurveViewer?.clear("正在加载小时级曲线");
       refreshOptimizationStatus(state.currentScheme).catch(showError);
     });
   });
@@ -258,7 +258,7 @@ async function loadOptimizationCurveData() {
   const key = `${state.currentScheme}/optimization_results.xlsx/${runKey}`;
   if (state.curveDataKey === key) return;
   state.curveDataKey = key;
-  state.optimizationCurveViewer.clear("正在加载8760曲线");
+  state.optimizationCurveViewer.clear("正在加载小时级曲线");
   const items = [{ scheme: state.currentScheme, filename: "optimization_results.xlsx" }];
   try {
     const data = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
@@ -266,7 +266,7 @@ async function loadOptimizationCurveData() {
     state.optimizationCurveViewer.setData(data);
   } catch (error) {
     state.curveDataKey = "";
-    state.optimizationCurveViewer.clear(error.payload?.message || error.message || "暂无8760曲线");
+    state.optimizationCurveViewer.clear(error.payload?.message || error.message || "暂无小时级曲线");
   }
 }
 

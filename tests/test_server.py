@@ -92,6 +92,8 @@ class PowerPlanServerTest(unittest.TestCase):
     def test_index_page_has_visual_planning_entry_buttons(self):
         html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
 
+        self.assertIn("assets/i18n.js", html)
+        self.assertIn(".language-switch", html)
         self.assertIn('background-image: url("assets/main-dashboard-bg.png?v=20260513-bg-refresh")', html)
         self.assertIn("background-size: contain", html)
         self.assertIn('<link rel="icon" href="data:,">', html)
@@ -179,6 +181,7 @@ class PowerPlanServerTest(unittest.TestCase):
         optimize_html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
         index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
 
         self.assertIn('id="loginForm"', login_html)
         self.assertIn('id="registerForm"', register_html)
@@ -189,10 +192,22 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("data-auth-username", html)
             self.assertIn("data-logout", html)
             self.assertIn("assets/auth.js", html)
+            self.assertIn("assets/i18n.js", html)
+        self.assertIn("assets/i18n.js", login_html)
+        self.assertIn("assets/i18n.js", register_html)
+        self.assertIn("powerPlanLanguage", i18n_script)
+        self.assertIn("languageSelect", i18n_script)
+        self.assertIn("PowerPlanI18n", i18n_script)
+        self.assertIn("Station Wind-Solar-Hydrogen-Storage-Diesel Planning System", i18n_script)
+        self.assertIn("Scenario Evaluation", i18n_script)
+        self.assertIn("Result Comparison", i18n_script)
+        self.assertIn("MutationObserver", i18n_script)
+        self.assertIn("patchDialogs", i18n_script)
         self.assertIn("data-admin-only", planning_html)
         self.assertIn("data-admin-only", optimize_html)
         self.assertIn("data-admin-only", index_html)
         self.assertIn(".user-status", css)
+        self.assertIn(".language-switch", css)
         user_status_css = css.split(".user-status {", 1)[1].split("}", 1)[0]
         self.assertIn("border: 0", user_status_css)
         self.assertIn(".auth-card", css)
@@ -1120,12 +1135,20 @@ class PowerPlanServerTest(unittest.TestCase):
             planning_sheet.append(["储能", 4, 250, 1000, "kWh"])
             create_workbook.save(source_path)
 
+            broken_path = planning_root / "方案A" / "aaa_results.xlsx"
+            broken_path.write_bytes(b"not a valid workbook")
+            dead_path = planning_root / "方案A" / "dead_results.xlsx"
+            dead_path.write_bytes(b"dead workbook")
+
             status, headers, body = server.handle_api_path(
-                "/api/evaluation/results?scheme=方案A&filename=optimization_results.xlsx"
+                "/api/evaluation/results?scheme=方案A"
             )
             listed = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertEqual(listed["selected"], "optimization_results.xlsx")
+            broken_item = next(item for item in listed["results"] if item["name"] == "aaa_results.xlsx")
+            self.assertFalse(broken_item["readable"])
+            self.assertIn("结果文件无法读取", broken_item["message"])
             self.assertEqual(
                 listed["planning_result_rows"],
                 [
@@ -1133,6 +1156,14 @@ class PowerPlanServerTest(unittest.TestCase):
                     {"设备类型": "储能", "设计台数": 4, "单台容量": 250, "总容量": 1000, "单位": "kWh"},
                 ],
             )
+
+            status, headers, body = server.handle_api_path(
+                "/api/evaluation/results?scheme=方案A&filename=aaa_results.xlsx"
+            )
+            selected_broken = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(selected_broken["selected"], "aaa_results.xlsx")
+            self.assertEqual(selected_broken["planning_result_rows"], [])
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -1169,6 +1200,43 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 409)
             self.assertEqual(duplicate["error"], "exists")
             self.assertIn("复制失败", duplicate["message"])
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "copy",
+                        "filename": "optimization_results.xlsx",
+                        "target_name": "aaa",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            overwritten = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(overwritten["selected"], "aaa_results.xlsx")
+            overwritten_item = next(item for item in overwritten["results"] if item["name"] == "aaa_results.xlsx")
+            self.assertTrue(overwritten_item["readable"])
+            workbook = load_workbook(planning_root / "方案A" / "aaa_results.xlsx", read_only=True)
+            try:
+                self.assertIn("规划结果", workbook.sheetnames)
+            finally:
+                workbook.close()
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {"scheme": "方案A", "action": "delete", "filename": "dead_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            deleted_broken = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertFalse(dead_path.exists())
+            self.assertNotIn("dead_results.xlsx", [item["name"] for item in deleted_broken["results"]])
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -1279,7 +1347,8 @@ class PowerPlanServerTest(unittest.TestCase):
             deleted = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertFalse((planning_root / "方案A" / "custom_results.xlsx").exists())
-            self.assertEqual([item["name"] for item in deleted["results"]], ["optimization_results.xlsx"])
+            self.assertEqual([item["name"] for item in deleted["results"]], ["aaa_results.xlsx", "optimization_results.xlsx"])
+            self.assertEqual(deleted["selected"], "aaa_results.xlsx")
         finally:
             server.PLANNING_STORE = original_store
             server.OPTIMIZATION_RUNTIME = original_runtime
@@ -1304,9 +1373,21 @@ class PowerPlanServerTest(unittest.TestCase):
             green_sheet.append(["指标", "数值", "单位"])
             green_sheet.append(["柴油消耗", 12.5, "吨"])
             green_sheet.append(["绿电占比", 85, "%"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["年总成本", 123.4, "万元"])
+            annual_sheet.append(["新能源弃电率", 1.2, "%"])
             safety_sheet = workbook.create_sheet("安全评估")
             safety_sheet.append(["指标", "数值", "单位"])
             safety_sheet.append(["最大未供负荷", 0, "kW"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy", "wind_energy"])
+            daily_sheet.append([1, 1000, 220])
+            daily_sheet.append([2, 1100, 240])
+            monthly_sheet = workbook.create_sheet("供能月曲线")
+            monthly_sheet.append(["month", "load_energy", "renewable_curtailed_rate"])
+            monthly_sheet.append([1, 30000, 1.1])
+            monthly_sheet.append([2, 28000, 1.4])
             dispatch_sheet = workbook.create_sheet("调度结果")
             dispatch_sheet.append(["小时", "时间", "负荷", "风电出力", "光伏出力"])
             for hour in range(1, 8761):
@@ -1329,6 +1410,19 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("风电出力", payload["curves"])
             self.assertEqual(len(payload["series"]["负荷"][0]["points"]), 8760)
             self.assertEqual(payload["series"]["负荷"][0]["label"], "方案A / case")
+            self.assertEqual(payload["curve_groups"]["hourly"]["title"], "小时级曲线")
+            self.assertEqual(payload["curve_groups"]["daily"]["title"], "日级统计")
+            self.assertEqual(payload["curve_groups"]["monthly"]["title"], "月度统计")
+            self.assertIn("负荷", payload["curve_groups"]["hourly"]["curves"])
+            self.assertIn("负荷总电量", payload["curve_groups"]["daily"]["curves"])
+            self.assertIn("风机总发电量", payload["curve_groups"]["daily"]["curves"])
+            self.assertIn("新能源弃电率", payload["curve_groups"]["monthly"]["curves"])
+            self.assertNotIn("load_energy", payload["curve_groups"]["daily"]["curves"])
+            self.assertNotIn("renewable_curtailed_rate", payload["curve_groups"]["monthly"]["curves"])
+            self.assertEqual(len(payload["curve_groups"]["daily"]["series"]["负荷总电量"][0]["points"]), 2)
+            self.assertEqual(len(payload["curve_groups"]["monthly"]["series"]["负荷总电量"][0]["points"]), 2)
+            self.assertEqual(payload["annual_table"][0]["指标"], "年总成本")
+            self.assertEqual(payload["annual_table"][0]["方案A / case"], 123.4)
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -1851,6 +1945,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("loadOptimizationCurveData", script)
         self.assertIn("/api/comparison/data", script)
         self.assertIn("ResultCurveViewer.create", script)
+        self.assertIn("暂无小时级曲线", script)
+        self.assertIn("请选择小时级曲线", script)
+        self.assertIn("正在加载小时级曲线", script)
         self.assertIn("setData", script)
         self.assertIn("scrollTop", script)
         self.assertIn("data-result-tab", script)
@@ -1874,7 +1971,7 @@ class PowerPlanServerTest(unittest.TestCase):
         index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
 
-        self.assertIn("assets/planning.css?v=20260513-log-menu", html)
+        self.assertIn("assets/planning.css?v=20260514-i18n", html)
         self.assertIn('<a class="active" href="evaluation.html">方案评估</a>', html)
         self.assertIn('href="evaluation.html">方案评估</a>', planning_html)
         self.assertIn('href="evaluation.html">方案评估</a>', optimize_html)
@@ -1886,6 +1983,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="startEvaluation"', html)
         self.assertIn('id="stopEvaluation"', html)
         self.assertIn('id="evaluationResultSelect"', html)
+        self.assertIn('id="evaluationResultWarnings"', html)
+        self.assertIn("result-file-warnings", html)
         self.assertIn('class="evaluation-result-rail"', html)
         self.assertIn('id="evaluationCurrentScheme"', html)
         self.assertIn('id="evaluationPlanningResultTable"', html)
@@ -1925,7 +2024,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError)", script)
         self.assertIn("manageEvaluationResult", script)
         self.assertIn("resultDisplayName", script)
-        self.assertIn('value="${escapeHtml(item.name)}">${escapeHtml(resultDisplayName(item.name))}</option>', script)
+        self.assertIn("renderEvaluationResultOption", script)
+        self.assertIn("renderEvaluationResultWarnings", script)
+        self.assertIn("selectedResultIsReadable", script)
+        self.assertNotIn('unreadable ? " disabled" : ""', script)
+        self.assertIn("暂无可读取结果文件", script)
+        self.assertIn("无法读取", script)
+        self.assertIn("请求后台失败，请检查 WEB 服务是否正常运行，或查看服务器错误日志。", script)
         self.assertIn("target_name", script)
         self.assertIn("filename=${encodeURIComponent(filename)}", script)
         self.assertIn("planning_result_rows", script)
@@ -1936,6 +2041,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("loadEvaluationCurveData", script)
         self.assertIn("/api/comparison/data", script)
         self.assertIn("ResultCurveViewer.create", script)
+        self.assertIn("暂无小时级曲线", script)
+        self.assertIn("请选择小时级曲线", script)
+        self.assertIn("正在加载小时级曲线", script)
         self.assertIn("bindEvaluationMainResizeHandle", script)
         self.assertIn("--evaluation-result-rail-width", script)
         self.assertIn("ArrowLeft", script)
@@ -1953,7 +2061,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("复制失败", script)
         self.assertIn("selectedResultIsDefault", script)
         self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
-        self.assertIn("saveButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
+        self.assertIn("saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
+        self.assertIn("copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection", script)
         self.assertIn("启动评估", html)
         self.assertIn("停止评估", html)
 
@@ -1977,7 +2086,7 @@ class PowerPlanServerTest(unittest.TestCase):
         script = (WEB_ROOT / "assets" / "comparison.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
-        self.assertIn("assets/planning.css?v=20260510-dark-hud", html)
+        self.assertIn("assets/planning.css?v=20260514-i18n", html)
         self.assertIn('<a class="active" href="comparison.html">结果对比</a>', html)
         self.assertIn('href="comparison.html">结果对比</a>', planning_html)
         self.assertIn('href="comparison.html">结果对比</a>', optimize_html)
@@ -1985,6 +2094,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('href="comparison.html"', index_html)
         self.assertIn("comparison-tab-bar", html)
         self.assertIn("comparisonTabs", html)
+        self.assertIn("comparisonResultWarnings", html)
+        self.assertIn("result-file-warnings", html)
         self.assertIn("comparison-table-grid", html)
         for table_id in ("capacityComparisonTable", "energyComparisonTable", "safetyComparisonTable"):
             self.assertIn(table_id, html)
@@ -1997,6 +2108,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("comparisonTableCurveResizeHandle", html)
         self.assertIn("curveNameList", html)
         self.assertIn("comparisonCurveChart", html)
+        self.assertIn("小时级曲线", html)
+        self.assertIn("日级统计", html)
+        self.assertIn("月度统计", html)
+        self.assertIn("年度统计", html)
+        self.assertNotIn("8760曲线", html)
+        self.assertIn("assets/result_curves.js", html)
         self.assertIn("assets/comparison.js", html)
 
         self.assertIn("/api/planning/schemes", script)
@@ -2016,6 +2133,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("--comparison-energy-table-width", script)
         self.assertIn("--comparison-safety-table-width", script)
         self.assertIn("curveNameList", script)
+        self.assertIn("comparisonCurveViewer", script)
+        self.assertIn("ResultCurveViewer.create", script)
+        self.assertIn("curve_groups", script)
+        self.assertIn("annual_table", script)
+        self.assertIn("setData", script)
         self.assertIn("renderComparisonCurveChart", script)
         self.assertIn("selectedCurves", script)
         self.assertIn("selectedCurveNames", script)
@@ -2038,6 +2160,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("loadResultFilesForTab", script)
         self.assertIn("schemeSelect", script)
         self.assertIn("resultSelect", script)
+        self.assertIn("renderComparisonResultWarnings", script)
+        self.assertIn("readable !== false", script)
+        self.assertIn("无法读取", script)
+        self.assertIn("请求后台失败，请检查 WEB 服务是否正常运行，或查看服务器错误日志。", script)
         self.assertIn('event.target.closest("select")', script)
         self.assertIn("event.stopPropagation()", script)
         self.assertIn('<ul aria-multiselectable="true">', script)
@@ -2075,6 +2201,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("min-width: 0", comparison_curve_stats_section_css)
         self.assertIn("white-space: nowrap", comparison_curve_stats_section_css)
         self.assertIn(".comparison-curve-name-item", css)
+        self.assertIn(".curve-group-tabs", css)
+        self.assertIn(".curve-group-tab", css)
+        self.assertIn(".annual-stat-table", css)
+        curve_group_tabs_css = css.split(".curve-group-tabs {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: sticky", curve_group_tabs_css)
+        self.assertIn("top: 0", curve_group_tabs_css)
+        self.assertIn("z-index:", curve_group_tabs_css)
         self.assertNotIn(".comparison-curve-name-list button", css)
         comparison_curve_name_item_css = css.split(".comparison-curve-name-item {", 1)[1].split("}", 1)[0]
         self.assertIn("cursor: pointer", comparison_curve_name_item_css)
@@ -2082,6 +2215,16 @@ class PowerPlanServerTest(unittest.TestCase):
         comparison_curve_name_hover_css = css.split(".comparison-curve-name-item:hover,", 1)[1].split("}", 1)[0]
         self.assertIn("border-left-color: #0d5c59", comparison_curve_name_hover_css)
         self.assertIn("background: rgba(13, 92, 89, 0.12)", comparison_curve_name_hover_css)
+
+        result_curve_script = (WEB_ROOT / "assets" / "result_curves.js").read_text(encoding="utf-8")
+        self.assertIn("curve_groups", result_curve_script)
+        self.assertIn("annual_table", result_curve_script)
+        self.assertIn("小时级曲线", result_curve_script)
+        self.assertIn("日级统计", result_curve_script)
+        self.assertIn("月度统计", result_curve_script)
+        self.assertIn("年度统计", result_curve_script)
+        self.assertIn("data-curve-group", result_curve_script)
+        self.assertIn("renderAnnualTable", result_curve_script)
 
     def test_optimization_page_has_draggable_result_and_log_resize_handles(self):
         html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")

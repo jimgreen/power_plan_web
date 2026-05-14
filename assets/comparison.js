@@ -5,7 +5,8 @@ const state = {
   tabs: [{ id: "tab-1", scheme: "", result: "", results: [] }],
   activeTabId: "tab-1",
   draggingTabId: "",
-  comparison: { items: [], tables: { capacity: [], energy: [], safety: [] }, curves: [], series: {} },
+  comparison: { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} },
+  comparisonCurveViewer: null,
   selectedCurves: [],
   tableHeight: null,
   tableColumnWidths: [1, 1, 1],
@@ -13,6 +14,14 @@ const state = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  state.comparisonCurveViewer = window.ResultCurveViewer
+    ? window.ResultCurveViewer.create({
+        listId: "curveNameList",
+        chartId: "comparisonCurveChart",
+        emptyText: "暂无小时级曲线",
+        promptText: "请选择小时级曲线",
+      })
+    : null;
   bindAddTab();
   bindComparisonTableColumnResizeHandles();
   bindComparisonTableCurveResizeHandle();
@@ -20,11 +29,16 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-  });
-  const data = await response.json();
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    });
+  } catch (error) {
+    throw new Error("请求后台失败，请检查 WEB 服务是否正常运行，或查看服务器错误日志。");
+  }
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const error = new Error(data.message || data.error || "请求失败");
     error.payload = data;
@@ -52,8 +66,8 @@ async function loadResultFilesForTab(tab) {
   }
   const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(tab.scheme)}${tab.result ? `&filename=${encodeURIComponent(tab.result)}` : ""}`);
   tab.results = data.results || [];
-  const names = tab.results.map((item) => item.name);
-  tab.result = data.selected || (names.includes(tab.result) ? tab.result : names[0] || "");
+  const readableNames = tab.results.filter((item) => item.readable !== false).map((item) => item.name);
+  tab.result = data.selected || (readableNames.includes(tab.result) ? tab.result : readableNames[0] || "");
 }
 
 function bindAddTab() {
@@ -78,6 +92,7 @@ function renderComparisonTabs() {
   const container = document.getElementById("comparisonTabs");
   container.innerHTML = state.tabs.map((tab, index) => renderComparisonTab(tab, index)).join("") + renderAddComparisonTab();
   document.getElementById("addComparisonTab").disabled = state.tabs.length >= MAX_TABS;
+  renderComparisonResultWarnings();
 
   container.querySelectorAll("[data-comparison-tab]").forEach((element) => {
     element.addEventListener("click", (event) => {
@@ -166,8 +181,28 @@ function renderSchemeOptions(selected) {
 function renderResultOptions(tab) {
   if (!tab.results.length) return '<option value="">暂无结果</option>';
   return tab.results
-    .map((item) => `<option value="${escapeHtml(item.name)}"${item.name === tab.result ? " selected" : ""}>${escapeHtml(resultDisplayName(item.name))}</option>`)
+    .map((item) => {
+      const unreadable = item.readable === false;
+      const selected = item.name === tab.result ? " selected" : "";
+      const disabled = unreadable ? " disabled" : "";
+      const label = `${resultDisplayName(item.name)}${unreadable ? "（无法读取）" : ""}`;
+      return `<option value="${escapeHtml(item.name)}"${selected}${disabled}>${escapeHtml(label)}</option>`;
+    })
     .join("");
+}
+
+function renderComparisonResultWarnings() {
+  const host = document.getElementById("comparisonResultWarnings");
+  if (!host) return;
+  const warnings = state.tabs.flatMap((tab) =>
+    (tab.results || [])
+      .filter((item) => item.readable === false)
+      .map((item) => ({ scheme: tab.scheme, item }))
+  );
+  host.innerHTML = warnings
+    .map(({ scheme, item }) => `<div class="validation-item error">${escapeHtml(scheme || "未选择方案")} 的结果文件 ${escapeHtml(item.name)} ${escapeHtml(item.message || "无法读取，请重新生成或删除该文件。")}</div>`)
+    .join("");
+  host.hidden = warnings.length === 0;
 }
 
 function moveComparisonTab(sourceId, targetId) {
@@ -184,7 +219,7 @@ function moveComparisonTab(sourceId, targetId) {
 async function refreshComparisonData() {
   const items = state.tabs.filter((tab) => tab.scheme && tab.result).map((tab) => ({ scheme: tab.scheme, filename: tab.result }));
   if (!items.length) {
-    state.comparison = { items: [], tables: { capacity: [], energy: [], safety: [] }, curves: [], series: {} };
+    state.comparison = { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} };
   } else {
     state.comparison = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
   }
@@ -194,8 +229,11 @@ async function refreshComparisonData() {
   }
   state.hoverIndex = null;
   renderComparisonTables();
-  renderCurveNameList();
-  renderComparisonCurveChart();
+  state.comparisonCurveViewer?.setData(state.comparison);
+  if (!state.comparisonCurveViewer) {
+    renderCurveNameList();
+    renderComparisonCurveChart();
+  }
 }
 
 function renderComparisonTables() {
@@ -217,9 +255,13 @@ function renderTable(id, rows, emptyText) {
 }
 
 function renderCurveNameList() {
+  if (state.comparisonCurveViewer) {
+    state.comparisonCurveViewer.render();
+    return;
+  }
   const target = document.getElementById("curveNameList");
   if (!state.comparison.curves.length) {
-    target.innerHTML = '<div class="empty-summary">暂无8760曲线</div>';
+    target.innerHTML = '<div class="empty-summary">暂无小时级曲线</div>';
     return;
   }
   target.innerHTML = state.comparison.curves
@@ -268,11 +310,15 @@ function selectedCurveSeries() {
 }
 
 function renderComparisonCurveChart() {
+  if (state.comparisonCurveViewer) {
+    state.comparisonCurveViewer.render();
+    return;
+  }
   const target = document.getElementById("comparisonCurveChart");
   const curveNames = selectedCurveNames();
   const series = selectedCurveSeries();
   if (!curveNames.length || !series.length) {
-    target.innerHTML = '<div class="empty-summary">请选择8760曲线</div>';
+    target.innerHTML = '<div class="empty-summary">请选择小时级曲线</div>';
     return;
   }
   const width = 1080;
