@@ -4,6 +4,7 @@ import sys
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -85,6 +86,22 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(names, ["方案A", "方案C"])
         self.assertTrue((self.tmp_dir / "方案C" / "parameters.xlsx").exists())
         self.assertFalse((self.tmp_dir / "方案B").exists())
+
+    def test_copy_scheme_can_overwrite_existing_target_when_requested(self):
+        source = self.store.create_scheme("方案A")
+        target = self.store.create_scheme("方案B")
+        source["time_series"][0]["load"] = 321
+        target["time_series"][0]["load"] = 123
+        self.store.write_scheme("方案A", source)
+        self.store.write_scheme("方案B", target)
+
+        with self.assertRaises(FileExistsError):
+            self.store.copy_scheme("方案A", "方案B")
+
+        copied = self.store.copy_scheme("方案A", "方案B", overwrite=True)
+
+        self.assertEqual(copied["scheme"], "方案B")
+        self.assertEqual(copied["time_series"][0]["load"], 321)
 
     def test_delete_scheme_removes_scheme_folder(self):
         self.store.create_scheme("方案A")
@@ -271,7 +288,7 @@ class PlanningStoreTest(unittest.TestCase):
                 continue
             device_sheet = workbook.create_sheet(sheet_name)
             device_sheet.append(headers)
-        workbook.save(workbook_path)
+        save_test_workbook_over(workbook, workbook_path)
 
         payload = self.store.read_scheme("方案A")
 
@@ -297,7 +314,7 @@ class PlanningStoreTest(unittest.TestCase):
         planning_sheet = workbook.create_sheet("规划参数")
         planning_sheet.append(["diesel_price", "planning_load_factor", "green_power_ratio_lower"])
         planning_sheet.append([1.2, 1.1, 0.2])
-        workbook.save(workbook_path)
+        save_test_workbook_over(workbook, workbook_path)
 
         payload = self.store.read_scheme("方案A")
         row = payload["planning_parameters"][0]
@@ -331,7 +348,7 @@ class PlanningStoreTest(unittest.TestCase):
         planning_sheet = workbook.create_sheet("规划参数")
         planning_sheet.append(["diesel_price", "load_disturbance_factor"])
         planning_sheet.append([1.2, 0.12])
-        workbook.save(workbook_path)
+        save_test_workbook_over(workbook, workbook_path)
 
         payload = self.store.read_scheme("方案A")
         row = payload["planning_parameters"][0]
@@ -360,7 +377,7 @@ class PlanningStoreTest(unittest.TestCase):
         planning_sheet = workbook.create_sheet("规划参数")
         planning_sheet.append(["storage_charge_efficiency", "storage_discharge_efficiency"])
         planning_sheet.append([0.91, 0.89])
-        workbook.save(workbook_path)
+        save_test_workbook_over(workbook, workbook_path)
 
         payload = self.store.read_scheme("方案A")
 
@@ -396,7 +413,7 @@ class PlanningStoreTest(unittest.TestCase):
             "quantity_upper",
         ])
         pv_sheet.append(["旧光伏", 50, 10, 90, 3.5, 1, 2, 4, 5])
-        workbook.save(workbook_path)
+        save_test_workbook_over(workbook, workbook_path)
 
         payload = self.store.read_scheme("方案A")
 
@@ -465,6 +482,26 @@ class PlanningStoreTest(unittest.TestCase):
 
         self.assertEqual(saved["diesel_generators"][0]["name"], "柴发1")
 
+    def test_write_scheme_retries_when_existing_workbook_is_locked_temporarily(self):
+        self.store.create_scheme("方案A")
+        payload = self.store.read_scheme("方案A")
+        payload["time_series"][0]["load"] = 456
+        original_replace = Path.replace
+        calls = {"count": 0}
+
+        def flaky_replace(self, target):
+            if Path(self).name == f".{planning_store.WORKBOOK_NAME}.tmp":
+                calls["count"] += 1
+                if calls["count"] == 1:
+                    raise PermissionError("simulated workbook lock")
+            return original_replace(self, target)
+
+        with patch.object(Path, "replace", new=flaky_replace):
+            self.store.write_scheme("方案A", payload)
+
+        self.assertGreaterEqual(calls["count"], 2)
+        self.assertEqual(self.store.read_scheme("方案A")["time_series"][0]["load"], 456)
+
     def test_validate_time_series_messages_use_display_label(self):
         payload = planning_store.default_payload("方案A")
         payload["time_series"] = payload["time_series"][:12]
@@ -529,6 +566,15 @@ def corrupt_zip_member(path: Path, member_name: str) -> None:
             raise AssertionError(f"cannot read member byte: {member_name}")
         handle.seek(-1, 1)
         handle.write(bytes([original[0] ^ 0xFF]))
+
+
+def save_test_workbook_over(workbook: Workbook, workbook_path: Path) -> None:
+    tmp_path = workbook_path.with_name(f".{workbook_path.name}.test-tmp")
+    try:
+        planning_store.file_ops.save_workbook_with_retry(workbook, tmp_path, "测试参数文件")
+        planning_store.replace_workbook_with_retry(tmp_path, workbook_path)
+    finally:
+        workbook.close()
 
 
 if __name__ == "__main__":

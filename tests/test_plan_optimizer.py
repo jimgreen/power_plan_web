@@ -151,16 +151,24 @@ class PlanOptimizerTest(unittest.TestCase):
 
     def test_planning_optimization_uses_unit_commitment_binaries(self):
         payload = self._payload()
+        payload["photovoltaics"][0].update(
+            {
+                "capacity": 8,
+                "quantity_lower": 0,
+                "quantity_upper": 1,
+            }
+        )
         payload["diesel_generators"][0].update(
             {
                 "capacity": 10,
                 "power_upper": 10,
                 "power_lower": 2,
+                "fuel_rate": 0.5,
                 "quantity_lower": 0,
                 "quantity_upper": 2,
             }
         )
-        payload["storage_pcs"][0].update({"power_capacity": 10, "quantity_lower": 0, "quantity_upper": 1})
+        payload["storage_pcs"][0].update({"power_capacity": 10, "quantity_lower": 0, "quantity_upper": 1, "is_grid_forming": 1})
         payload["storage_battery_packs"][0].update({"battery_capacity": 20, "quantity_lower": 0, "quantity_upper": 1})
         payload["hydrogen_electrolyzers"][0].update(
             {
@@ -170,15 +178,39 @@ class PlanOptimizerTest(unittest.TestCase):
                 "quantity_upper": 2,
             }
         )
+        payload["fuel_cells"][0].update({"power_capacity": 4, "quantity_lower": 0, "quantity_upper": 1})
+        payload["planning_parameters"][0]["diesel_price"] = 2
+        payload["time_series"][0]["solar_irradiance"] = 1000
         model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        captured = {}
 
         def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["objective"] = c.copy()
             return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
 
         with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
             plan_optimizer.solve_planning_model(model)
 
         variables = model["variables"]
+        objective = captured["objective"]
+
+        def objective_cost(key):
+            return objective[variables[key]]
+
+        self.assertEqual(objective_cost(("diesel_power", 0, 0)), 0.001)
+        self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
+        self.assertEqual(objective_cost(("diesel_on_unit", 0, 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
+        self.assertEqual(objective_cost(("electrolyzer_on_unit", 0, 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
+        for key in (
+            ("wind_curtailed", 0),
+            ("pv_curtailed", 0),
+            ("storage_charge", 0),
+            ("storage_discharge", 0),
+            ("grid_storage_on", 0, 0, 0),
+            ("electrolyzer_power", 0, 0),
+            ("fuel_cell_power", 0, 0),
+        ):
+            self.assertEqual(objective_cost(key), 0.0)
         for unit in range(2):
             self.assertIn(("diesel_on_unit", 0, 0, unit), variables)
             self.assertIn(("electrolyzer_on_unit", 0, 0, unit), variables)

@@ -37,8 +37,6 @@ VARIABLE_COUNT = len(VARIABLES)
 LOAD_SHED_PENALTY = 1_000_000.0
 DIESEL_ON_PENALTY = 0.001
 ELECTROLYZER_ON_PENALTY = 0.0001
-CURTAILMENT_PENALTY = 0.00001
-CYCLING_PENALTY = 0.0001
 ENERGY_AGGREGATE_FIELDS = [
     "load_energy",
     "diesel_energy",
@@ -286,6 +284,11 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
         1.0,
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
     )
+    raw_time_limit_minutes = planning_parameters.get(
+        "optimization_time_limit_minutes",
+        numeric(planning_parameters.get("optimization_time_limit_seconds"), 3600) / 60,
+    )
+    optimization_time_limit_minutes = int(min(120, max(10, round(numeric(raw_time_limit_minutes, 60)))))
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
     capacities = capacities_from_planning_rows(planning_result_rows)
     device_params = first_device_params(scheme_payload)
@@ -377,6 +380,7 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
         "fuel_cell_power_capacity": capacities["fuel_cell_power_capacity"],
         "initial_storage_soc_ratio": initial_storage_soc_ratio,
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
+        "optimization_time_limit_seconds": optimization_time_limit_minutes * 60,
         "storage_charge_efficiency": storage_charge_efficiency,
         "storage_discharge_efficiency": storage_discharge_efficiency,
         "storage_self_discharge_rate": storage_self_discharge_rate,
@@ -512,25 +516,24 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
         builder.add_var(("diesel_power", hour), 0.0, max(0.0, model["diesel_power_upper"]), cost=1.0)
         builder.add_var(("wind_power", hour), 0.0, max(0.0, model["wind_available"][hour]))
         builder.add_var(("pv_power", hour), 0.0, max(0.0, model["pv_available"][hour]))
-        builder.add_var(("storage_charge", hour), 0.0, max(0.0, model["storage_power_capacity"]), cost=CYCLING_PENALTY)
-        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, model["storage_power_capacity"]), cost=CYCLING_PENALTY)
+        builder.add_var(("storage_charge", hour), 0.0, max(0.0, model["storage_power_capacity"]))
+        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, model["storage_power_capacity"]))
         builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_discharge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_soc", hour), 0.0, max(0.0, model["storage_energy_capacity"]))
-        builder.add_var(("electrolyzer_power", hour), 0.0, max(0.0, model["electrolyzer_power_upper"]), cost=CYCLING_PENALTY)
+        builder.add_var(("electrolyzer_power", hour), 0.0, max(0.0, model["electrolyzer_power_upper"]))
         builder.add_var(("hydrogen_storage", hour), 0.0, max(0.0, model["hydrogen_tank_capacity"]))
-        builder.add_var(("fuel_cell_power", hour), 0.0, max(0.0, model["fuel_cell_power_capacity"]), cost=CYCLING_PENALTY)
+        builder.add_var(("fuel_cell_power", hour), 0.0, max(0.0, model["fuel_cell_power_capacity"]))
         builder.add_var(
             ("curtailed_power", hour),
             0.0,
             max(0.0, model["wind_available"][hour] + model["pv_available"][hour]),
-            cost=CURTAILMENT_PENALTY,
         )
         builder.add_var(("unmet_load", hour), 0.0, max(0.0, loads[hour]), cost=LOAD_SHED_PENALTY)
         for unit in range(model["diesel_units"]):
             builder.add_var(("diesel_on_unit", hour, unit), 0.0, 1.0, integer=True, cost=DIESEL_ON_PENALTY)
         for unit in range(model["grid_storage_units"]):
-            builder.add_var(("grid_storage_on_unit", hour, unit), 0.0, 1.0, integer=True, cost=CYCLING_PENALTY)
+            builder.add_var(("grid_storage_on_unit", hour, unit), 0.0, 1.0, integer=True)
             builder.add_var(("grid_storage_up_available_unit", hour, unit), 0.0, 1.0, integer=True)
             builder.add_var(("grid_storage_down_available_unit", hour, unit), 0.0, 1.0, integer=True)
         for unit in range(model["electrolyzer_units"]):
@@ -701,7 +704,7 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
     result = dispatch_milp.solve_built_milp(
         builder,
         options={
-            "time_limit": 120,
+            "time_limit": model["optimization_time_limit_seconds"],
             "mip_rel_gap": 0.01,
             "disp": False,
             "solver_log": True,
@@ -844,7 +847,7 @@ def capacities_from_planning_rows(rows: list[dict[str, Any]]) -> dict[str, float
     }
     for row in rows or []:
         device_type = str(row.get("设备类型", ""))
-        total = numeric(row.get("总容量"), numeric(row.get("设计台数"), 0) * numeric(row.get("单台容量"), 0))
+        total = planning_row_total_capacity(row)
         if "柴" in device_type:
             capacities["diesel_capacity"] += total
         elif "风" in device_type:
@@ -864,6 +867,12 @@ def capacities_from_planning_rows(rows: list[dict[str, Any]]) -> dict[str, float
     if capacities["storage_power_capacity"] <= 0 and capacities["storage_energy_capacity"] > 0:
         capacities["storage_power_capacity"] = capacities["storage_energy_capacity"]
     return capacities
+
+
+def planning_row_total_capacity(row: dict[str, Any]) -> float:
+    if "设计台数" in row and "单台容量" in row:
+        return numeric(row.get("设计台数"), 0) * numeric(row.get("单台容量"), 0)
+    return numeric(row.get("总容量"), 0)
 
 
 def first_device_params(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:

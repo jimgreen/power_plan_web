@@ -480,6 +480,54 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(result["totals"]["unmet_load_energy"], 0)
         self.assertTrue(any("混合整数线性优化" in item["message"] for item in events))
 
+    def test_estimate_dispatch_uses_surplus_renewable_hydrogen_to_reduce_later_diesel(self):
+        payload = server.planning_store.default_payload("方案A")
+        payload["time_series"] = payload["time_series"][:2]
+        payload["time_series"][0].update({"wind_speed": 12, "solar_irradiance": 0, "load": 0, "temperature": 20})
+        payload["time_series"][1].update({"wind_speed": 0, "solar_irradiance": 0, "load": 40, "temperature": 20})
+        payload["diesel_generators"][0].update({"capacity": 100, "power_lower": 0, "power_upper": 100})
+        payload["hydrogen_electrolyzers"][0].update(
+            {"power_capacity": 100, "power_lower": 0, "electric_to_hydrogen_efficiency": 1}
+        )
+        payload["fuel_cells"][0].update({"power_capacity": 100, "hydrogen_to_electric_efficiency": 1})
+        payload["hydrogen_tanks"][0].update({"hydrogen_tank_capacity": 200, "self_discharge_rate": 0})
+        result_rows = [
+            {"设备类型": "柴发", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+            {"设备类型": "风机", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+            {"设备类型": "电制氢", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+            {"设备类型": "储氢罐", "设计台数": 1, "单台容量": 200, "总容量": 200, "单位": "Nm3"},
+            {"设备类型": "燃料电池", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+        ]
+
+        dispatch_rows = estimate.solve_dispatch_model(estimate.build_dispatch_model(payload, result_rows))
+
+        self.assertGreater(dispatch_rows[0]["hydrogen_production_power"], 0)
+        self.assertGreater(dispatch_rows[0]["hydrogen_storage"], 100)
+        self.assertGreater(dispatch_rows[1]["fuel_cell_power"], 0)
+        self.assertLess(dispatch_rows[1]["diesel_power"], 40)
+
+    def test_estimate_dispatch_uses_time_limit_from_planning_parameters(self):
+        payload = server.planning_store.default_payload("方案A")
+        payload["time_series"] = payload["time_series"][:1]
+        payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 45
+        result_rows = [
+            {"设备类型": "柴发", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kW"},
+            {"设备类型": "电制氢", "设计台数": 1, "单台容量": 10, "总容量": 10, "单位": "kW"},
+            {"设备类型": "储氢罐", "设计台数": 1, "单台容量": 20, "总容量": 20, "单位": "Nm3"},
+            {"设备类型": "燃料电池", "设计台数": 1, "单台容量": 10, "总容量": 10, "单位": "kW"},
+        ]
+        model = estimate.build_dispatch_model(payload, result_rows)
+        seen_options = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            seen_options.update(options)
+            return SimpleNamespace(success=True, x=lower_bounds.copy(), fun=0.0, message="ok")
+
+        with patch.object(estimate, "solve_milp", side_effect=fake_solve_milp):
+            estimate.solve_dispatch_model(model)
+
+        self.assertEqual(seen_options["time_limit"], 2700)
+
     def test_estimate_dispatch_enforces_storage_daily_and_hydrogen_annual_cycle(self):
         payload = server.planning_store.default_payload("方案A")
         for row in payload["time_series"]:
@@ -524,6 +572,21 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(capacities["storage_energy_capacity"], 100)
         self.assertEqual(capacities["fuel_cell_power_capacity"], 20)
 
+    def test_estimate_capacity_mapping_recomputes_total_capacity_from_count_and_unit_capacity(self):
+        result_rows = [
+            {"设备类型": "电制氢", "设计台数": 1, "单台容量": 80, "总容量": 0, "单位": "kW"},
+            {"设备类型": "储氢罐", "设计台数": 1, "单台容量": 1000, "总容量": 0, "单位": "Nm3"},
+            {"设备类型": "燃料电池", "设计台数": 1, "单台容量": 50, "总容量": 0, "单位": "kW"},
+            {"设备类型": "柴发", "设计台数": 0, "单台容量": 300, "总容量": 300, "单位": "kW"},
+        ]
+
+        capacities = estimate.capacities_from_planning_rows(result_rows)
+
+        self.assertEqual(capacities["electrolyzer_power_capacity"], 80)
+        self.assertEqual(capacities["hydrogen_tank_capacity"], 1000)
+        self.assertEqual(capacities["fuel_cell_power_capacity"], 50)
+        self.assertEqual(capacities["diesel_capacity"], 0)
+
     def test_estimate_dispatch_uses_unit_binaries_and_initial_storage_ratios(self):
         payload = server.planning_store.default_payload("方案A")
         payload["time_series"] = payload["time_series"][:1]
@@ -549,16 +612,37 @@ class PowerPlanServerTest(unittest.TestCase):
             {"设备类型": "储能电池组", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kWh"},
             {"设备类型": "电制氢", "设计台数": 2, "单台容量": 30, "总容量": 60, "单位": "kW"},
             {"设备类型": "储氢罐", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "Nm3"},
+            {"设备类型": "燃料电池", "设计台数": 1, "单台容量": 20, "总容量": 20, "单位": "kW"},
         ]
         model = estimate.build_dispatch_model(payload, result_rows)
+        captured = {}
 
         def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["objective"] = c.copy()
             return SimpleNamespace(success=True, x=lower_bounds.copy(), fun=0.0, message="ok")
 
         with patch.object(estimate, "solve_milp", side_effect=fake_solve_milp):
             estimate.solve_dispatch_model(model)
 
         variables = model["variables"]
+        objective = captured["objective"]
+
+        def objective_cost(key):
+            return objective[variables[key]]
+
+        self.assertEqual(objective_cost(("diesel_power", 0)), 1.0)
+        self.assertEqual(objective_cost(("unmet_load", 0)), estimate.LOAD_SHED_PENALTY)
+        self.assertEqual(objective_cost(("diesel_on_unit", 0, 0)), estimate.DIESEL_ON_PENALTY)
+        self.assertEqual(objective_cost(("electrolyzer_on_unit", 0, 0)), estimate.ELECTROLYZER_ON_PENALTY)
+        for key in (
+            ("storage_charge", 0),
+            ("storage_discharge", 0),
+            ("electrolyzer_power", 0),
+            ("fuel_cell_power", 0),
+            ("curtailed_power", 0),
+            ("grid_storage_on_unit", 0, 0),
+        ):
+            self.assertEqual(objective_cost(key), 0.0)
         for unit in range(2):
             self.assertIn(("diesel_on_unit", 0, unit), variables)
             self.assertIn(("electrolyzer_on_unit", 0, unit), variables)
@@ -1165,6 +1249,8 @@ class PowerPlanServerTest(unittest.TestCase):
             planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
             planning_sheet.append(["柴发", 2, 320, 640, "kW"])
             planning_sheet.append(["储能", 4, 250, 1000, "kWh"])
+            planning_sheet.append(["电制氢", 1, 80, 0, "kW"])
+            planning_sheet.append(["燃料电池", 0, 50, 50, "kW"])
             create_workbook.save(source_path)
 
             broken_path = planning_root / "方案A" / "aaa_results.xlsx"
@@ -1186,6 +1272,8 @@ class PowerPlanServerTest(unittest.TestCase):
                 [
                     {"设备类型": "柴发", "设计台数": 2, "单台容量": 320, "总容量": 640, "单位": "kW"},
                     {"设备类型": "储能", "设计台数": 4, "单台容量": 250, "总容量": 1000, "单位": "kWh"},
+                    {"设备类型": "电制氢", "设计台数": 1, "单台容量": 80, "总容量": 80, "单位": "kW"},
+                    {"设备类型": "燃料电池", "设计台数": 0, "单台容量": 50, "总容量": 0, "单位": "kW"},
                 ],
             )
 
@@ -1335,8 +1423,11 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(saved_with_counts["selected"], "custom_results.xlsx")
             saved_counts = {row["设备类型"]: row["设计台数"] for row in saved_with_counts["planning_result_rows"]}
+            saved_totals = {row["设备类型"]: row["总容量"] for row in saved_with_counts["planning_result_rows"]}
             self.assertEqual(saved_counts["柴发"], 5)
             self.assertEqual(saved_counts["储能"], 7)
+            self.assertEqual(saved_totals["柴发"], 1600)
+            self.assertEqual(saved_totals["储能"], 1750)
             workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
             try:
                 workbook_counts = {
@@ -1344,10 +1435,152 @@ class PowerPlanServerTest(unittest.TestCase):
                     for row in workbook["规划结果"].iter_rows(min_row=2, values_only=True)
                     if row and row[0]
                 }
+                workbook_totals = {
+                    row[0]: row[3]
+                    for row in workbook["规划结果"].iter_rows(min_row=2, values_only=True)
+                    if row and row[0]
+                }
                 self.assertEqual(workbook_counts["柴发"], 5)
                 self.assertEqual(workbook_counts["储能"], 7)
+                self.assertEqual(workbook_totals["柴发"], 1600)
+                self.assertEqual(workbook_totals["储能"], 1750)
             finally:
                 workbook.close()
+
+            result_path_for_retry = planning_root / "方案A" / "custom_results.xlsx"
+            replace_calls = {"count": 0}
+            original_replace = Path.replace
+
+            def flaky_replace(self, target):
+                if Path(self).name == f".{result_path_for_retry.name}.tmp":
+                    replace_calls["count"] += 1
+                    if replace_calls["count"] == 1:
+                        raise PermissionError("simulated workbook lock")
+                return original_replace(self, target)
+
+            with patch.object(Path, "replace", new=flaky_replace):
+                status, headers, body = server.handle_evaluation_results_api_path(
+                    "/api/evaluation/results",
+                    "POST",
+                    json.dumps(
+                        {
+                            "scheme": "方案A",
+                            "action": "save",
+                            "filename": "custom_results.xlsx",
+                            "planning_result_rows": [{"设备类型": "柴发", "设计台数": 6}],
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+            retried_save = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(retried_save["selected"], "custom_results.xlsx")
+            self.assertGreaterEqual(replace_calls["count"], 2)
+            retried_counts = {row["设备类型"]: row["设计台数"] for row in retried_save["planning_result_rows"]}
+            self.assertEqual(retried_counts["柴发"], 6)
+
+            def always_locked_replace(self, target):
+                if Path(self).name == f".{result_path_for_retry.name}.tmp":
+                    raise PermissionError("still locked")
+                return original_replace(self, target)
+
+            with patch.object(Path, "replace", new=always_locked_replace), patch.object(server.file_ops.time, "sleep", return_value=None):
+                status, headers, body = server.handle_evaluation_results_api_path(
+                    "/api/evaluation/results",
+                    "POST",
+                    json.dumps(
+                        {
+                            "scheme": "方案A",
+                            "action": "save",
+                            "filename": "custom_results.xlsx",
+                            "planning_result_rows": [{"设备类型": "柴发", "设计台数": 6}],
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+            locked = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 409)
+            self.assertEqual(locked["error"], "file_locked")
+            self.assertIn("结果文件被占用", locked["message"])
+            self.assertIn("请关闭", locked["message"])
+
+            original_copy2 = server.file_ops.shutil.copy2
+            copy_calls = {"count": 0}
+
+            def flaky_copy2(source, target):
+                if Path(target).name == "copyretry_results.xlsx":
+                    copy_calls["count"] += 1
+                    if copy_calls["count"] == 1:
+                        raise PermissionError("simulated copy lock")
+                return original_copy2(source, target)
+
+            with patch.object(server.file_ops.shutil, "copy2", side_effect=flaky_copy2):
+                status, headers, body = server.handle_evaluation_results_api_path(
+                    "/api/evaluation/results",
+                    "POST",
+                    json.dumps(
+                        {
+                            "scheme": "方案A",
+                            "action": "copy",
+                            "filename": "custom_results.xlsx",
+                            "target_name": "copyretry",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+            retried_copy = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(retried_copy["selected"], "copyretry_results.xlsx")
+            self.assertGreaterEqual(copy_calls["count"], 2)
+
+            def always_locked_copy2(source, target):
+                if Path(target).name == "copylocked_results.xlsx":
+                    raise PermissionError("copy target locked")
+                return original_copy2(source, target)
+
+            with patch.object(server.file_ops.shutil, "copy2", side_effect=always_locked_copy2), patch.object(server.file_ops.time, "sleep", return_value=None):
+                status, headers, body = server.handle_evaluation_results_api_path(
+                    "/api/evaluation/results",
+                    "POST",
+                    json.dumps(
+                        {
+                            "scheme": "方案A",
+                            "action": "copy",
+                            "filename": "custom_results.xlsx",
+                            "target_name": "copylocked",
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+            locked_copy = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 409)
+            self.assertEqual(locked_copy["error"], "file_locked")
+            self.assertIn("结果文件被占用", locked_copy["message"])
+            self.assertIn("无法复制", locked_copy["message"])
+
+            original_unlink = Path.unlink
+            unlink_calls = {"count": 0}
+
+            def flaky_unlink(self, *args, **kwargs):
+                if Path(self).name == "copyretry_results.xlsx":
+                    unlink_calls["count"] += 1
+                    if unlink_calls["count"] == 1:
+                        raise PermissionError("simulated delete lock")
+                return original_unlink(self, *args, **kwargs)
+
+            with patch.object(Path, "unlink", new=flaky_unlink):
+                status, headers, body = server.handle_evaluation_results_api_path(
+                    "/api/evaluation/results",
+                    "POST",
+                    json.dumps(
+                        {"scheme": "方案A", "action": "delete", "filename": "copyretry_results.xlsx"},
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+            retried_delete = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertGreaterEqual(unlink_calls["count"], 2)
+            self.assertNotIn("copyretry_results.xlsx", [item["name"] for item in retried_delete["results"]])
 
             for invalid_count in (-1, 1.5, "2.2"):
                 status, headers, body = server.handle_evaluation_results_api_path(
@@ -1579,6 +1812,24 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
 
             status, headers, body = server.handle_planning_api_path(
+                "/api/planning/schemes/copy",
+                "POST",
+                json.dumps({"source": "方案A", "target": "方案B"}, ensure_ascii=False).encode("utf-8"),
+            )
+            duplicate_copy = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 400)
+            self.assertIn("目标方案已存在", duplicate_copy["message"])
+
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/schemes/copy",
+                "POST",
+                json.dumps({"source": "方案A", "target": "方案B", "overwrite": True}, ensure_ascii=False).encode("utf-8"),
+            )
+            overwritten_copy = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(overwritten_copy["scheme"], "方案B")
+
+            status, headers, body = server.handle_planning_api_path(
                 "/api/planning/schemes/rename",
                 "POST",
                 json.dumps({"source": "方案B", "target": "方案C"}, ensure_ascii=False).encode("utf-8"),
@@ -1588,6 +1839,37 @@ class PowerPlanServerTest(unittest.TestCase):
             status, headers, body = server.handle_planning_api_path("/api/planning/schemes", "GET", b"")
             names = [item["name"] for item in json.loads(body.decode("utf-8"))["schemes"]]
             self.assertEqual(names, ["方案A", "方案C"])
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_planning_api_reports_locked_parameter_file_as_conflict(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_planning_api_locked"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            payload = server.PLANNING_STORE.create_scheme("方案A")
+            payload["time_series"][0]["load"] = 789
+
+            def always_locked_replace(self, target):
+                if Path(self).name == f".{server.planning_store.WORKBOOK_NAME}.tmp":
+                    raise PermissionError("still locked")
+                return Path.replace(self, target)
+
+            with patch.object(Path, "replace", new=always_locked_replace), patch.object(server.file_ops.time, "sleep", return_value=None):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/schemes/方案A",
+                    "PUT",
+                    json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                )
+
+            locked = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 409)
+            self.assertEqual(locked["error"], "file_locked")
+            self.assertIn("参数文件被占用", locked["message"])
+            self.assertIn("请关闭", locked["message"])
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -2822,6 +3104,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("normalizeSchemeName", script)
         self.assertIn("\\s\\u0000-\\u001f", script)
         self.assertIn("方案名称已存在", script)
+        self.assertIn("是否覆盖", script)
+        self.assertIn("payload.overwrite = true", script)
         self.assertIn("deleteScheme", script)
         self.assertIn("DELETE", script)
         self.assertIn("确认删除方案", script)

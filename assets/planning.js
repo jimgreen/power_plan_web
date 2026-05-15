@@ -479,13 +479,15 @@ async function copyScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
   const target = normalizeSchemeName(prompt("请输入复制后的方案名称", `${state.currentScheme}_副本`));
   if (!target) return;
+  const payload = { source: state.currentScheme, target };
   if (schemeNameExists(target)) {
-    alert("方案名称已存在，请使用其他名称");
-    return;
+    const confirmed = confirm(`方案名称已存在：${target}\n是否覆盖？`);
+    if (!confirmed) return;
+    payload.overwrite = true;
   }
   const copied = await api("/api/planning/schemes/copy", {
     method: "POST",
-    body: JSON.stringify({ source: state.currentScheme, target }),
+    body: JSON.stringify(payload),
   }).catch(showError);
   if (!copied) return;
   state.currentScheme = copied.scheme;

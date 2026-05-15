@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-import shutil
-import time
 import unicodedata
 import zipfile
 import gc
@@ -16,6 +14,8 @@ from typing import Any
 from xml.etree import ElementTree
 
 from openpyxl import Workbook, load_workbook
+
+import file_ops
 
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -471,14 +471,16 @@ class PlanningStore:
         self.write_scheme(clean, default_payload(clean))
         return self.read_scheme(clean)
 
-    def copy_scheme(self, source: str, target: str) -> dict[str, Any]:
+    def copy_scheme(self, source: str, target: str, overwrite: bool = False) -> dict[str, Any]:
         source_dir = self.scheme_dir(source)
         target_dir = self.scheme_dir(target)
         if not source_dir.exists():
             raise FileNotFoundError(f"源方案不存在: {source}")
         if target_dir.exists():
-            raise FileExistsError(f"目标方案已存在: {target}")
-        shutil.copytree(source_dir, target_dir)
+            if not overwrite:
+                raise FileExistsError(f"目标方案已存在: {target}")
+            file_ops.delete_directory_with_retry(target_dir, "目标方案目录")
+        file_ops.copy_directory_with_retry(source_dir, target_dir, "方案目录")
         return self.read_scheme(target)
 
     def rename_scheme(self, source: str, target: str) -> dict[str, Any]:
@@ -488,7 +490,7 @@ class PlanningStore:
             raise FileNotFoundError(f"源方案不存在: {source}")
         if target_dir.exists():
             raise FileExistsError(f"目标方案已存在: {target}")
-        source_dir.rename(target_dir)
+        file_ops.replace_directory_with_retry(source_dir, target_dir, "方案目录")
         return self.read_scheme(target)
 
     def delete_scheme(self, name: str) -> dict[str, str]:
@@ -496,7 +498,7 @@ class PlanningStore:
         folder = self.scheme_dir(clean)
         if not folder.exists() or not folder.is_dir():
             raise FileNotFoundError(f"方案不存在: {clean}")
-        shutil.rmtree(folder)
+        file_ops.delete_directory_with_retry(folder, "方案目录")
         return {"deleted": clean}
 
     def write_scheme(self, name: str, payload: dict[str, Any]) -> None:
@@ -508,10 +510,10 @@ class PlanningStore:
         tmp_path = folder / f".{WORKBOOK_NAME}.tmp"
         final_path = folder / WORKBOOK_NAME
         try:
-            workbook.save(tmp_path)
+            file_ops.save_workbook_with_retry(workbook, tmp_path, "参数文件")
         finally:
             workbook.close()
-        tmp_path.replace(final_path)
+        replace_workbook_with_retry(tmp_path, final_path)
 
     def read_scheme(self, name: str) -> dict[str, Any]:
         clean = validate_scheme_name(name)
@@ -742,19 +744,10 @@ def repair_time_series_sheet(path: Path, reason: str) -> dict[str, str]:
     replacement_xml = build_time_series_sheet_xml().encode("utf-8")
     tmp_path = path.with_name(f".{path.name}.repairing")
     try:
-        with zipfile.ZipFile(path, "r") as source, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
-            replaced = False
-            for info in source.infolist():
-                if info.filename == sheet_member:
-                    target.writestr(info, replacement_xml)
-                    replaced = True
-                    continue
-                target.writestr(info, source.read(info.filename))
-            if not replaced:
-                raise ValueError(f"未找到8760时序数据工作表: {sheet_member}")
+        write_repaired_time_series_workbook(path, tmp_path, sheet_member, replacement_xml)
         replace_workbook_with_retry(tmp_path, path)
     except Exception:
-        tmp_path.unlink(missing_ok=True)
+        file_ops.delete_file_if_exists_with_retry(tmp_path, "参数文件修复临时文件")
         raise
     return {
         "level": "warn",
@@ -766,17 +759,32 @@ def repair_time_series_sheet(path: Path, reason: str) -> dict[str, str]:
     }
 
 
+def write_repaired_time_series_workbook(source_path: Path, tmp_path: Path, sheet_member: str, replacement_xml: bytes) -> None:
+    def write_zip() -> None:
+        with zipfile.ZipFile(source_path, "r") as source, zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            replaced = False
+            for info in source.infolist():
+                if info.filename == sheet_member:
+                    target.writestr(info, replacement_xml)
+                    replaced = True
+                    continue
+                target.writestr(info, source.read(info.filename))
+            if not replaced:
+                raise ValueError(f"未找到8760时序数据工作表: {sheet_member}")
+
+    file_ops.retry_file_operation(
+        write_zip,
+        f"参数文件修复临时文件被占用，无法写入：{tmp_path.name}。请关闭正在打开的文件或预览窗口后重试。",
+    )
+
+
 def replace_workbook_with_retry(source: Path, target: Path, attempts: int = 20, delay_seconds: float = 0.1) -> None:
-    last_error: PermissionError | None = None
-    for _ in range(attempts):
-        try:
-            source.replace(target)
-            return
-        except PermissionError as exc:
-            last_error = exc
-            gc.collect()
-            time.sleep(delay_seconds)
-    raise PermissionError(f"参数文件被占用，无法写回修复后的工作簿：{target}") from last_error
+    file_ops.retry_file_operation(
+        lambda: source.replace(target),
+        f"参数文件被占用，无法保存：{target.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
+        attempts=attempts,
+        delay_seconds=delay_seconds,
+    )
 
 
 def backup_corrupted_workbook(path: Path) -> Path:
@@ -786,7 +794,7 @@ def backup_corrupted_workbook(path: Path) -> Path:
     while backup_path.exists():
         backup_path = path.with_name(f"{path.stem}.corrupt-{timestamp}-{counter}{path.suffix}.bak")
         counter += 1
-    shutil.copy2(path, backup_path)
+    file_ops.copy_file_with_retry(path, backup_path, "参数文件备份")
     return backup_path
 
 

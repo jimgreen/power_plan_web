@@ -18,8 +18,6 @@ LogSink = Callable[[dict[str, Any]], None]
 LOAD_SHED_PENALTY_COST = 1_000_000.0
 DIESEL_ON_COUNT_PENALTY = 0.0001
 ELECTROLYZER_ON_COUNT_PENALTY = 0.00001
-CURTAILMENT_COST = 0.000001
-CYCLING_COST = 0.000001
 
 DEVICE_SPECS: dict[str, dict[str, str]] = {
     "diesel_generators": {"label": "柴发", "capacity_field": "capacity", "unit": "kW"},
@@ -198,12 +196,12 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         hydrogen_tank_upper = sum(device["capacity"] * device["quantity_upper"] for device in hydrogen_tank_devices)
 
         builder.add_var(("wind_power", hour), 0.0, max(0.0, wind_upper))
-        builder.add_var(("wind_curtailed", hour), 0.0, max(0.0, wind_upper), cost=CURTAILMENT_COST)
+        builder.add_var(("wind_curtailed", hour), 0.0, max(0.0, wind_upper))
         builder.add_var(("pv_power", hour), 0.0, max(0.0, pv_upper))
-        builder.add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper), cost=CURTAILMENT_COST)
+        builder.add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper))
         add_renewable_hour_variables(builder, hour, renewable_devices)
-        builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
-        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
+        builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper))
+        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper))
         builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_discharge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_soc", hour), 0.0, max(0.0, storage_energy_upper))
@@ -221,7 +219,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 builder.add_var(("diesel_on_unit", hour, device["index"], unit), 0.0, 1.0, integer=True, cost=DIESEL_ON_COUNT_PENALTY)
         for device in grid_storage_pcs_devices:
             for unit in range(device["quantity_upper"]):
-                builder.add_var(("grid_storage_on", hour, device["index"], unit), 0.0, 1.0, integer=True, cost=CYCLING_COST)
+                builder.add_var(("grid_storage_on", hour, device["index"], unit), 0.0, 1.0, integer=True)
                 builder.add_var(("grid_storage_up_available", hour, device["index"], unit), 0.0, 1.0, integer=True)
                 builder.add_var(("grid_storage_down_available", hour, device["index"], unit), 0.0, 1.0, integer=True)
         for device in electrolyzer_devices:
@@ -229,7 +227,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 ("electrolyzer_power", hour, device["index"]),
                 0.0,
                 device["capacity"] * device["quantity_upper"],
-                cost=CYCLING_COST,
             )
             for unit in range(device["quantity_upper"]):
                 builder.add_var(
@@ -244,7 +241,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 ("fuel_cell_power", hour, device["index"]),
                 0.0,
                 device["capacity"] * device["quantity_upper"],
-                cost=CYCLING_COST,
             )
 
     def qty_terms(devices: list[dict[str, Any]], coefficient_key: str = "capacity", multiplier: float = 1.0) -> dict[int, float]:
@@ -1109,8 +1105,9 @@ def dispatch_totals(dispatch_rows: list[dict[str, Any]]) -> dict[str, float]:
 
 
 def cost_summary_from_solution(model: dict[str, Any], solution: np.ndarray, totals: dict[str, float]) -> dict[str, float]:
-    # Reported costs include construction and diesel only; tiny solver
-    # tie-break penalties are intentionally excluded.
+    # Reported costs match the business objective: annualized construction
+    # cost plus diesel cost. Load-shed/startup penalties only guide feasibility
+    # and dispatch selection, so they are not displayed as economic costs.
     variables = model["variables"]
     construction_cost = 0.0
     for devices in model["device_rows"].values():

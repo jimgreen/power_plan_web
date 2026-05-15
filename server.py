@@ -16,7 +16,6 @@ import mimetypes
 import os
 import re
 import secrets
-import shutil
 import sqlite3
 import threading
 import time
@@ -41,6 +40,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 
 import estimate
+import file_ops
 import plan_optimizer
 import planning_store
 
@@ -942,8 +942,11 @@ def export_optimization_results_workbook(payload: dict) -> Path:
     result_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = build_optimization_results_workbook(payload)
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    workbook.save(tmp_path)
-    tmp_path.replace(result_path)
+    try:
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, result_path)
     return result_path
 
 
@@ -956,9 +959,21 @@ def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict])
     result_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = build_optimization_results_workbook(payload)
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    workbook.save(tmp_path)
-    tmp_path.replace(result_path)
+    try:
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, result_path)
     return result_path
+
+
+def replace_result_workbook_with_retry(source: Path, target: Path, attempts: int = 20, delay_seconds: float = 0.1) -> None:
+    file_ops.retry_file_operation(
+        lambda: source.replace(target),
+        f"结果文件被占用，无法保存：{target.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
+        attempts=attempts,
+        delay_seconds=delay_seconds,
+    )
 
 
 def build_optimization_results_workbook(payload: dict) -> Workbook:
@@ -1192,10 +1207,20 @@ def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dic
                 if header:
                     item[header] = row[index] if index < len(row) else ""
             if any(value not in (None, "") for value in item.values()):
+                normalize_planning_result_total_capacity(item)
                 result_rows.append(item)
         return result_rows
     finally:
         workbook.close()
+
+
+def normalize_planning_result_total_capacity(row: dict) -> dict:
+    if "设计台数" in row and "单台容量" in row:
+        row["总容量"] = round(
+            estimate.numeric(row.get("设计台数"), 0.0) * estimate.numeric(row.get("单台容量"), 0.0),
+            4,
+        )
+    return row
 
 
 def read_evaluation_planning_result_rows_for_response(scheme: str, filename: str) -> list[dict]:
@@ -1446,17 +1471,23 @@ def write_evaluation_planning_counts(scheme: str, filename: str, planning_rows: 
             raise ValueError("规划结果工作表缺少设备类型或设计台数列")
         device_column = headers.index("设备类型") + 1
         count_column = headers.index("设计台数") + 1
+        unit_capacity_column = headers.index("单台容量") + 1 if "单台容量" in headers else None
+        total_capacity_column = headers.index("总容量") + 1 if "总容量" in headers else None
 
         for row_index in range(2, sheet.max_row + 1):
             device_type = str(sheet.cell(row=row_index, column=device_column).value or "").strip()
             if device_type in counts_by_device:
-                sheet.cell(row=row_index, column=count_column).value = normalize_planning_count(counts_by_device[device_type])
+                count = normalize_planning_count(counts_by_device[device_type])
+                sheet.cell(row=row_index, column=count_column).value = count
+                if total_capacity_column and unit_capacity_column and count != "":
+                    unit_capacity = estimate.numeric(sheet.cell(row=row_index, column=unit_capacity_column).value, 0.0)
+                    sheet.cell(row=row_index, column=total_capacity_column).value = round(count * unit_capacity, 4)
 
         tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-        workbook.save(tmp_path)
-        tmp_path.replace(result_path)
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
     finally:
         workbook.close()
+    replace_result_workbook_with_retry(tmp_path, result_path)
     return read_evaluation_planning_result_rows(scheme, filename)
 
 
@@ -1519,7 +1550,7 @@ def handle_evaluation_results_api_path(
             if result_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
                 raise ValueError("默认结果文件不允许删除")
             if result_path.exists():
-                result_path.unlink()
+                file_ops.delete_file_with_retry(result_path, "结果文件")
             selected = selected_evaluation_result_filename(scheme)
             return _json_response(
                 {
@@ -1546,7 +1577,7 @@ def handle_evaluation_results_api_path(
                     )
                 if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
                     raise ValueError("默认结果文件不允许覆盖")
-            shutil.copy2(source_path, target_path)
+            file_ops.copy_file_with_retry(source_path, target_path, "结果文件")
             return _json_response(
                 {
                     "selected": target_path.name,
@@ -1581,6 +1612,8 @@ def handle_evaluation_results_api_path(
         raise ValueError("未知结果文件操作")
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except PermissionError as exc:
+        return _json_response({"error": "file_locked", "message": str(exc)}, HTTPStatus.CONFLICT)
     except ValueError as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -2218,6 +2251,14 @@ def _read_json_body(body: bytes) -> dict:
         raise ValueError("请求体不是合法 JSON") from exc
 
 
+def truthy_json_value(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "是"}
+
+
 def _session_cookie(token: str, max_age: int = SESSION_MAX_AGE_SECONDS) -> str:
     return f"{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}"
 
@@ -2813,7 +2854,11 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
         if path == f"{prefix}/copy" and method == "POST":
             payload = _read_json_body(body)
             return _json_response(
-                PLANNING_STORE.copy_scheme(str(payload.get("source", "")), str(payload.get("target", "")))
+                PLANNING_STORE.copy_scheme(
+                    str(payload.get("source", "")),
+                    str(payload.get("target", "")),
+                    overwrite=truthy_json_value(payload.get("overwrite")),
+                )
             )
         if path == f"{prefix}/rename" and method == "POST":
             payload = _read_json_body(body)
@@ -2840,6 +2885,8 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
         return _json_response({"error": "weather_history_error", "message": str(exc)}, HTTPStatus.BAD_GATEWAY)
     except GeocodingError as exc:
         return _json_response({"error": "geocoding_error", "message": str(exc)}, HTTPStatus.BAD_GATEWAY)
+    except PermissionError as exc:
+        return _json_response({"error": "file_locked", "message": str(exc)}, HTTPStatus.CONFLICT)
     except (ValueError, FileExistsError, FileNotFoundError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
