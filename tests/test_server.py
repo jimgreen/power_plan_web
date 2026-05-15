@@ -932,7 +932,7 @@ class PowerPlanServerTest(unittest.TestCase):
             server.EVALUATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
-    def test_optimization_overview_results_are_two_tables_with_ratio_disks(self):
+    def test_optimization_overview_results_are_two_tables_with_composition_bars(self):
         planning_root = WEB_ROOT / "tests" / "tmp_optimization_overview"
         shutil.rmtree(planning_root, ignore_errors=True)
         planning_root.mkdir(parents=True)
@@ -983,10 +983,10 @@ class PowerPlanServerTest(unittest.TestCase):
 
             disks = payload["results"]["overview_disks"]
             self.assertEqual([disk["title"] for disk in disks], ["成本构成", "电量构成"])
-            self.assertEqual(disks[0]["left_label"], "运行成本")
-            self.assertEqual(disks[0]["right_label"], "建设成本")
+            self.assertEqual(disks[0]["left_label"], "年柴油成本")
+            self.assertEqual(disks[0]["right_label"], "年均建设成本")
             self.assertEqual(disks[1]["left_label"], "柴发电量")
-            self.assertEqual(disks[1]["right_label"], "新能源电量")
+            self.assertEqual(disks[1]["right_label"], "绿电电量")
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -1224,6 +1224,121 @@ class PowerPlanServerTest(unittest.TestCase):
                 workbook.close()
         finally:
             server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_optimization_status_reads_display_results_from_result_workbook(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_optimization_status_workbook"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.OPTIMIZATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "optimization_results.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "总体指标"
+            workbook.active.append(["指标", "数值", "单位"])
+            workbook.active.append(["度电成本", 9.99, "元/kWh"])
+            planning_sheet = workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["工作簿柴发", 3, 111, 333, "kW"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["工作簿年指标", 1234, "kWh"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            green_sheet.append(["工作簿供能指标", 5678, "kWh"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy", "diesel_energy"])
+            daily_sheet.append([1, 10, 2])
+            monthly_sheet = workbook.create_sheet("供能月曲线")
+            monthly_sheet.append(["month", "load_energy", "diesel_energy"])
+            monthly_sheet.append([1, 310, 62])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            safety_sheet.append(["工作簿安全指标", 50.1, "Hz"])
+            safety_daily_sheet = workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_max", "frequency_min"])
+            safety_daily_sheet.append([1, 50.2, 49.8])
+            dispatch_sheet = workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "负荷总功率", "柴发总功率"])
+            dispatch_sheet.append([1, 100, 30])
+            workbook.save(result_path)
+            workbook.close()
+
+            status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A")
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["result_file"], str(result_path))
+            self.assertEqual(payload["metrics"][3], {"label": "度电成本", "value": 9.99, "unit": "元/kWh"})
+            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设备类型"], "工作簿柴发")
+            self.assertEqual(payload["results"]["overview_tables"][1]["rows"][0]["指标"], "工作簿年指标")
+            self.assertEqual(payload["results"]["green_table"][0]["指标"], "工作簿供能指标")
+            self.assertEqual(payload["results"]["safety_table"][0]["指标"], "工作簿安全指标")
+            self.assertEqual(payload["results"]["curves"]["green_daily"][0]["load_energy"], 10)
+            self.assertEqual(payload["results"]["curves"]["green_monthly"][0]["load_energy"], 310)
+            self.assertEqual(payload["results"]["curves"]["safety_daily"][0]["frequency_max"], 50.2)
+            self.assertEqual(payload["results"]["curves"]["green_hourly"][0]["load"], 100)
+        finally:
+            server.PLANNING_STORE = original_store
+            server.OPTIMIZATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_evaluation_status_reads_display_results_from_selected_workbook(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_status_workbook"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.EVALUATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "总体指标"
+            workbook.active.append(["指标", "数值", "单位"])
+            workbook.active.append(["柴油消耗", 8.8, "吨"])
+            planning_sheet = workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["评估柴发", 1, 200, 200, "kW"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["评估年指标", 12, "kWh"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            green_sheet.append(["评估供能指标", 34, "kWh"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy", "diesel_energy"])
+            daily_sheet.append([1, 56, 7])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            safety_sheet.append(["评估安全指标", 49.9, "Hz"])
+            safety_daily_sheet = workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_max", "frequency_min"])
+            safety_daily_sheet.append([1, 50.1, 49.9])
+            workbook.save(result_path)
+            workbook.close()
+
+            status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A&filename=case_results.xlsx")
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["result_filename"], "case_results.xlsx")
+            self.assertEqual(payload["result_file"], str(result_path))
+            self.assertEqual(payload["metrics"][3], {"label": "柴油消耗", "value": 8.8, "unit": "吨"})
+            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设备类型"], "评估柴发")
+            self.assertEqual(payload["results"]["overview_tables"][1]["rows"][0]["指标"], "评估年指标")
+            self.assertEqual(payload["results"]["green_table"][0]["指标"], "评估供能指标")
+            self.assertEqual(payload["results"]["safety_table"][0]["指标"], "评估安全指标")
+            self.assertEqual(payload["results"]["curves"]["green_daily"][0]["load_energy"], 56)
+            self.assertEqual(payload["results"]["curves"]["safety_daily"][0]["frequency_min"], 49.9)
+        finally:
+            server.PLANNING_STORE = original_store
+            server.EVALUATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_evaluation_results_api_manages_scheme_result_workbooks(self):
@@ -1936,6 +2051,61 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("找不到对应的列", error_payload["message"])
         self.assertIn("太阳辐射", error_payload["message"])
 
+    def test_planning_time_series_import_matches_fuzzy_headers_and_pads_short_files(self):
+        rows = [
+            "风速(m/s),单位面积太阳辐射(W/m^2),温度(摄氏度),用电功率(kW)",
+            "3.5,600,18,120",
+            "4.0,610,19,125",
+            "4.5,620,20,130",
+        ]
+        content = "\n".join(rows).encode("utf-8")
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/time-series/import",
+            "POST",
+            json.dumps({"filename": "short_timeseries.csv", "content_base64": base64.b64encode(content).decode("ascii")}).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["time_series_count"], 8760)
+        self.assertEqual(payload["time_series"][0]["solar_irradiance"], 600)
+        self.assertEqual(payload["time_series"][0]["temperature"], 18)
+        self.assertEqual(payload["time_series"][0]["load"], 120)
+        self.assertEqual(payload["time_series"][8759]["hour_index"], 8760)
+        self.assertEqual(payload["time_series"][8759]["datetime"], "H8760")
+        self.assertEqual(payload["time_series"][8759]["wind_speed"], 4.5)
+        self.assertEqual(payload["time_series"][8759]["solar_irradiance"], 620)
+        self.assertIn("已按最后一行自动补齐8757行", payload["message"])
+
+    def test_planning_time_series_import_fills_missing_middle_hours(self):
+        rows = [
+            "时间,风速,太阳辐照,环境温度,负荷功率",
+            "H0001,3,500,10,100",
+            "H0003,5,700,12,120",
+        ]
+        content = "\n".join(rows).encode("utf-8")
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/time-series/import",
+            "POST",
+            json.dumps({"filename": "gap_timeseries.csv", "content_base64": base64.b64encode(content).decode("ascii")}).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["time_series_count"], 8760)
+        self.assertEqual(payload["time_series"][0]["datetime"], "H0001")
+        self.assertEqual(payload["time_series"][0]["wind_speed"], 3)
+        self.assertEqual(payload["time_series"][1]["datetime"], "H0002")
+        self.assertEqual(payload["time_series"][1]["wind_speed"], 3)
+        self.assertEqual(payload["time_series"][1]["solar_irradiance"], 500)
+        self.assertEqual(payload["time_series"][2]["datetime"], "H0003")
+        self.assertEqual(payload["time_series"][2]["wind_speed"], 5)
+        self.assertEqual(payload["time_series"][8759]["datetime"], "H8760")
+        self.assertEqual(payload["time_series"][8759]["load"], 120)
+        self.assertIn("已补齐8758个缺失时点", payload["message"])
+
     def test_planning_time_series_import_parses_xlsx(self):
         workbook = Workbook()
         sheet = workbook.active
@@ -2137,6 +2307,75 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(data["longitude"], 116.407526)
         self.assertEqual(data["source"], "高德地图 Web 服务地理编码 API")
 
+    def test_planning_geocode_uses_global_provider_first_for_english_places(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+        requested_urls = []
+
+        def fake_urlopen(url, timeout):
+            requested_urls.append(url)
+            if "geocoding-api.open-meteo.com" in url:
+                return FakeResponse(
+                    {
+                        "results": [
+                            {
+                                "name": "New York",
+                                "latitude": 40.71427,
+                                "longitude": -74.00597,
+                                "country": "美国",
+                                "admin1": "纽约州",
+                            }
+                        ]
+                    }
+                )
+            if "restapi.amap.com" in url:
+                return FakeResponse(
+                    {
+                        "status": "1",
+                        "geocodes": [
+                            {
+                                "formatted_address": "广东省惠州市惠东县New YorK(解放中路店)",
+                                "province": "广东省",
+                                "city": "惠州市",
+                                "district": "惠东县",
+                                "location": "114.721208,22.978660",
+                            }
+                        ],
+                    }
+                )
+            raise AssertionError(f"unexpected url: {url}")
+
+        original_key = server.AMAP_WEB_SERVICE_KEY
+        server.AMAP_WEB_SERVICE_KEY = "test-key"
+        try:
+            with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/geocode",
+                    "POST",
+                    json.dumps({"place": "New York"}, ensure_ascii=False).encode("utf-8"),
+                )
+        finally:
+            server.AMAP_WEB_SERVICE_KEY = original_key
+
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["latitude"], 40.71427)
+        self.assertEqual(data["longitude"], -74.00597)
+        self.assertEqual(data["source"], "Open-Meteo Geocoding API")
+        self.assertIn("geocoding-api.open-meteo.com", requested_urls[0])
+        self.assertTrue(all("restapi.amap.com" not in url for url in requested_urls))
+
     def test_planning_map_config_exposes_amap_key_when_configured(self):
         original_key = server.AMAP_WEB_SERVICE_KEY
         server.AMAP_WEB_SERVICE_KEY = "test-key"
@@ -2292,7 +2531,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('assets/optimize.js', html)
         self.assertIn('href="optimize.html">规划求解</a>', planning_html)
         self.assertIn(".optimization-panel", css)
-        self.assertIn("grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr))", css)
+        self.assertIn("grid-template-rows: max-content minmax(220px, 1fr)", css)
         self.assertIn(".log-view-tabs", css)
         self.assertIn(".log-view-tab", css)
         self.assertIn(".log-view-panel", css)
@@ -2456,7 +2695,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("grid-template-rows: minmax(0, var(--evaluation-upper-height, 1fr)) 14px minmax(180px, var(--optimization-log-height, 28vh))", css)
         self.assertIn("grid-column: 2 / 5", css)
         self.assertIn("grid-row: 3", css)
-        self.assertIn("grid-template-rows: var(--optimization-command-height, max-content) 14px minmax(220px, var(--optimization-result-height, 1fr))", css)
+        self.assertIn("grid-template-rows: max-content minmax(220px, 1fr)", css)
         self.assertIn(".optimization-curve-panel", css)
         self.assertIn(".optimization-curve-name-list", css)
         self.assertIn(".optimization-curve-chart", css)
@@ -2610,30 +2849,24 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("data-curve-group", result_curve_script)
         self.assertIn("renderAnnualTable", result_curve_script)
 
-    def test_optimization_page_has_draggable_result_and_log_resize_handles(self):
+    def test_optimization_page_removes_command_to_result_resize_handle(self):
         html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
+        evaluation_html = (WEB_ROOT / "evaluation.html").read_text(encoding="utf-8")
         script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
+        evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
-        self.assertIn('id="optimizationResultResizeHandle"', html)
+        self.assertNotIn('id="optimizationResultResizeHandle"', html)
+        self.assertNotIn('id="optimizationResultResizeHandle"', evaluation_html)
         self.assertNotIn('id="optimizationLogResizeHandle"', html)
-        self.assertIn('role="separator"', html)
-        self.assertIn('aria-label="调整规划结果高度"', html)
-        self.assertIn('aria-orientation="horizontal"', html)
-        self.assertIn("bindOptimizationResultResizeHandle", script)
+        self.assertNotIn('aria-label="调整规划结果高度"', html)
+        self.assertNotIn('aria-label="调整评估结果高度"', evaluation_html)
+        self.assertNotIn("bindOptimizationResultResizeHandle", script)
+        self.assertNotIn("bindOptimizationResultResizeHandle", evaluation_script)
         self.assertNotIn("bindOptimizationLogResizeHandle", script)
-        self.assertIn("lockOptimizationCommandHeight", script)
-        self.assertIn("--optimization-command-height", script)
-        self.assertIn("optimizationResultHeight", script)
-        self.assertIn("--optimization-result-height", script)
-        self.assertIn("pointerdown", script)
-        self.assertIn("setPointerCapture", script)
-        self.assertIn("ArrowUp", script)
-        self.assertIn("ArrowDown", script)
-        result_resize_script = script.split("function bindOptimizationResultResizeHandle()", 1)[1].split("function bindResizeHandleKeys", 1)[0]
-        self.assertIn("applyHeight(startHeight - (moveEvent.clientY - startY))", result_resize_script)
-        self.assertNotIn("applyHeight(startHeight + moveEvent.clientY - startY)", result_resize_script)
-        self.assertIn(".optimization-result-resize-handle", css)
+        self.assertNotIn("optimizationResultHeight", script)
+        self.assertNotIn("--optimization-result-height", script)
+        self.assertNotIn(".optimization-result-resize-handle", css)
         self.assertIn(".optimization-log-resize-handle", css)
         result_tabs_css = css.split(".result-tabs {", 1)[1].split("}", 1)[0]
         self.assertIn("flex: 0 0 auto", result_tabs_css)
@@ -2642,18 +2875,30 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("height: 36px", result_tab_css)
         self.assertIn("display: inline-flex", result_tab_css)
         self.assertIn("cursor: row-resize", css)
-        self.assertIn("--optimization-result-height", css)
         self.assertIn("--optimization-log-height", css)
 
-    def test_optimization_overview_frontend_renders_two_tables_and_ratio_disks(self):
+    def test_optimization_overview_frontend_renders_two_tables_and_composition_bars(self):
         script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
+        evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
         self.assertIn("renderOverviewTables", script)
         self.assertIn("overview_tables", script)
-        self.assertIn("renderOverviewDisks", script)
+        self.assertIn("renderOverviewCompositionBars", script)
+        self.assertIn("renderOverviewCompositionBar", script)
+        self.assertIn("bindOverviewColumnResizeHandles", script)
+        self.assertIn('data-overview-column-resize="left-middle"', script)
+        self.assertIn('data-overview-column-resize="middle-right"', script)
+        self.assertIn("--overview-left-column-width", script)
+        self.assertIn("--overview-middle-column-width", script)
+        self.assertIn("bindOverviewColumnResizeHandles", evaluation_script)
+        self.assertIn('data-overview-column-resize="left-middle"', evaluation_script)
+        self.assertIn("composition-bar-track", script)
+        self.assertIn("composition-bar-segment", script)
         self.assertIn("overview_disks", script)
-        self.assertIn("overview-ratio-stack", script)
+        self.assertIn("overview-composition-stack", script)
+        self.assertIn("renderOverviewCompositionBars", evaluation_script)
+        self.assertIn("composition-bar-track", evaluation_script)
         self.assertIn("optimization-overview-grid", script)
         for title in ("规划结果", "规划年指标"):
             self.assertIn(title, script)
@@ -2663,25 +2908,27 @@ class PowerPlanServerTest(unittest.TestCase):
         for field in ("设备类型", "设计台数", "指标", "数值", "单位"):
             self.assertIn(field, script)
         self.assertIn(".optimization-overview-grid", css)
-        self.assertIn("grid-template-columns: minmax(260px, 1fr) minmax(360px, 0.95fr) minmax(260px, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(240px, var(--overview-left-column-width, 1fr)) 10px minmax(280px, var(--overview-middle-column-width, 0.95fr)) 10px minmax(240px, 1fr)", css)
+        self.assertIn(".overview-column-resize-handle", css)
+        self.assertIn("cursor: col-resize", css)
         self.assertIn(".overview-table-card", css)
-        self.assertIn(".overview-ratio-stack", css)
-        ratio_stack_css = css.split(".overview-ratio-stack {", 1)[1].split("}", 1)[0]
-        self.assertIn("display: grid", ratio_stack_css)
-        self.assertIn("grid-template-columns: minmax(0, 1fr)", ratio_stack_css)
-        self.assertIn("overflow: auto", ratio_stack_css)
-        ratio_card_css = css.split(".ratio-disk-card {", 1)[1].split("}", 1)[0]
-        self.assertIn("grid-template-rows: minmax(0, 1fr) auto", ratio_card_css)
-        self.assertIn("min-height: 172px", ratio_card_css)
-        self.assertIn("container-type: size", ratio_card_css)
-        self.assertIn("border: 1px solid #d7e4e0", ratio_card_css)
-        self.assertIn(".ratio-disk", css)
-        ratio_disk_css = css.split(".ratio-disk {", 1)[1].split("}", 1)[0]
-        self.assertIn("width: min(82cqw, 42cqh, 190px)", ratio_disk_css)
-        self.assertIn("max-width: calc(100% - 8px)", ratio_disk_css)
-        self.assertIn("conic-gradient", css)
-        ratio_disk_span_css = css.split(".ratio-disk span {", 1)[1].split("}", 1)[0]
-        self.assertIn("font-size: clamp(18px, 13cqw, 34px)", ratio_disk_span_css)
+        self.assertIn(".overview-composition-stack", css)
+        composition_stack_css = css.split(".overview-composition-stack {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: grid", composition_stack_css)
+        self.assertIn("grid-template-columns: minmax(0, 1fr)", composition_stack_css)
+        self.assertIn("overflow: auto", composition_stack_css)
+        composition_card_css = css.split(".composition-bar-card {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-rows: auto auto auto", composition_card_css)
+        self.assertIn("min-height: 150px", composition_card_css)
+        self.assertIn("border: 1px solid #d7e4e0", composition_card_css)
+        self.assertIn(".composition-bar-track", css)
+        composition_track_css = css.split(".composition-bar-track {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: flex", composition_track_css)
+        self.assertIn("height: 24px", composition_track_css)
+        self.assertIn(".composition-bar-segment.primary", css)
+        self.assertIn(".composition-bar-segment.secondary", css)
+        self.assertNotIn(".ratio-disk", css)
+        self.assertNotIn("conic-gradient", css)
 
     def test_optimization_green_frontend_renders_daily_stacked_chart_and_table(self):
         script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
@@ -2989,11 +3236,29 @@ class PowerPlanServerTest(unittest.TestCase):
             "是否考虑频率安全约束",
             "频率安全上限(1.0-1.5)",
             "频率安全下限(0.5-1.0)",
+            "频率最低点下限(Hz)",
+            "频率最高点上限(Hz)",
+            "频率下限安全裕度(Hz)",
+            "频率上限安全裕度(Hz)",
+            "负荷频率系数D",
+            "RoCoF上限(Hz/s)",
+            "稳态频率下限(Hz)",
+            "稳态频率上限(Hz)",
+            "频率Nadir评估时长(s)",
+            "Nadir线性化每轴采样点数",
+            "Nadir线性化区间比例",
+            "网络同步系数基值",
+            "网络同步系数斜率",
+            "网络同步系数基准负荷(kW)",
             "是否考虑新能源N-1",
             "是否考虑新能源扰动",
             "是否考虑负荷扰动",
         ):
             self.assertIn(label, script)
+        self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"frequency_nadir_lower_hz"'))
+        self.assertLess(script.index('"network_synchronization_reference_load_kw"'), script.index('"storage_frequency_regulation_enabled"'))
+        self.assertIn("Nadir线性化每轴采样点数必须为正整数", script)
+        self.assertIn("稳态频率上限(Hz)不能小于稳态频率下限(Hz)", script)
         self.assertNotIn('["storage_charge_efficiency", "充电效率(0.0-1.0)", "number"', script)
         self.assertNotIn('["storage_discharge_efficiency", "放电效率(0.0-1.0)", "number"', script)
         self.assertNotIn("设计使用年限(年)", script)
@@ -3020,9 +3285,9 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertIn("collectSaveWarnings", script)
         self.assertIn("参数校验未通过", script)
-        self.assertIn("数据下限(台)", script)
-        self.assertIn("数据上限(台)", script)
-        self.assertIn("数据上限不能小于数据下限", script)
+        self.assertIn("数量下限(台)", script)
+        self.assertIn("数量上限(台)", script)
+        self.assertIn("数量上限不能小于数量下限", script)
         self.assertIn("频率安全上限不能小于频率安全下限", script)
         self.assertIn("规划求解时间上限(分钟)", script)
         self.assertIn("defaultValue: 60", script)
@@ -3056,11 +3321,18 @@ class PowerPlanServerTest(unittest.TestCase):
             "power_capacity",
             "storage_charge_efficiency",
             "storage_discharge_efficiency",
+            "storage_equivalent_inertia_constant_h",
+            "storage_equivalent_primary_frequency_coefficient_k",
+            "storage_equivalent_damping_coefficient_d",
             "battery_capacity",
             "hydrogen_tank_capacity",
             "electric_to_hydrogen_efficiency",
             "hydrogen_to_electric_efficiency",
             "fuel_rate",
+            "inertia_constant_h",
+            "primary_frequency_coefficient_k",
+            "damping_coefficient_d",
+            "governor_time_constant_t",
             "power_lower",
             "cut_in_wind_speed",
             "rated_wind_speed",
@@ -3072,15 +3344,22 @@ class PowerPlanServerTest(unittest.TestCase):
         ):
             self.assertIn(field, script)
         for message in (
-            "数据上下限必须为非负整数",
+            "数量上下限必须为非负整数",
             "设计年限(年）必须为正整数",
             "成本(万元/台)必须为非负浮点数",
-            "功率容量(kW)必须为正实数",
-            "电池容量(kWh)必须为正实数",
+            "容量(kW)必须为正实数",
+            "容量(kWh)必须为正实数",
             "容量(Nm3)必须为正实数",
             "电-氢效率(Nm3/kWh)必须为正实数",
             "氢-电效率(kWh/Nm3)必须为正实数",
             "油耗率(kg/kWh)必须为正实数",
+            "惯量常数H(s)必须在1.0到10.0之间",
+            "一次调频系数K必须在0.1到1.0之间",
+            "阻尼系数D必须在0.001到1.0之间",
+            "调速时间常数T(s)必须在0.1到2.0之间",
+            "等效惯量常数H(s)必须在0.5到10.0之间",
+            "等效一次调频系数K必须在0.1到5.0之间",
+            "等效阻尼系数D必须在0.001到1.0之间",
             "功率下限(kW)必须为非负实数",
             "切入风速(m/s)必须为非负实数",
             "额定风速(m/s)必须为正实数",
@@ -3140,7 +3419,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("capacityValue", script)
         self.assertIn("calculateSeriesStats", script)
         self.assertIn("buildHistogram", script)
-        for name in ("风速", "太阳辐照", "温度", "负荷", "最大值", "最小值", "平均值", "数据下限(台)", "数据上限(台)"):
+        for name in ("风速", "太阳辐照", "温度", "负荷", "最大值", "最小值", "平均值", "数量下限(台)", "数量上限(台)"):
             self.assertIn(name, script)
         self.assertNotIn("formatFixed2", script)
         self.assertIn("formatInteger", script)
@@ -3354,6 +3633,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("cancelTimeSeriesImport", script)
         self.assertIn("pendingTimeSeriesImport", script)
         self.assertIn("导入曲线已保存到后台", script)
+        self.assertIn("isTimeSeriesImportWarning", script)
+        self.assertIn('setTimeSeriesImportHint(result.message || "导入文件解析成功，请确认后保存。", level)', script)
+        self.assertIn('hint.classList.toggle("warning", level === "warning")', script)
+        self.assertIn("#timeSeriesImportHint.warning", css)
         self.assertIn("openLoadGenerator", script)
         self.assertIn("generateLoadCurve", script)
         self.assertIn("renderLoadGeneratorPreview", script)
@@ -3370,9 +3653,19 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("load: curve.load", script)
         self.assertIn("负荷曲线已生成", script)
         self.assertIn("openCoordinatePicker", script)
-        self.assertIn("loadAmapScript", script)
-        self.assertIn("initAmapPicker", script)
+        self.assertIn("initAmapTilePicker", script)
+        self.assertIn("renderAmapTileLayer", script)
+        self.assertIn("webrd0${server}.is.autonavi.com", script)
+        self.assertIn("osmTileUrl", script)
+        self.assertIn("switchAmapTileToGlobalFallback", script)
+        self.assertIn("OpenStreetMap 全球底图", script)
+        self.assertIn("lngLatToWebMercatorPixel", script)
+        self.assertIn("webMercatorPixelToLngLat", script)
         self.assertIn("setMapPoint", script)
+        self.assertIn('setMapPoint(result.latitude, result.longitude, "geocode", result)', script)
+        self.assertIn("geocodeHintLabel", script)
+        self.assertIn("高德定位", script)
+        self.assertIn('state.mapInstance.setZoom(11)', script)
         self.assertIn("未配置${mapProviderLabel(state.mapProvider)} Key", script)
         self.assertIn("geocodePlace", script)
         self.assertIn("fetchWeatherHistory", script)
@@ -3492,13 +3785,20 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("切出风速(m/s)", script)
         self.assertIn("成本(万元/台)", script)
         self.assertIn("油耗率(kg/kWh)", script)
+        self.assertIn("惯量常数H(s)", script)
+        self.assertIn("一次调频系数K", script)
+        self.assertIn("阻尼系数D", script)
+        self.assertIn("调速时间常数T(s)", script)
+        self.assertIn("等效惯量常数H(s)", script)
+        self.assertIn("等效一次调频系数K", script)
+        self.assertIn("等效阻尼系数D", script)
         self.assertIn("功率上限(kW)", script)
         self.assertIn("功率下限(kW)", script)
-        self.assertIn('capacity: "功率容量(kW)"', script)
-        self.assertIn('power_capacity: "功率容量(kW)"', script)
-        self.assertIn('battery_capacity: "电池容量(kWh)"', script)
+        self.assertIn('capacity: "容量(kW)"', script)
+        self.assertIn('power_capacity: "容量(kW)"', script)
+        self.assertIn('battery_capacity: "容量(kWh)"', script)
         self.assertIn('hydrogen_tank_capacity: "容量(Nm3)"', script)
-        self.assertNotIn('capacity: "容量"', script)
+        self.assertNotIn('capacity: "功率容量(kW)"', script)
         self.assertNotIn('power_capacity: "功率容量"', script)
         self.assertNotIn('battery_capacity: "电池容量"', script)
         self.assertNotIn('hydrogen_tank_capacity: "氢储容量(Nm3)"', script)

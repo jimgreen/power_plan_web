@@ -40,6 +40,10 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "power_upper",
             "power_lower",
             "fuel_rate",
+            "inertia_constant_h",
+            "primary_frequency_coefficient_k",
+            "damping_coefficient_d",
+            "governor_time_constant_t",
             "quantity_lower",
             "quantity_upper",
             "design_life_years",
@@ -78,9 +82,12 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "power_capacity",
             "storage_charge_efficiency",
             "storage_discharge_efficiency",
+            "is_grid_forming",
+            "storage_equivalent_inertia_constant_h",
+            "storage_equivalent_primary_frequency_coefficient_k",
+            "storage_equivalent_damping_coefficient_d",
             "quantity_lower",
             "quantity_upper",
-            "is_grid_forming",
             "design_life_years",
         ],
     ),
@@ -153,6 +160,20 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "frequency_security_constraint_enabled",
             "frequency_security_upper",
             "frequency_security_lower",
+            "frequency_nadir_lower_hz",
+            "frequency_peak_upper_hz",
+            "frequency_lower_security_margin_hz",
+            "frequency_upper_security_margin_hz",
+            "load_frequency_coefficient_d",
+            "rocof_upper_hz_per_s",
+            "steady_state_frequency_lower_hz",
+            "steady_state_frequency_upper_hz",
+            "frequency_nadir_evaluation_duration_s",
+            "nadir_linearization_samples_per_axis",
+            "nadir_linearization_interval_ratio",
+            "network_synchronization_coefficient_base",
+            "network_synchronization_coefficient_slope",
+            "network_synchronization_reference_load_kw",
             "storage_frequency_regulation_enabled",
         ],
     ),
@@ -169,6 +190,10 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "power_upper": 100,
             "power_lower": 20,
             "fuel_rate": 0.26,
+            "inertia_constant_h": 3.5,
+            "primary_frequency_coefficient_k": 0.4,
+            "damping_coefficient_d": 0.01,
+            "governor_time_constant_t": 0.6,
             "quantity_lower": 0,
             "quantity_upper": 0,
         }
@@ -204,6 +229,9 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "quantity_lower": 0,
             "quantity_upper": 0,
             "is_grid_forming": 0,
+            "storage_equivalent_inertia_constant_h": 2.5,
+            "storage_equivalent_primary_frequency_coefficient_k": 0.5,
+            "storage_equivalent_damping_coefficient_d": 0.05,
         }
     ],
     "storage_battery_packs": [
@@ -267,6 +295,20 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "frequency_security_constraint_enabled": 0,
     "frequency_security_upper": 1.5,
     "frequency_security_lower": 1.0,
+    "frequency_nadir_lower_hz": 49.5,
+    "frequency_peak_upper_hz": 50.5,
+    "frequency_lower_security_margin_hz": 0.1,
+    "frequency_upper_security_margin_hz": 0.1,
+    "load_frequency_coefficient_d": 1.0,
+    "rocof_upper_hz_per_s": 1.0,
+    "steady_state_frequency_lower_hz": 49.8,
+    "steady_state_frequency_upper_hz": 50.2,
+    "frequency_nadir_evaluation_duration_s": 10.0,
+    "nadir_linearization_samples_per_axis": 5,
+    "nadir_linearization_interval_ratio": 1.0,
+    "network_synchronization_coefficient_base": 1.0,
+    "network_synchronization_coefficient_slope": 0.0,
+    "network_synchronization_reference_load_kw": 0.0,
     "post_disturbance_power_balance_enabled": 1,
     "renewable_n_1_enabled": 0,
     "load_disturbance_enabled": 0,
@@ -284,8 +326,15 @@ PLANNING_BOOLEAN_FIELDS = {
 FIELD_DEFAULTS: dict[str, Any] = {
     **DEFAULT_PLANNING_PARAMETERS,
     "design_life_years": 20,
+    "inertia_constant_h": 3.5,
+    "primary_frequency_coefficient_k": 0.4,
+    "damping_coefficient_d": 0.01,
+    "governor_time_constant_t": 0.6,
     "rated_wind_speed": 12,
     "is_grid_forming": 0,
+    "storage_equivalent_inertia_constant_h": 2.5,
+    "storage_equivalent_primary_frequency_coefficient_k": 0.5,
+    "storage_equivalent_damping_coefficient_d": 0.05,
     "storage_charge_efficiency": 0.95,
     "storage_discharge_efficiency": 0.95,
     "soc_upper": 0.9,
@@ -294,23 +343,30 @@ FIELD_DEFAULTS: dict[str, Any] = {
 }
 
 DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
-    "quantity_lower": {"integer": True, "non_negative": True, "message": "数据上下限必须为非负整数"},
-    "quantity_upper": {"integer": True, "non_negative": True, "message": "数据上下限必须为非负整数"},
+    "quantity_lower": {"integer": True, "non_negative": True, "message": "数量上下限必须为非负整数"},
+    "quantity_upper": {"integer": True, "non_negative": True, "message": "数量上下限必须为非负整数"},
     "design_life_years": {"integer": True, "positive": True, "message": "设计年限(年）必须为正整数"},
     "cost": {"non_negative": True, "message": "成本(万元/台)必须为非负浮点数"},
-    "capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
-    "power_capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
+    "capacity": {"positive": True, "message": "容量(kW)必须为正实数"},
+    "power_capacity": {"positive": True, "message": "容量(kW)必须为正实数"},
     "storage_charge_efficiency": {"min": 0, "max": 1, "positive": True, "message": "充电效率(0.0-1.0)必须在0到1之间，且必须大于0"},
     "storage_discharge_efficiency": {"min": 0, "max": 1, "positive": True, "message": "放电效率(0.0-1.0)必须在0到1之间，且必须大于0"},
-    "battery_capacity": {"positive": True, "message": "电池容量(kWh)必须为正实数"},
+    "battery_capacity": {"positive": True, "message": "容量(kWh)必须为正实数"},
     "soc_upper": {"min": 0, "max": 1, "message": "SOC上限(0.0-1.0)必须在0到1之间"},
     "soc_lower": {"min": 0, "max": 1, "message": "SOC下限(0.0-1.0)必须在0到1之间"},
     "self_discharge_rate": {"min": 0, "max": 0.01, "message": "自损耗率(0-1%/天)必须在0到0.01之间"},
     "is_grid_forming": {"integer": True, "min": 0, "max": 1, "message": "是否构网必须为0或1"},
+    "storage_equivalent_inertia_constant_h": {"min": 0.5, "max": 10.0, "message": "等效惯量常数H(s)必须在0.5到10.0之间"},
+    "storage_equivalent_primary_frequency_coefficient_k": {"min": 0.1, "max": 5.0, "message": "等效一次调频系数K必须在0.1到5.0之间"},
+    "storage_equivalent_damping_coefficient_d": {"min": 0.001, "max": 1.0, "message": "等效阻尼系数D必须在0.001到1.0之间"},
     "hydrogen_tank_capacity": {"positive": True, "message": "容量(Nm3)必须为正实数"},
     "electric_to_hydrogen_efficiency": {"positive": True, "message": "电-氢效率(Nm3/kWh)必须为正实数"},
     "hydrogen_to_electric_efficiency": {"positive": True, "message": "氢-电效率(kWh/Nm3)必须为正实数"},
     "fuel_rate": {"positive": True, "message": "油耗率(kg/kWh)必须为正实数"},
+    "inertia_constant_h": {"min": 1.0, "max": 10.0, "message": "惯量常数H(s)必须在1.0到10.0之间"},
+    "primary_frequency_coefficient_k": {"min": 0.1, "max": 1.0, "message": "一次调频系数K必须在0.1到1.0之间"},
+    "damping_coefficient_d": {"min": 0.001, "max": 1.0, "message": "阻尼系数D必须在0.001到1.0之间"},
+    "governor_time_constant_t": {"min": 0.1, "max": 2.0, "message": "调速时间常数T(s)必须在0.1到2.0之间"},
     "power_lower": {"non_negative": True, "message": "功率下限(kW)必须为非负实数"},
     "cut_in_wind_speed": {"non_negative": True, "message": "切入风速(m/s)必须为非负实数"},
     "rated_wind_speed": {"positive": True, "message": "额定风速(m/s)必须为正实数"},
@@ -951,7 +1007,7 @@ def validate_payload(payload: dict[str, Any], require_time_series: bool = True) 
                 and validate_device_field_value(row.get("quantity_upper", ""), DEVICE_FIELD_RULES["quantity_upper"])
                 and float(row.get("quantity_lower")) > float(row.get("quantity_upper"))
             ):
-                messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行数据上限不能小于数据下限"})
+                messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行数量上限不能小于数量下限"})
             if key == "storage_battery_packs":
                 soc_upper = row.get("soc_upper", "")
                 soc_lower = row.get("soc_lower", "")
@@ -1016,6 +1072,24 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
     number_in_range("renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", 0, 0.5)
     frequency_upper = number_in_range("frequency_security_upper", "频率安全上限(1.0-1.5)", 1, 1.5)
     frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(0.5-1.0)", 0.5, 1)
+    number_in_range("frequency_nadir_lower_hz", "频率最低点下限(Hz)", 45, 50)
+    number_in_range("frequency_peak_upper_hz", "频率最高点上限(Hz)", 50, 55)
+    number_in_range("frequency_lower_security_margin_hz", "频率下限安全裕度(Hz)", 0, 5)
+    number_in_range("frequency_upper_security_margin_hz", "频率上限安全裕度(Hz)", 0, 5)
+    number_in_range("load_frequency_coefficient_d", "负荷频率系数D", 0, 10)
+    number_in_range("rocof_upper_hz_per_s", "RoCoF上限(Hz/s)", 0.0001, 10)
+    steady_lower = number_in_range("steady_state_frequency_lower_hz", "稳态频率下限(Hz)", 45, 50)
+    steady_upper = number_in_range("steady_state_frequency_upper_hz", "稳态频率上限(Hz)", 50, 55)
+    number_in_range("frequency_nadir_evaluation_duration_s", "频率Nadir评估时长(s)", 0.1, 120)
+    nadir_samples = number_in_range("nadir_linearization_samples_per_axis", "Nadir线性化每轴采样点数", 2, 50)
+    if nadir_samples is not None and not float(nadir_samples).is_integer():
+        messages.append({"level": "error", "message": "Nadir线性化每轴采样点数必须为正整数"})
+    number_in_range("nadir_linearization_interval_ratio", "Nadir线性化区间比例", 0.0001, 10)
+    number_in_range("network_synchronization_coefficient_base", "网络同步系数基值", 0)
+    number_in_range("network_synchronization_coefficient_slope", "网络同步系数斜率")
+    number_in_range("network_synchronization_reference_load_kw", "网络同步系数基准负荷(kW)", 0)
     if frequency_upper is not None and frequency_lower is not None and frequency_upper < frequency_lower:
         messages.append({"level": "error", "message": "频率安全上限不能小于频率安全下限"})
+    if steady_upper is not None and steady_lower is not None and steady_upper < steady_lower:
+        messages.append({"level": "error", "message": "稳态频率上限(Hz)不能小于稳态频率下限(Hz)"})
     return messages

@@ -4,11 +4,11 @@ const state = {
   optimization: null,
   pollTimer: null,
   pollDelay: 4000,
-  optimizationCommandHeight: null,
-  optimizationResultHeight: null,
   optimizationLogHeight: null,
   greenResultTableWidth: null,
   safetyResultTableWidth: null,
+  overviewLeftColumnWidth: null,
+  overviewMiddleColumnWidth: null,
   greenDailyPoints: [],
   safetyDailyPoints: [],
   resultFiles: [],
@@ -27,7 +27,6 @@ const state = {
 };
 
 const optimizationResizeMinHeights = {
-  command: 112,
   result: 220,
   log: 120,
 };
@@ -146,13 +145,9 @@ document.addEventListener("DOMContentLoaded", () => {
     saveLogs: saveEvaluationLogs,
   });
   bindSeriesToggleButtons();
-  lockOptimizationCommandHeight();
   bindEvaluationMainResizeHandle();
-  bindOptimizationResultResizeHandle();
   bindOptimizationLogResizeHandle();
   window.addEventListener("resize", () => {
-    state.optimizationCommandHeight = null;
-    lockOptimizationCommandHeight();
     clampEvaluationMainWidth();
   });
   loadSchemes()
@@ -231,7 +226,6 @@ function bindSchemeListItem(item, onSelect) {
 function renderCurrentScheme() {
   const current = document.getElementById("optimizationCurrentScheme");
   current.textContent = `当前方案: ${state.currentScheme || "未选择方案"}`;
-  window.requestAnimationFrame(lockOptimizationCommandHeight);
 }
 
 function renderEvaluationCurrentScheme() {
@@ -578,12 +572,12 @@ function renderOptimization(data) {
   renderOverviewTables(data.results?.overview_tables || defaultOverviewTables(), data.results?.overview_disks || defaultOverviewDisks());
   renderGreenResult(data.results?.green_table || defaultGreenTable(), data.results?.curves?.green_daily || []);
   renderSafetyResult(data.results?.safety_table || defaultSafetyTable(), data.results?.curves?.safety_daily || []);
+  bindOverviewColumnResizeHandles();
   bindResultColumnResizeHandles();
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
   if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
-  window.requestAnimationFrame(lockOptimizationCommandHeight);
 }
 
 async function loadEvaluationCurveData() {
@@ -735,7 +729,9 @@ function renderOverviewTables(tables, disks) {
   panel.innerHTML = `
     <div class="optimization-overview-grid">
       ${renderOverviewTableCard(safeTables[0] || defaultOverviewTables()[0])}
-      ${renderOverviewDisks(disks?.length ? disks : defaultOverviewDisks())}
+      <div class="overview-column-resize-handle" data-overview-column-resize="left-middle" role="separator" tabindex="0" aria-label="调整左侧规划结果和中间构成图宽度" aria-orientation="vertical"></div>
+      ${renderOverviewCompositionBars(disks?.length ? disks : defaultOverviewDisks())}
+      <div class="overview-column-resize-handle" data-overview-column-resize="middle-right" role="separator" tabindex="0" aria-label="调整中间构成图和右侧年指标宽度" aria-orientation="vertical"></div>
       ${renderOverviewTableCard(safeTables[1] || defaultOverviewTables()[1])}
     </div>`;
 }
@@ -748,26 +744,32 @@ function renderOverviewTableCard(table) {
     </section>`;
 }
 
-function renderOverviewDisks(disks) {
-  return `<section class="overview-ratio-stack">${disks.map(renderOverviewDisk).join("")}</section>`;
+function renderOverviewCompositionBars(disks) {
+  return `<section class="overview-composition-stack">${disks.map(renderOverviewCompositionBar).join("")}</section>`;
 }
 
-function renderOverviewDisk(disk) {
+function renderOverviewCompositionBar(disk) {
   const leftValue = Number(disk.left_value) || 0;
   const rightValue = Number(disk.right_value) || 0;
   const total = Math.max(leftValue + rightValue, 0.0001);
-  const percent = Math.round((leftValue / total) * 100);
+  const leftPercent = Math.max(0, Math.min(100, (leftValue / total) * 100));
+  const rightPercent = Math.max(0, 100 - leftPercent);
+  const unit = disk.unit || "";
   return `
-    <div class="ratio-disk-card">
-      <div class="ratio-disk" style="--ratio-percent:${percent}">
-        <span>${percent}%</span>
+    <div class="composition-bar-card">
+      <h2>${escapeHtml(disk.title || "")}</h2>
+      <div class="composition-bar-summary">
+        <span>${escapeHtml(disk.left_label || "")}<strong>${escapeHtml(formatNumber(leftValue))}${escapeHtml(unit)}</strong></span>
+        <span>${escapeHtml(disk.right_label || "")}<strong>${escapeHtml(formatNumber(rightValue))}${escapeHtml(unit)}</strong></span>
+        <span>合计<strong>${escapeHtml(formatNumber(leftValue + rightValue))}${escapeHtml(unit)}</strong></span>
       </div>
-      <div class="ratio-disk-info">
-        <h2>${escapeHtml(disk.title || "")}</h2>
-        <div class="ratio-legend">
-          <div><span class="legend-dot primary-dot"></span><span>${escapeHtml(disk.left_label || "")}</span><strong>${escapeHtml(formatNumber(leftValue))}${escapeHtml(disk.unit || "")}</strong></div>
-          <div><span class="legend-dot secondary-dot"></span><span>${escapeHtml(disk.right_label || "")}</span><strong>${escapeHtml(formatNumber(rightValue))}${escapeHtml(disk.unit || "")}</strong></div>
-        </div>
+      <div class="composition-bar-track" aria-label="${escapeHtml(disk.title || "")}">
+        <div class="composition-bar-segment primary" style="width:${leftPercent.toFixed(2)}%"><span>${Math.round(leftPercent)}%</span></div>
+        <div class="composition-bar-segment secondary" style="width:${rightPercent.toFixed(2)}%"><span>${Math.round(rightPercent)}%</span></div>
+      </div>
+      <div class="composition-bar-legend">
+        <div><span class="legend-dot primary-dot"></span><span>${escapeHtml(disk.left_label || "")}</span><strong>${Math.round(leftPercent)}%</strong></div>
+        <div><span class="legend-dot secondary-dot"></span><span>${escapeHtml(disk.right_label || "")}</span><strong>${Math.round(rightPercent)}%</strong></div>
       </div>
     </div>`;
 }
@@ -1501,44 +1503,62 @@ function resultColumnLayout(kind, handle) {
   return config ? handle?.closest(config.layoutSelector) : null;
 }
 
-function bindOptimizationResultResizeHandle() {
-  const handle = document.getElementById("optimizationResultResizeHandle");
-  const resultCard = document.querySelector(".optimization-result-card");
-  if (!handle || !resultCard) return;
+function bindOverviewColumnResizeHandles() {
+  document.querySelectorAll("[data-overview-column-resize]").forEach((handle) => {
+    if (handle.dataset.bound === "true") return;
+    handle.dataset.bound = "true";
+    const applyWidth = (width) => applyOverviewColumnWidth(handle.dataset.overviewColumnResize, width, handle);
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      const mode = handle.dataset.overviewColumnResize || "left-middle";
+      const startX = event.clientX;
+      const startWidth = currentOverviewColumnWidth(mode, handle);
+      handle.classList.add("dragging");
+      handle.setPointerCapture?.(event.pointerId);
 
-  const applyHeight = (height) => {
-    const safeHeight = clampOptimizationResultHeight(height);
-    const pairedCommandHeight = Math.max(optimizationResizeMinHeights.command, optimizationTopMiddleContentHeight() - safeHeight);
-    setOptimizationCommandHeight(pairedCommandHeight);
-    setOptimizationResultHeight(safeHeight, handle);
-  };
+      const onMove = (moveEvent) => {
+        applyWidth(startWidth + moveEvent.clientX - startX);
+      };
+      const onDone = () => {
+        handle.classList.remove("dragging");
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onDone);
+        window.removeEventListener("pointercancel", onDone);
+      };
 
-  handle.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    lockOptimizationCommandHeight();
-    setOptimizationLogHeight(currentOptimizationLogHeight());
-    const startY = event.clientY;
-    const startHeight = resultCard.getBoundingClientRect().height || 360;
-    handle.classList.add("dragging");
-    handle.setPointerCapture?.(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      applyHeight(startHeight - (moveEvent.clientY - startY));
-    };
-    const onDone = () => {
-      handle.classList.remove("dragging");
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onDone);
-      window.removeEventListener("pointercancel", onDone);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onDone);
-    window.addEventListener("pointercancel", onDone);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onDone);
+      window.addEventListener("pointercancel", onDone);
+    });
+    bindHorizontalResizeHandleKeys(handle, () => currentOverviewColumnWidth(handle.dataset.overviewColumnResize || "left-middle", handle), applyWidth, () => overviewColumnWidthBounds(handle));
   });
+}
 
-  bindResizeHandleKeys(handle, () => state.optimizationResultHeight || resultCard.getBoundingClientRect().height || 360, applyHeight, optimizationResultHeightBounds);
-  handle.setAttribute("aria-valuenow", String(Math.round(resultCard.getBoundingClientRect().height || 360)));
+function applyOverviewColumnWidth(mode, width, handle) {
+  const bounds = overviewColumnWidthBounds(handle);
+  const safeWidth = Math.min(Math.max(Number(width) || bounds.min, bounds.min), bounds.max);
+  if (mode === "middle-right") {
+    state.overviewMiddleColumnWidth = Math.round(safeWidth);
+    document.documentElement.style.setProperty("--overview-middle-column-width", `${Math.round(safeWidth)}px`);
+  } else {
+    state.overviewLeftColumnWidth = Math.round(safeWidth);
+    document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(safeWidth)}px`);
+  }
+}
+
+function currentOverviewColumnWidth(mode, handle) {
+  const card = handle?.previousElementSibling;
+  const stateValue = mode === "middle-right" ? state.overviewMiddleColumnWidth : state.overviewLeftColumnWidth;
+  return stateValue || card?.getBoundingClientRect().width || 320;
+}
+
+function overviewColumnWidthBounds(handle) {
+  const grid = handle?.closest(".optimization-overview-grid");
+  if (!grid) return { min: 240, max: 720 };
+  const handleWidth = handle?.getBoundingClientRect().width || 10;
+  const gap = cssNumber(window.getComputedStyle(grid).columnGap || window.getComputedStyle(grid).gap);
+  const max = grid.clientWidth - handleWidth * 2 - gap * 4 - 240 - 240;
+  return { min: 240, max: Math.max(260, max) };
 }
 
 function bindOptimizationLogResizeHandle() {
@@ -1550,12 +1570,10 @@ function bindOptimizationLogResizeHandle() {
     const safeHeight = clampOptimizationLogHeight(height);
     setOptimizationLogHeight(safeHeight, handle);
     setEvaluationUpperHeight(Math.max(optimizationResizeMinHeights.result, evaluationWorkspaceContentHeight() - safeHeight));
-    setOptimizationResultHeight(Math.max(optimizationResizeMinHeights.result, optimizationMainContentHeight() - currentOptimizationCommandHeight()));
   };
 
   handle.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    lockOptimizationCommandHeight();
     const startY = event.clientY;
     const startHeight = logCard.getBoundingClientRect().height || 180;
     handle.classList.add("dragging");
@@ -1601,11 +1619,25 @@ function bindResizeHandleKeys(handle, currentHeight, applyHeight, boundsFactory)
   });
 }
 
-function setOptimizationResultHeight(height, handle = document.getElementById("optimizationResultResizeHandle")) {
-  const roundedHeight = Math.round(height);
-  state.optimizationResultHeight = roundedHeight;
-  document.documentElement.style.setProperty("--optimization-result-height", `${roundedHeight}px`);
-  handle?.setAttribute("aria-valuenow", String(roundedHeight));
+function bindHorizontalResizeHandleKeys(handle, currentWidth, applyWidth, boundsFactory) {
+  handle.addEventListener("keydown", (event) => {
+    const keySteps = {
+      ArrowLeft: -16,
+      ArrowRight: 16,
+      PageUp: 64,
+      PageDown: -64,
+    };
+    if (event.key in keySteps) {
+      event.preventDefault();
+      applyWidth(currentWidth() + keySteps[event.key]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyWidth(boundsFactory().min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyWidth(boundsFactory().max);
+    }
+  });
 }
 
 function setOptimizationLogHeight(height, handle = document.getElementById("optimizationLogResizeHandle")) {
@@ -1619,29 +1651,9 @@ function setEvaluationUpperHeight(height) {
   document.documentElement.style.setProperty("--evaluation-upper-height", `${Math.round(height)}px`);
 }
 
-function setOptimizationCommandHeight(height) {
-  const roundedHeight = Math.round(height);
-  state.optimizationCommandHeight = roundedHeight;
-  document.documentElement.style.setProperty("--optimization-command-height", `${roundedHeight}px`);
-}
-
-function clampOptimizationResultHeight(height) {
-  const bounds = optimizationResultHeightBounds();
-  return Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
-}
-
 function clampOptimizationLogHeight(height) {
   const bounds = optimizationLogHeightBounds();
   return Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
-}
-
-function optimizationResultHeightBounds() {
-  const availableHeight = optimizationTopMiddleContentHeight();
-  const maxResultHeight = availableHeight - optimizationResizeMinHeights.command;
-  return {
-    min: optimizationResizeMinHeights.result,
-    max: Math.max(optimizationResizeMinHeights.result, Math.min(760, maxResultHeight)),
-  };
 }
 
 function optimizationLogHeightBounds() {
@@ -1653,46 +1665,15 @@ function optimizationLogHeightBounds() {
   };
 }
 
-function lockOptimizationCommandHeight() {
-  const commandCard = document.querySelector(".optimization-command-card");
-  if (!commandCard) return 0;
-  const height = Math.ceil(commandCard.getBoundingClientRect().height || commandCard.scrollHeight);
-  if (height > 0) {
-    setOptimizationCommandHeight(height);
-  }
-  return height;
-}
-
-function optimizationResizableContentHeight() {
-  const commandHeight = state.optimizationCommandHeight || lockOptimizationCommandHeight();
-  return Math.max(
-    optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
-    optimizationMainContentHeight() - commandHeight,
-  );
-}
-
-function optimizationTopMiddleContentHeight() {
-  return Math.max(
-    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result,
-    optimizationMainContentHeight(),
-  );
-}
-
-function optimizationCardsContentHeight() {
-  return optimizationMainContentHeight();
-}
-
 function optimizationMainContentHeight() {
   const panel = document.querySelector(".optimization-panel");
-  if (!panel) return Math.max(optimizationResizeMinHeights.command + optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
+  if (!panel) return Math.max(optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
   const style = window.getComputedStyle(panel);
   const paddingY = cssNumber(style.paddingTop) + cssNumber(style.paddingBottom);
   const rowGap = cssNumber(style.rowGap || style.gap);
-  const resultHandle = document.getElementById("optimizationResultResizeHandle");
-  const handleHeights = resultHandle?.getBoundingClientRect().height || 14;
   return Math.max(
-    optimizationResizeMinHeights.command + optimizationResizeMinHeights.result,
-    panel.clientHeight - paddingY - rowGap * 2 - handleHeights,
+    optimizationResizeMinHeights.result,
+    panel.clientHeight - paddingY - rowGap,
   );
 }
 
@@ -1708,10 +1689,6 @@ function evaluationWorkspaceContentHeight() {
     optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
     workspace.clientHeight - paddingY - rowGap * 2 - handleHeight,
   );
-}
-
-function currentOptimizationCommandHeight() {
-  return state.optimizationCommandHeight || lockOptimizationCommandHeight();
 }
 
 function currentOptimizationLogHeight() {

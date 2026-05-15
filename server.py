@@ -89,16 +89,66 @@ RESULT_CURVE_FIELD_LABELS = {
     "renewable_ratio": "新能源占比",
     "renewable_curtailed_rate": "新能源弃电率",
 }
+RESULT_WORKBOOK_HEADER_TO_FIELD = {label: key for key, label in RESULT_CURVE_FIELD_LABELS.items()}
+RESULT_WORKBOOK_HEADER_TO_FIELD.update(
+    {
+        "小时": "hour_index",
+        "时间": "datetime",
+        "风速": "wind_speed",
+        "太阳辐射": "solar_irradiance",
+        "环境温度": "temperature",
+        "负荷总功率": "load",
+        "柴发总功率": "diesel_power",
+        "风力最大可发": "wind_available",
+        "风机总功率": "wind_power",
+        "光伏最大可发": "pv_available",
+        "光伏总功率": "pv_power",
+        "新能源最大可发": "renewable_available",
+        "电储能总功率": "storage_power",
+        "电储电量": "storage_soc",
+        "电制氢总功率": "hydrogen_production_power",
+        "储氢罐氢储量": "hydrogen_storage",
+        "燃料电池总功率": "fuel_cell_power",
+        "弃风总功率": "wind_curtailed_power",
+        "弃光总功率": "pv_curtailed_power",
+        "新能源弃电总功率": "curtailed_power",
+        "切负荷功率": "unmet_load",
+        "柴发启停": "diesel_on",
+        "制氢启停": "electrolyzer_on",
+        "储能充电": "storage_charge",
+        "储能放电": "storage_discharge",
+        "日期": "day",
+        "月份": "month",
+    }
+)
 RESULT_WORKBOOK_READ_ERRORS = (BadZipFile, zlib.error, OSError, EOFError, KeyError, InvalidFileException)
 TIME_SERIES_IMPORT_ROW_COUNT = 8760
 TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
-    "wind_speed": ("风速", ["wind_speed", "wind", "风速", "风速(m/s)", "风速ms", "ws10m"]),
-    "solar_irradiance": ("太阳辐射", ["solar_irradiance", "solar", "irradiance", "太阳辐射", "太阳辐照", "太阳辐射(w/m2)", "太阳辐照(w/m2)", "allsky_sfc_sw_dwn"]),
-    "temperature": ("室温", ["temperature", "temp", "室温", "温度", "环境温度", "气温", "t2m"]),
-    "load": ("负荷", ["load", "负荷", "负荷功率", "负荷总功率", "负荷(kW)", "负荷kw"]),
+    "wind_speed": ("风速", ["wind_speed", "wind", "风速", "风速(m/s)", "风速ms", "风速米秒", "ws10m"]),
+    "solar_irradiance": (
+        "太阳辐射",
+        [
+            "solar_irradiance",
+            "solar",
+            "irradiance",
+            "solar radiation",
+            "太阳辐射",
+            "太阳辐照",
+            "太阳辐照度",
+            "单位面积太阳辐射",
+            "单位面积太阳辐照",
+            "太阳辐射(w/m2)",
+            "太阳辐照(w/m2)",
+            "太阳辐射(W/m^2)",
+            "太阳辐照(W/m^2)",
+            "allsky_sfc_sw_dwn",
+        ],
+    ),
+    "temperature": ("室温", ["temperature", "temp", "室温", "温度", "环境温度", "气温", "温度(摄氏度)", "环境温度(摄氏度)", "t2m"]),
+    "load": ("负荷", ["load", "负荷", "负荷功率", "负荷总功率", "用电负荷", "用电功率", "用电功率(kW)", "负荷(kW)", "负荷kw"]),
 }
 TIME_SERIES_IMPORT_OPTIONAL_COLUMNS = {
-    "datetime": ["datetime", "time", "时间", "日期时间", "时刻"],
+    "datetime": ["datetime", "time", "时间", "日期时间", "时刻", "小时", "小时序号", "hour", "hour_index"],
 }
 AMAP_WEB_SERVICE_KEY = (
     os.environ.get("POWER_PLAN_AMAP_KEY")
@@ -503,6 +553,10 @@ class OptimizationRuntime:
             self._export_results_once_unlocked()
 
     def _payload_unlocked(self) -> dict:
+        result_path = optimization_result_workbook_path(self.scheme)
+        workbook_payload = read_result_workbook_display_payload_for_response(result_path) if self.status != "运行中" else None
+        if workbook_payload:
+            self.result_file = str(result_path)
         return {
             "status": self.status,
             "scheme": self.scheme,
@@ -510,8 +564,8 @@ class OptimizationRuntime:
             "end_time": self.end_time,
             "progress": self.progress,
             "result_file": self.result_file,
-            "metrics": self._metrics_unlocked(),
-            "results": self._results if self._results else self._default_results_unlocked(),
+            "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
+            "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
         }
 
@@ -938,7 +992,7 @@ class OptimizationStateError(RuntimeError):
 
 def export_optimization_results_workbook(payload: dict) -> Path:
     scheme = str(payload.get("scheme") or "未选择方案")
-    result_path = PLANNING_STORE.scheme_dir(scheme) / OPTIMIZATION_RESULT_WORKBOOK_NAME
+    result_path = optimization_result_workbook_path(scheme)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = build_optimization_results_workbook(payload)
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
@@ -948,6 +1002,10 @@ def export_optimization_results_workbook(payload: dict) -> Path:
         workbook.close()
     replace_result_workbook_with_retry(tmp_path, result_path)
     return result_path
+
+
+def optimization_result_workbook_path(scheme: str) -> Path:
+    return PLANNING_STORE.scheme_dir(str(scheme or "未选择方案")) / OPTIMIZATION_RESULT_WORKBOOK_NAME
 
 
 def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict]) -> Path:
@@ -1317,6 +1375,181 @@ def read_comparison_workbook(path: Path) -> dict:
         }
     finally:
         workbook.close()
+
+
+def read_result_workbook_display_payload_for_response(path: Path) -> dict | None:
+    try:
+        if not path.exists():
+            return None
+        return read_result_workbook_display_payload(path)
+    except (ValueError, FileNotFoundError):
+        return None
+
+
+def read_result_workbook_display_payload(path: Path) -> dict:
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"结果文件无法读取: {path.name}") from exc
+    try:
+        planning_rows = read_named_sheet_rows(workbook, "规划结果")
+        for row in planning_rows:
+            normalize_planning_result_total_capacity(row)
+        annual_rows = read_named_sheet_rows(workbook, "规划年指标")
+        green_daily = read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365)
+        green_monthly = read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12)
+        green_hourly = read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
+        safety_daily = read_workbook_rows_with_field_map(workbook, "安全日曲线", limit=365)
+        return {
+            "metrics": read_result_workbook_metrics(workbook),
+            "results": {
+                "overview_tables": [
+                    {"title": "规划结果", "rows": planning_rows},
+                    {"title": "规划年指标", "rows": annual_rows},
+                ],
+                "overview_disks": build_overview_composition_from_workbook(workbook),
+                "overview": [],
+                "green": [],
+                "green_table": read_named_sheet_rows(workbook, "供能分析"),
+                "safety": [],
+                "safety_table": read_named_sheet_rows(workbook, "安全评估"),
+                "curves": {
+                    "green_daily": green_daily,
+                    "green_monthly": green_monthly,
+                    "green_hourly": green_hourly,
+                    "safety_daily": safety_daily,
+                },
+            },
+        }
+    finally:
+        workbook.close()
+
+
+def read_result_workbook_metrics(workbook) -> list[dict]:
+    rows = read_named_sheet_rows(workbook, "总体指标")
+    metrics = []
+    for row in rows:
+        label = str(row.get("指标", "")).strip()
+        if not label or label in {"方案", "状态", "进度"}:
+            continue
+        metrics.append({"label": label, "value": row.get("数值", ""), "unit": row.get("单位", "")})
+    return metrics
+
+
+def merge_runtime_metrics(runtime_metrics: list[dict], workbook_metrics: list[dict]) -> list[dict]:
+    if not workbook_metrics:
+        return runtime_metrics
+    primary_labels = {"当前状态", "启动时刻", "结束时刻"}
+    primary = [item for item in runtime_metrics if isinstance(item, dict) and str(item.get("label", "")) in primary_labels]
+    secondary = [item for item in runtime_metrics if isinstance(item, dict) and str(item.get("label", "")) not in primary_labels]
+    merged = list(primary)
+    existing = {str(item.get("label", "")) for item in merged if isinstance(item, dict)}
+    for metric in workbook_metrics:
+        if not isinstance(metric, dict):
+            continue
+        label = str(metric.get("label", "")).strip()
+        if not label or label in existing:
+            continue
+        merged.append(metric)
+        existing.add(label)
+    for metric in secondary:
+        label = str(metric.get("label", "")).strip()
+        if label and label not in existing:
+            merged.append(metric)
+            existing.add(label)
+    return merged
+
+
+def read_workbook_rows_with_field_map(workbook, sheet_name: str, limit: int | None = None) -> list[dict]:
+    if sheet_name not in workbook.sheetnames:
+        return []
+    sheet = workbook[sheet_name]
+    rows_iter = sheet.iter_rows(values_only=True)
+    raw_headers = [str(value or "").strip() for value in next(rows_iter, [])]
+    headers = [result_workbook_header_to_field(header) for header in raw_headers]
+    rows = []
+    for row_index, row in enumerate(rows_iter, start=1):
+        if limit is not None and row_index > limit:
+            break
+        item = {}
+        for index, header in enumerate(headers):
+            if not header:
+                continue
+            value = row[index] if index < len(row) else ""
+            if value not in (None, ""):
+                item[header] = value
+        if item:
+            rows.append(item)
+    return rows
+
+
+def result_workbook_header_to_field(header: str) -> str:
+    clean = str(header or "").strip()
+    return RESULT_WORKBOOK_HEADER_TO_FIELD.get(clean, clean)
+
+
+def build_overview_composition_from_workbook(workbook) -> list[dict]:
+    annual_rows = read_annual_comparison_rows(workbook)
+    energy_rows = read_named_sheet_rows(workbook, "供能分析")
+    metrics = rows_by_metric([*annual_rows, *energy_rows])
+    construction_cost = metric_value(metrics, "年均建设成本")
+    diesel_cost = metric_value(metrics, "年柴油成本")
+    if construction_cost == 0 and diesel_cost == 0:
+        total_cost = metric_value(metrics, "年总成本") or metric_value(metrics, "总成本")
+        if total_cost:
+            construction_cost = total_cost
+    diesel_energy = metric_value(metrics, "柴发总发电量") or metric_value(metrics, "柴发总电量")
+    green_energy = metric_value(metrics, "绿电年发电量") or metric_value(metrics, "新能源实发电量")
+    if green_energy == 0:
+        green_energy = (
+            metric_value(metrics, "风机总发电量")
+            + metric_value(metrics, "光伏总发电量")
+            + metric_value(metrics, "电储能总放电量")
+            + metric_value(metrics, "燃料电池总发电量")
+        )
+    return [
+        {
+            "title": "成本构成",
+            "left_label": "年柴油成本",
+            "left_value": diesel_cost,
+            "right_label": "年均建设成本",
+            "right_value": construction_cost,
+            "unit": "万元",
+        },
+        {
+            "title": "电量构成",
+            "left_label": "柴发电量",
+            "left_value": diesel_energy,
+            "right_label": "绿电电量",
+            "right_value": green_energy,
+            "unit": energy_unit(metrics, ["柴发总发电量", "柴发总电量", "绿电年发电量", "新能源实发电量"]) or "kWh",
+        },
+    ]
+
+
+def rows_by_metric(rows: list[dict]) -> dict[str, dict]:
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("指标", "")).strip()
+        if name and name not in result:
+            result[name] = row
+    return result
+
+
+def metric_value(metrics: dict[str, dict], name: str) -> float:
+    row = metrics.get(name) or {}
+    value = _numeric_or_none(row.get("数值"))
+    return float(value) if value is not None else 0.0
+
+
+def energy_unit(metrics: dict[str, dict], names: list[str]) -> str:
+    for name in names:
+        unit = str((metrics.get(name) or {}).get("单位", "")).strip()
+        if unit:
+            return unit
+    return ""
 
 
 def empty_comparison_curve_groups() -> dict:
@@ -1790,6 +2023,12 @@ class EvaluationRuntime:
                 self._append_log_unlocked(level, message)
 
     def _payload_unlocked(self) -> dict:
+        workbook_payload = None
+        if self.status != "运行中" and self.result_filename:
+            try:
+                workbook_payload = read_result_workbook_display_payload_for_response(evaluation_result_path(self.scheme, self.result_filename))
+            except ValueError:
+                workbook_payload = None
         return {
             "status": self.status,
             "scheme": self.scheme,
@@ -1798,8 +2037,8 @@ class EvaluationRuntime:
             "progress": self.progress,
             "result_filename": self.result_filename,
             "result_file": self.result_file,
-            "metrics": self._metrics_unlocked(),
-            "results": self._results if self._results else self._default_results_unlocked(),
+            "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
+            "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
         }
 
@@ -2340,16 +2579,31 @@ def geocode_place_name(place: str) -> dict:
     if not query_text:
         raise ValueError("地名不能为空")
     errors: list[str] = []
-    providers = []
-    if AMAP_WEB_SERVICE_KEY:
-        providers.append(geocode_with_amap)
-    providers.extend([geocode_with_open_meteo, geocode_with_nominatim])
+    providers = geocode_provider_order(query_text)
     for provider in providers:
         try:
             return provider(query_text)
         except GeocodingError as exc:
             errors.append(str(exc))
     raise GeocodingError("；".join(errors) or "未找到该地名对应的经纬度坐标")
+
+
+def geocode_provider_order(place: str):
+    """Prefer Amap for Chinese place names, and global providers for foreign names."""
+    global_providers = [geocode_with_open_meteo, geocode_with_nominatim]
+    if not AMAP_WEB_SERVICE_KEY:
+        return global_providers
+    if should_prefer_global_geocoder(place):
+        return [*global_providers, geocode_with_amap]
+    return [geocode_with_amap, *global_providers]
+
+
+def should_prefer_global_geocoder(place: str) -> bool:
+    """Amap geocoding can match English names to domestic POIs, so route them globally first."""
+    text = str(place or "").strip()
+    has_cjk = bool(re.search(r"[\u3400-\u9fff]", text))
+    has_non_cjk_letter = any(character.isalpha() and not ("\u3400" <= character <= "\u9fff") for character in text)
+    return has_non_cjk_letter and not has_cjk
 
 
 def geocode_with_amap(place: str) -> dict:
@@ -2596,35 +2850,44 @@ def decode_csv_text(content: bytes) -> str:
 
 def normalize_imported_time_series(headers: list[str], raw_rows: list[dict[str, object]], filename: str) -> dict:
     column_map = match_time_series_import_columns(headers)
-    if len(raw_rows) < TIME_SERIES_IMPORT_ROW_COUNT:
-        raise ValueError(f"时序数据行数不足8760，当前为{len(raw_rows)}")
-    imported_rows = []
-    for index, raw_row in enumerate(raw_rows[:TIME_SERIES_IMPORT_ROW_COUNT], start=1):
-        item = {
-            "hour_index": index,
-            "datetime": imported_datetime(raw_row, column_map.get("datetime"), index),
-        }
+    if not raw_rows:
+        raise ValueError("导入失败，文件没有可用数据行")
+    parsed_by_hour: dict[int, dict] = {}
+    source_hour_count = min(len(raw_rows), TIME_SERIES_IMPORT_ROW_COUNT)
+    for row_index, raw_row in enumerate(raw_rows[:TIME_SERIES_IMPORT_ROW_COUNT], start=1):
+        target_hour = imported_hour_index(raw_row, column_map.get("datetime"), row_index)
+        if target_hour < 1 or target_hour > TIME_SERIES_IMPORT_ROW_COUNT or target_hour in parsed_by_hour:
+            target_hour = next_available_time_series_hour(parsed_by_hour, row_index)
+        item = {"hour_index": target_hour, "datetime": imported_datetime(raw_row, column_map.get("datetime"), target_hour)}
         for key in TIME_SERIES_IMPORT_REQUIRED_COLUMNS:
-            item[key] = imported_numeric_value(raw_row.get(column_map[key]), key, index)
-        imported_rows.append(item)
+            item[key] = imported_numeric_value(raw_row.get(column_map[key]), key, row_index)
+        parsed_by_hour[target_hour] = item
+    imported_rows = fill_imported_time_series_hours(parsed_by_hour)
+    missing_count = sum(1 for item in imported_rows if item.get("_filled"))
+    for item in imported_rows:
+        item.pop("_filled", None)
     message = f"已从{filename}导入8760行时序数据"
     if len(raw_rows) > TIME_SERIES_IMPORT_ROW_COUNT:
         message += f"，文件共有{len(raw_rows)}行，已使用前8760行"
+    elif source_hour_count < TIME_SERIES_IMPORT_ROW_COUNT:
+        message += f"，文件共有{source_hour_count}行，已按最后一行自动补齐{TIME_SERIES_IMPORT_ROW_COUNT - source_hour_count}行"
+    if missing_count:
+        message += f"，已补齐{missing_count}个缺失时点"
     return {"time_series": imported_rows, "time_series_count": len(imported_rows), "message": message}
 
 
 def match_time_series_import_columns(headers: list[str]) -> dict[str, str]:
-    normalized_headers = {normalize_import_header(header): header for header in headers if str(header or "").strip()}
+    normalized_headers = [(normalize_import_header(header), header) for header in headers if str(header or "").strip()]
     column_map: dict[str, str] = {}
     missing = []
     for key, (display_name, aliases) in TIME_SERIES_IMPORT_REQUIRED_COLUMNS.items():
-        matched = next((normalized_headers[normalize_import_header(alias)] for alias in aliases if normalize_import_header(alias) in normalized_headers), "")
+        matched = match_time_series_header(normalized_headers, aliases)
         if matched:
             column_map[key] = matched
         else:
             missing.append(display_name)
     for key, aliases in TIME_SERIES_IMPORT_OPTIONAL_COLUMNS.items():
-        matched = next((normalized_headers[normalize_import_header(alias)] for alias in aliases if normalize_import_header(alias) in normalized_headers), "")
+        matched = match_time_series_header(normalized_headers, aliases)
         if matched:
             column_map[key] = matched
     if missing:
@@ -2632,9 +2895,97 @@ def match_time_series_import_columns(headers: list[str]) -> dict[str, str]:
     return column_map
 
 
+def match_time_series_header(normalized_headers: list[tuple[str, str]], aliases: list[str]) -> str:
+    normalized_aliases = [normalize_import_header(alias) for alias in aliases]
+    for alias in normalized_aliases:
+        for header_norm, header in normalized_headers:
+            if header_norm == alias:
+                return header
+    for alias in normalized_aliases:
+        if len(alias) < 2:
+            continue
+        for header_norm, header in normalized_headers:
+            if alias in header_norm or header_norm in alias:
+                return header
+    return ""
+
+
 def normalize_import_header(value: object) -> str:
     text = str(value or "").strip().lower()
-    return re.sub(r"[\s_\-（）()［\]\[\]/\\:：,，。.%％]+", "", text)
+    return re.sub(r"[\s_\-^（）()［\]\[\]/\\:：,，。.%％]+", "", text)
+
+
+def imported_hour_index(raw_row: dict[str, object], column: str | None, fallback_index: int) -> int:
+    if not column:
+        return fallback_index
+    value = raw_row.get(column)
+    if value in ("", None):
+        return fallback_index
+    if isinstance(value, datetime):
+        day_of_year = value.timetuple().tm_yday
+        return (day_of_year - 1) * 24 + value.hour + 1
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return fallback_index
+    hour_match = re.fullmatch(r"[hH]\s*0*(\d{1,4})", text)
+    if hour_match:
+        return int(hour_match.group(1))
+    numeric_match = re.fullmatch(r"0*(\d{1,4})(?:\.0+)?", text)
+    if numeric_match:
+        return int(numeric_match.group(1))
+    datetime_match = re.search(r"\b(\d{1,2})[:：](\d{1,2})(?::\d{1,2})?\b", text)
+    date_match = re.search(r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})", text)
+    if datetime_match and date_match:
+        try:
+            parsed = datetime(
+                int(date_match.group(1)),
+                int(date_match.group(2)),
+                int(date_match.group(3)),
+                int(datetime_match.group(1)),
+            )
+            return (parsed.timetuple().tm_yday - 1) * 24 + parsed.hour + 1
+        except ValueError:
+            return fallback_index
+    return fallback_index
+
+
+def next_available_time_series_hour(parsed_by_hour: dict[int, dict], fallback_index: int) -> int:
+    hour = max(1, min(TIME_SERIES_IMPORT_ROW_COUNT, fallback_index))
+    while hour in parsed_by_hour and hour <= TIME_SERIES_IMPORT_ROW_COUNT:
+        hour += 1
+    if hour <= TIME_SERIES_IMPORT_ROW_COUNT:
+        return hour
+    for candidate in range(1, TIME_SERIES_IMPORT_ROW_COUNT + 1):
+        if candidate not in parsed_by_hour:
+            return candidate
+    return TIME_SERIES_IMPORT_ROW_COUNT
+
+
+def fill_imported_time_series_hours(parsed_by_hour: dict[int, dict]) -> list[dict]:
+    first_row = parsed_by_hour[min(parsed_by_hour)]
+    previous = None
+    imported_rows = []
+    for hour in range(1, TIME_SERIES_IMPORT_ROW_COUNT + 1):
+        if hour in parsed_by_hour:
+            current = dict(parsed_by_hour[hour])
+            current["hour_index"] = hour
+            current["datetime"] = imported_datetime_for_output(current.get("datetime"), hour)
+            previous = current
+            imported_rows.append(current)
+            continue
+        base = previous or first_row
+        filled = {key: base[key] for key in TIME_SERIES_IMPORT_REQUIRED_COLUMNS}
+        filled.update({"hour_index": hour, "datetime": f"H{hour:04d}", "_filled": True})
+        previous = filled
+        imported_rows.append(filled)
+    return imported_rows
+
+
+def imported_datetime_for_output(value: object, index: int) -> str:
+    text = str(value or "").strip()
+    return text or f"H{index:04d}"
 
 
 def imported_datetime(raw_row: dict[str, object], column: str | None, index: int) -> str:

@@ -8,6 +8,7 @@ const state = {
   mapPoint: null,
   mapInstance: null,
   mapMarker: null,
+  mapCleanup: null,
   mapProvider: "amap",
   chartMeta: null,
   timeChartManualHeight: null,
@@ -17,11 +18,18 @@ const state = {
   originalLoadCurve: null,
 };
 
+const AMAP_TILE_SIZE = 256;
+const AMAP_MIN_ZOOM = 2;
+const AMAP_MAX_ZOOM = 18;
+const AMAP_DEFAULT_ZOOM = 4;
+const WEB_MERCATOR_MAX_LAT = 85.05112878;
+const GLOBAL_TILE_SOURCE_LABEL = "OpenStreetMap 全球底图";
+
 const deviceSpecs = [
-  ["diesel_generators", "柴发", ["name", "cost", "capacity", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["diesel_generators", "柴发", ["name", "cost", "capacity", "power_upper", "power_lower", "fuel_rate", "inertia_constant_h", "primary_frequency_coefficient_k", "damping_coefficient_d", "governor_time_constant_t", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["wind_turbines", "风机", ["name", "cost", "capacity", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["photovoltaics", "光伏", ["name", "cost", "capacity", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["storage_pcs", "储能PCS", ["name", "cost", "power_capacity", "storage_charge_efficiency", "storage_discharge_efficiency", "quantity_lower", "quantity_upper", "is_grid_forming", "design_life_years"]],
+  ["storage_pcs", "储能PCS", ["name", "cost", "power_capacity", "storage_charge_efficiency", "storage_discharge_efficiency", "is_grid_forming", "storage_equivalent_inertia_constant_h", "storage_equivalent_primary_frequency_coefficient_k", "storage_equivalent_damping_coefficient_d", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_battery_packs", "储能电池组", ["name", "cost", "battery_capacity", "soc_upper", "soc_lower", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["hydrogen_electrolyzers", "电制氢", ["name", "cost", "power_capacity", "power_lower", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["hydrogen_tanks", "储氢罐", ["name", "cost", "hydrogen_tank_capacity", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
@@ -51,6 +59,20 @@ const planningParameterSpecs = [
   ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: 0 }],
   ["frequency_security_upper", "频率安全上限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.5 }],
   ["frequency_security_lower", "频率安全下限(0.5-1.0)", "number", { min: 0.5, max: 1, defaultValue: 1.0 }],
+  ["frequency_nadir_lower_hz", "频率最低点下限(Hz)", "number", { min: 45, max: 50, defaultValue: 49.5 }],
+  ["frequency_peak_upper_hz", "频率最高点上限(Hz)", "number", { min: 50, max: 55, defaultValue: 50.5 }],
+  ["frequency_lower_security_margin_hz", "频率下限安全裕度(Hz)", "number", { min: 0, max: 5, defaultValue: 0.1 }],
+  ["frequency_upper_security_margin_hz", "频率上限安全裕度(Hz)", "number", { min: 0, max: 5, defaultValue: 0.1 }],
+  ["load_frequency_coefficient_d", "负荷频率系数D", "number", { min: 0, max: 10, defaultValue: 1.0 }],
+  ["rocof_upper_hz_per_s", "RoCoF上限(Hz/s)", "number", { min: 0.0001, max: 10, defaultValue: 1.0 }],
+  ["steady_state_frequency_lower_hz", "稳态频率下限(Hz)", "number", { min: 45, max: 50, defaultValue: 49.8 }],
+  ["steady_state_frequency_upper_hz", "稳态频率上限(Hz)", "number", { min: 50, max: 55, defaultValue: 50.2 }],
+  ["frequency_nadir_evaluation_duration_s", "频率Nadir评估时长(s)", "number", { min: 0.1, max: 120, defaultValue: 10.0 }],
+  ["nadir_linearization_samples_per_axis", "Nadir线性化每轴采样点数", "number", { min: 2, max: 50, integer: true, positive: true, integerMessage: "Nadir线性化每轴采样点数必须为正整数", defaultValue: 5 }],
+  ["nadir_linearization_interval_ratio", "Nadir线性化区间比例", "number", { min: 0.0001, max: 10, defaultValue: 1.0 }],
+  ["network_synchronization_coefficient_base", "网络同步系数基值", "number", { min: 0, defaultValue: 1.0 }],
+  ["network_synchronization_coefficient_slope", "网络同步系数斜率", "number", { defaultValue: 0.0 }],
+  ["network_synchronization_reference_load_kw", "网络同步系数基准负荷(kW)", "number", { min: 0, defaultValue: 0.0 }],
   ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: 0 }],
 ];
 
@@ -90,6 +112,20 @@ const planningParameterGroups = [
       "frequency_security_constraint_enabled",
       "frequency_security_upper",
       "frequency_security_lower",
+      "frequency_nadir_lower_hz",
+      "frequency_peak_upper_hz",
+      "frequency_lower_security_margin_hz",
+      "frequency_upper_security_margin_hz",
+      "load_frequency_coefficient_d",
+      "rocof_upper_hz_per_s",
+      "steady_state_frequency_lower_hz",
+      "steady_state_frequency_upper_hz",
+      "frequency_nadir_evaluation_duration_s",
+      "nadir_linearization_samples_per_axis",
+      "nadir_linearization_interval_ratio",
+      "network_synchronization_coefficient_base",
+      "network_synchronization_coefficient_slope",
+      "network_synchronization_reference_load_kw",
       "storage_frequency_regulation_enabled",
     ],
   },
@@ -122,22 +158,29 @@ const labels = {
   name: "名称",
   solar_irradiance: "太阳辐照",
   temperature: "温度",
-  capacity: "功率容量(kW)",
-  power_capacity: "功率容量(kW)",
+  capacity: "容量(kW)",
+  power_capacity: "容量(kW)",
   storage_charge_efficiency: "充电效率(0.0-1.0)",
   storage_discharge_efficiency: "放电效率(0.0-1.0)",
-  battery_capacity: "电池容量(kWh)",
+  storage_equivalent_inertia_constant_h: "等效惯量常数H(s)",
+  storage_equivalent_primary_frequency_coefficient_k: "等效一次调频系数K",
+  storage_equivalent_damping_coefficient_d: "等效阻尼系数D",
+  battery_capacity: "容量(kWh)",
   soc_upper: "SOC上限",
   soc_lower: "SOC下限",
   self_discharge_rate: "自损耗率(0-1%/天)",
   hydrogen_tank_capacity: "容量(Nm3)",
-  quantity_lower: "数据下限(台)",
-  quantity_upper: "数据上限(台)",
+  quantity_lower: "数量下限(台)",
+  quantity_upper: "数量上限(台)",
   design_life_years: "设计年限(年）",
   cost: "成本(万元/台)",
   power_upper: "功率上限(kW)",
   power_lower: "功率下限(kW)",
   fuel_rate: "油耗率(kg/kWh)",
+  inertia_constant_h: "惯量常数H(s)",
+  primary_frequency_coefficient_k: "一次调频系数K",
+  damping_coefficient_d: "阻尼系数D",
+  governor_time_constant_t: "调速时间常数T(s)",
   is_grid_forming: "是否构网",
   cut_in_wind_speed: "切入风速(m/s)",
   rated_wind_speed: "额定风速(m/s)",
@@ -148,8 +191,15 @@ const labels = {
 
 const deviceFieldDefaults = {
   design_life_years: 20,
+  inertia_constant_h: 3.5,
+  primary_frequency_coefficient_k: 0.4,
+  damping_coefficient_d: 0.01,
+  governor_time_constant_t: 0.6,
   rated_wind_speed: 12,
   is_grid_forming: 0,
+  storage_equivalent_inertia_constant_h: 2.5,
+  storage_equivalent_primary_frequency_coefficient_k: 0.5,
+  storage_equivalent_damping_coefficient_d: 0.05,
   storage_charge_efficiency: 0.95,
   storage_discharge_efficiency: 0.95,
   soc_upper: 0.9,
@@ -158,23 +208,30 @@ const deviceFieldDefaults = {
 };
 
 const deviceFieldRules = {
-  quantity_lower: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数据上下限必须为非负整数" },
-  quantity_upper: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数据上下限必须为非负整数" },
+  quantity_lower: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数量上下限必须为非负整数" },
+  quantity_upper: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数量上下限必须为非负整数" },
   design_life_years: { integer: true, positive: true, attrs: ['min="1"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "设计年限(年）必须为正整数" },
   cost: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "成本(万元/台)必须为非负浮点数" },
-  capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
-  power_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
+  capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "容量(kW)必须为正实数" },
+  power_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "容量(kW)必须为正实数" },
   storage_charge_efficiency: { min: 0, max: 1, positive: true, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "充电效率(0.0-1.0)必须在0到1之间，且必须大于0" },
   storage_discharge_efficiency: { min: 0, max: 1, positive: true, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "放电效率(0.0-1.0)必须在0到1之间，且必须大于0" },
-  battery_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电池容量(kWh)必须为正实数" },
+  battery_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "容量(kWh)必须为正实数" },
   soc_upper: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC上限(0.0-1.0)必须在0到1之间" },
   soc_lower: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC下限(0.0-1.0)必须在0到1之间" },
   self_discharge_rate: { min: 0, max: 0.01, attrs: ['min="0"', 'max="0.01"', 'step="any"', 'inputmode="decimal"'], message: "自损耗率(0-1%/天)必须在0到0.01之间" },
   is_grid_forming: { integer: true, min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="1"', 'inputmode="numeric"', 'pattern="[01]"'], message: "是否构网必须为0或1" },
+  storage_equivalent_inertia_constant_h: { min: 0.5, max: 10, attrs: ['min="0.5"', 'max="10"', 'step="any"', 'inputmode="decimal"'], message: "等效惯量常数H(s)必须在0.5到10.0之间" },
+  storage_equivalent_primary_frequency_coefficient_k: { min: 0.1, max: 5, attrs: ['min="0.1"', 'max="5"', 'step="any"', 'inputmode="decimal"'], message: "等效一次调频系数K必须在0.1到5.0之间" },
+  storage_equivalent_damping_coefficient_d: { min: 0.001, max: 1, attrs: ['min="0.001"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "等效阻尼系数D必须在0.001到1.0之间" },
   hydrogen_tank_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "容量(Nm3)必须为正实数" },
   electric_to_hydrogen_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电-氢效率(Nm3/kWh)必须为正实数" },
   hydrogen_to_electric_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢-电效率(kWh/Nm3)必须为正实数" },
   fuel_rate: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "油耗率(kg/kWh)必须为正实数" },
+  inertia_constant_h: { min: 1, max: 10, attrs: ['min="1"', 'max="10"', 'step="any"', 'inputmode="decimal"'], message: "惯量常数H(s)必须在1.0到10.0之间" },
+  primary_frequency_coefficient_k: { min: 0.1, max: 1, attrs: ['min="0.1"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "一次调频系数K必须在0.1到1.0之间" },
+  damping_coefficient_d: { min: 0.001, max: 1, attrs: ['min="0.001"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "阻尼系数D必须在0.001到1.0之间" },
+  governor_time_constant_t: { min: 0.1, max: 2, attrs: ['min="0.1"', 'max="2"', 'step="any"', 'inputmode="decimal"'], message: "调速时间常数T(s)必须在0.1到2.0之间" },
   power_lower: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率下限(kW)必须为非负实数" },
   cut_in_wind_speed: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "切入风速(m/s)必须为非负实数" },
   rated_wind_speed: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "额定风速(m/s)必须为正实数" },
@@ -560,7 +617,7 @@ async function geocodePlace() {
     return null;
   });
   if (!result) return;
-  setMapPoint(result.latitude, result.longitude, "geocode");
+  setMapPoint(result.latitude, result.longitude, "geocode", result);
 }
 
 async function fetchWeatherHistory() {
@@ -648,7 +705,8 @@ async function onTimeSeriesImportFileChange(event) {
     const rows = result.time_series || [];
     state.pendingTimeSeriesImport = rows;
     renderTimeSeriesImportPreview(rows);
-    setTimeSeriesImportHint(result.message || "导入文件解析成功，请确认后保存。", "ok");
+    const level = isTimeSeriesImportWarning(result) ? "warning" : "ok";
+    setTimeSeriesImportHint(result.message || "导入文件解析成功，请确认后保存。", level);
     setTimeSeriesImportSummary(`已解析：${file.name}，共${rows.length}行`);
   } catch (error) {
     state.pendingTimeSeriesImport = null;
@@ -772,6 +830,12 @@ function setTimeSeriesImportHint(message, level = "") {
   hint.textContent = message;
   hint.classList.toggle("error", level === "error");
   hint.classList.toggle("ok", level === "ok");
+  hint.classList.toggle("warning", level === "warning");
+}
+
+function isTimeSeriesImportWarning(result) {
+  const message = String(result?.message || "");
+  return message.includes("自动补齐") || message.includes("已使用前8760行") || message.includes("缺失时点");
 }
 
 function setTimeSeriesImportSummary(message) {
@@ -998,8 +1062,7 @@ async function loadSelectedMapProvider() {
         await loadGoogleMapScript(key);
         initGoogleMapPicker();
       } else {
-        await loadAmapScript(key);
-        initAmapPicker();
+        initAmapTilePicker();
       }
       state.mapProvider = provider;
       renderMapProviderTabs(config);
@@ -1057,10 +1120,17 @@ function renderMapProviderTabs(config) {
 }
 
 function resetMapCanvas() {
+  if (typeof state.mapCleanup === "function") {
+    state.mapCleanup();
+  }
   state.mapInstance = null;
   state.mapMarker = null;
+  state.mapCleanup = null;
   const canvas = document.getElementById("mapPickerCanvas");
-  if (canvas) canvas.innerHTML = "";
+  if (canvas) {
+    canvas.classList.remove("amap-tile-map", "dragging");
+    canvas.innerHTML = "";
+  }
 }
 
 function loadAmapScript(key) {
@@ -1127,33 +1197,22 @@ function loadGoogleMapScript(key) {
 }
 
 function initAmapPicker() {
-  const latitude = Number(document.getElementById("weatherLatitude").value);
-  const longitude = Number(document.getElementById("weatherLongitude").value);
-  const center = Number.isFinite(latitude) && Number.isFinite(longitude) ? [longitude, latitude] : [116.39723, 39.9075];
-  if (!state.mapInstance) {
-    state.mapInstance = new window.AMap.Map("mapPickerCanvas", {
-      zoom: 5,
-      center,
-      resizeEnable: true,
-    });
-    state.mapMarker = new window.AMap.Marker({ position: center });
-    state.mapInstance.add(state.mapMarker);
-    state.mapInstance.on("click", (event) => {
-      const point = event.lnglat;
-      setMapPoint(point.getLat(), point.getLng());
-    });
-  } else {
-    state.mapInstance.setCenter(center);
-  }
-  setTimeout(() => state.mapInstance.resize?.(), 80);
+  initAmapTilePicker();
+}
+
+function initAmapTilePicker() {
+  const canvas = document.getElementById("mapPickerCanvas");
+  if (!canvas) return;
+  const center = currentMapCenterArray();
+  state.mapInstance = createAmapTileMap(canvas, center, AMAP_DEFAULT_ZOOM);
+  state.mapMarker = state.mapInstance.marker;
+  state.mapCleanup = state.mapInstance.destroy;
+  setTimeout(() => state.mapInstance.resize(), 80);
 }
 
 function initBaiduMapPicker() {
-  const latitude = Number(document.getElementById("weatherLatitude").value);
-  const longitude = Number(document.getElementById("weatherLongitude").value);
-  const center = Number.isFinite(latitude) && Number.isFinite(longitude)
-    ? new window.BMap.Point(longitude, latitude)
-    : new window.BMap.Point(116.39723, 39.9075);
+  const [longitude, latitude] = currentMapCenterArray();
+  const center = new window.BMap.Point(longitude, latitude);
   state.mapInstance = new window.BMap.Map("mapPickerCanvas");
   state.mapInstance.centerAndZoom(center, 5);
   state.mapInstance.enableScrollWheelZoom(true);
@@ -1165,11 +1224,8 @@ function initBaiduMapPicker() {
 }
 
 function initGoogleMapPicker() {
-  const latitude = Number(document.getElementById("weatherLatitude").value);
-  const longitude = Number(document.getElementById("weatherLongitude").value);
-  const center = Number.isFinite(latitude) && Number.isFinite(longitude)
-    ? { lat: latitude, lng: longitude }
-    : { lat: 39.9075, lng: 116.39723 };
+  const [longitude, latitude] = currentMapCenterArray();
+  const center = { lat: latitude, lng: longitude };
   state.mapInstance = new window.google.maps.Map(document.getElementById("mapPickerCanvas"), {
     zoom: 5,
     center,
@@ -1180,25 +1236,283 @@ function initGoogleMapPicker() {
   });
 }
 
-function setMapPoint(latitude, longitude, source = "map") {
+function currentMapCenterArray() {
+  const latitude = coordinateInputNumber("weatherLatitude");
+  const longitude = coordinateInputNumber("weatherLongitude");
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return [clampLongitude(longitude), clampLatitude(latitude)];
+  }
+  return [116.39723, 39.9075];
+}
+
+function coordinateInputNumber(id) {
+  const value = document.getElementById(id)?.value;
+  if (value === undefined || String(value).trim() === "") return NaN;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function createAmapTileMap(canvas, center, initialZoom) {
+  canvas.classList.add("amap-tile-map");
+  canvas.innerHTML = `
+    <div class="amap-tile-layer" aria-hidden="true"></div>
+    <div class="amap-coordinate-marker" aria-hidden="true"><span></span></div>
+    <div class="amap-map-controls" aria-label="高德地图缩放控件">
+      <button type="button" data-amap-zoom="in" aria-label="放大地图">+</button>
+      <button type="button" data-amap-zoom="out" aria-label="缩小地图">-</button>
+    </div>
+    <div class="amap-map-attribution">高德地图 / ${GLOBAL_TILE_SOURCE_LABEL}</div>
+  `;
+  const tileLayer = canvas.querySelector(".amap-tile-layer");
+  const markerElement = canvas.querySelector(".amap-coordinate-marker");
+  let zoom = clampZoom(initialZoom);
+  let centerPoint = normalizeLngLatArray(center);
+  let markerPoint = [...centerPoint];
+  let dragState = null;
+
+  const render = () => {
+    renderAmapTileLayer(canvas, tileLayer, centerPoint, zoom);
+    renderAmapMarker(canvas, markerElement, centerPoint, markerPoint, zoom);
+  };
+
+  const setCenter = (position) => {
+    centerPoint = normalizeLngLatArray(position);
+    render();
+  };
+
+  const marker = {
+    setPosition(position) {
+      markerPoint = normalizeLngLatArray(position);
+      render();
+    },
+  };
+
+  const setZoom = (nextZoom) => {
+    zoom = clampZoom(nextZoom);
+    render();
+  };
+
+  const pointFromEvent = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    const centerPixel = lngLatToWebMercatorPixel(centerPoint[0], centerPoint[1], zoom);
+    const pixel = {
+      x: centerPixel.x + event.clientX - rect.left - rect.width / 2,
+      y: centerPixel.y + event.clientY - rect.top - rect.height / 2,
+    };
+    return webMercatorPixelToLngLat(pixel.x, pixel.y, zoom);
+  };
+
+  const onWheel = (event) => {
+    event.preventDefault();
+    setZoom(zoom + (event.deltaY < 0 ? 1 : -1));
+  };
+
+  const onPointerDown = (event) => {
+    if (event.target.closest?.(".amap-map-controls")) return;
+    const centerPixel = lngLatToWebMercatorPixel(centerPoint[0], centerPoint[1], zoom);
+    dragState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      centerPixel,
+      moved: false,
+    };
+    canvas.setPointerCapture?.(event.pointerId);
+    canvas.classList.add("dragging");
+  };
+
+  const onPointerMove = (event) => {
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - dragState.startX;
+    const deltaY = event.clientY - dragState.startY;
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 4) {
+      dragState.moved = true;
+    }
+    const nextCenter = webMercatorPixelToLngLat(
+      dragState.centerPixel.x - deltaX,
+      dragState.centerPixel.y - deltaY,
+      zoom,
+    );
+    centerPoint = nextCenter;
+    render();
+  };
+
+  const onPointerEnd = (event) => {
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    const shouldSelect = !dragState.moved;
+    dragState = null;
+    canvas.releasePointerCapture?.(event.pointerId);
+    canvas.classList.remove("dragging");
+    if (shouldSelect) {
+      const point = pointFromEvent(event);
+      markerPoint = point;
+      setMapPoint(point[1], point[0]);
+    }
+  };
+
+  const onControlClick = (event) => {
+    const button = event.target.closest?.("[data-amap-zoom]");
+    if (!button) return;
+    setZoom(zoom + (button.dataset.amapZoom === "in" ? 1 : -1));
+  };
+
+  canvas.addEventListener("wheel", onWheel, { passive: false });
+  canvas.addEventListener("pointerdown", onPointerDown);
+  canvas.addEventListener("pointermove", onPointerMove);
+  canvas.addEventListener("pointerup", onPointerEnd);
+  canvas.addEventListener("pointercancel", onPointerEnd);
+  canvas.addEventListener("click", onControlClick);
+  render();
+
+  return {
+    marker,
+    setCenter,
+    setZoom,
+    getZoom: () => zoom,
+    resize: render,
+    destroy() {
+      canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerEnd);
+      canvas.removeEventListener("pointercancel", onPointerEnd);
+      canvas.removeEventListener("click", onControlClick);
+    },
+  };
+}
+
+function renderAmapTileLayer(canvas, tileLayer, center, zoom) {
+  if (!canvas || !tileLayer) return;
+  const width = canvas.clientWidth || 800;
+  const height = canvas.clientHeight || 420;
+  const centerPixel = lngLatToWebMercatorPixel(center[0], center[1], zoom);
+  const startX = centerPixel.x - width / 2;
+  const startY = centerPixel.y - height / 2;
+  const endX = startX + width;
+  const endY = startY + height;
+  const minTileX = Math.floor(startX / AMAP_TILE_SIZE) - 1;
+  const maxTileX = Math.floor(endX / AMAP_TILE_SIZE) + 1;
+  const minTileY = Math.floor(startY / AMAP_TILE_SIZE) - 1;
+  const maxTileY = Math.floor(endY / AMAP_TILE_SIZE) + 1;
+  const tileCount = 2 ** zoom;
+  const tiles = [];
+  for (let tileY = minTileY; tileY <= maxTileY; tileY += 1) {
+    if (tileY < 0 || tileY >= tileCount) continue;
+    for (let tileX = minTileX; tileX <= maxTileX; tileX += 1) {
+      const wrappedTileX = modulo(tileX, tileCount);
+      const left = tileX * AMAP_TILE_SIZE - startX;
+      const top = tileY * AMAP_TILE_SIZE - startY;
+      const server = (Math.abs(wrappedTileX + tileY) % 4) + 1;
+      tiles.push(
+        `<img class="amap-map-tile" alt="" draggable="false" src="${amapTileUrl(server, wrappedTileX, tileY, zoom)}" data-fallback-src="${osmTileUrl(wrappedTileX, tileY, zoom)}" style="left:${left.toFixed(2)}px;top:${top.toFixed(2)}px;">`,
+      );
+    }
+  }
+  tileLayer.innerHTML = tiles.join("");
+  tileLayer.querySelectorAll(".amap-map-tile[data-fallback-src]").forEach((tile) => {
+    tile.addEventListener("error", () => switchAmapTileToGlobalFallback(tile), { once: true });
+  });
+}
+
+function renderAmapMarker(canvas, markerElement, center, markerPoint, zoom) {
+  if (!canvas || !markerElement) return;
+  const centerPixel = lngLatToWebMercatorPixel(center[0], center[1], zoom);
+  const markerPixel = lngLatToWebMercatorPixel(markerPoint[0], markerPoint[1], zoom);
+  const left = canvas.clientWidth / 2 + markerPixel.x - centerPixel.x;
+  const top = canvas.clientHeight / 2 + markerPixel.y - centerPixel.y;
+  markerElement.style.transform = `translate(${left.toFixed(2)}px, ${top.toFixed(2)}px) translate(-50%, -100%)`;
+}
+
+function amapTileUrl(server, x, y, z) {
+  return `https://webrd0${server}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=${x}&y=${y}&z=${z}`;
+}
+
+function osmTileUrl(x, y, z) {
+  return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+}
+
+function switchAmapTileToGlobalFallback(tile) {
+  if (!tile || tile.dataset.fallbackUsed === "1") return;
+  const fallbackSource = tile.dataset.fallbackSrc;
+  if (!fallbackSource) return;
+  tile.dataset.fallbackUsed = "1";
+  tile.classList.add("global-fallback");
+  tile.src = fallbackSource;
+}
+
+function lngLatToWebMercatorPixel(longitude, latitude, zoom) {
+  const lat = clampLatitude(latitude);
+  const lng = clampLongitude(longitude);
+  const sinLat = Math.sin((lat * Math.PI) / 180);
+  const scale = AMAP_TILE_SIZE * 2 ** zoom;
+  return {
+    x: ((lng + 180) / 360) * scale,
+    y: (0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI)) * scale,
+  };
+}
+
+function webMercatorPixelToLngLat(x, y, zoom) {
+  const scale = AMAP_TILE_SIZE * 2 ** zoom;
+  const longitude = (x / scale) * 360 - 180;
+  const n = Math.PI - (2 * Math.PI * y) / scale;
+  const latitude = (Math.atan(Math.sinh(n)) * 180) / Math.PI;
+  return [clampLongitude(longitude), clampLatitude(latitude)];
+}
+
+function normalizeLngLatArray(position) {
+  const longitude = Array.isArray(position) ? Number(position[0]) : Number(position?.lng);
+  const latitude = Array.isArray(position) ? Number(position[1]) : Number(position?.lat);
+  return [
+    clampLongitude(Number.isFinite(longitude) ? longitude : 116.39723),
+    clampLatitude(Number.isFinite(latitude) ? latitude : 39.9075),
+  ];
+}
+
+function clampLatitude(latitude) {
+  return Math.max(-WEB_MERCATOR_MAX_LAT, Math.min(WEB_MERCATOR_MAX_LAT, Number(latitude)));
+}
+
+function clampLongitude(longitude) {
+  const value = Number(longitude);
+  if (!Number.isFinite(value)) return 0;
+  return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+function clampZoom(zoom) {
+  return Math.max(AMAP_MIN_ZOOM, Math.min(AMAP_MAX_ZOOM, Math.round(Number(zoom) || AMAP_DEFAULT_ZOOM)));
+}
+
+function modulo(value, divisor) {
+  return ((value % divisor) + divisor) % divisor;
+}
+
+function setMapPoint(latitude, longitude, source = "map", geocodeResult = null) {
   state.mapPoint = { latitude, longitude };
   document.getElementById("weatherLatitude").value = Number(latitude).toFixed(6);
   document.getElementById("weatherLongitude").value = Number(longitude).toFixed(6);
   if (state.mapProvider === "baidu" && state.mapInstance && window.BMap) {
     const point = new window.BMap.Point(longitude, latitude);
-    state.mapInstance.centerAndZoom(point, state.mapInstance.getZoom ? state.mapInstance.getZoom() : 5);
+    state.mapInstance.centerAndZoom(point, source === "geocode" ? 11 : state.mapInstance.getZoom ? state.mapInstance.getZoom() : 5);
     if (state.mapMarker) state.mapMarker.setPosition(point);
   } else if (state.mapProvider === "google" && state.mapInstance && window.google?.maps) {
     const point = { lat: latitude, lng: longitude };
     state.mapInstance.setCenter(point);
+    if (source === "geocode") state.mapInstance.setZoom(11);
     if (state.mapMarker) state.mapMarker.setPosition(point);
   } else if (state.mapInstance) {
     state.mapInstance.setCenter([longitude, latitude]);
+    if (source === "geocode" && state.mapInstance.setZoom) state.mapInstance.setZoom(11);
     if (state.mapMarker) state.mapMarker.setPosition([longitude, latitude]);
   }
-  const sourceText = source === "geocode" ? "地名坐标" : "地图坐标";
+  const sourceText = source === "geocode" ? geocodeHintLabel(geocodeResult) : "地图坐标";
   setMapPickerHint(`${sourceText}：${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`);
   setWeatherImportStatus("坐标已填入", "ok");
+}
+
+function geocodeHintLabel(result) {
+  const displayName = String(result?.display_name || result?.place || "").trim();
+  const provider = String(result?.source || "").includes("高德") ? "高德定位" : "地名定位";
+  return displayName ? `${provider}（${displayName}）` : provider;
 }
 
 function confirmMapPoint() {
@@ -1813,7 +2127,7 @@ function renderCandidateDeviceTable() {
   if (!rows.length) {
     return "<div class=\"empty-summary\">暂无设备条目</div>";
   }
-  return `<table><thead><tr><th>设备类型</th><th>名称</th><th>容量</th><th>数据下限(台)</th><th>数据上限(台)</th><th>状态</th></tr></thead><tbody>${rows
+  return `<table><thead><tr><th>设备类型</th><th>名称</th><th>容量</th><th>数量下限(台)</th><th>数量上限(台)</th><th>状态</th></tr></thead><tbody>${rows
     .map((row) => {
       const status = limitStatus(row.lower, row.upper);
       return `<tr><td>${row.device}</td><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.capacity)}</td><td>${escapeHtml(row.lower)}</td><td>${escapeHtml(row.upper)}</td><td class="${status === "正常" ? "status-ok" : "status-error"}">${status}</td></tr>`;
@@ -1999,7 +2313,7 @@ function collectSaveWarnings() {
         }
       });
       if (validateDeviceFieldValue(row.quantity_lower, deviceFieldRules.quantity_lower) && validateDeviceFieldValue(row.quantity_upper, deviceFieldRules.quantity_upper) && Number(row.quantity_upper) < Number(row.quantity_lower)) {
-        messages.push({ level: "error", message: `${title}第${index + 1}行数据上限不能小于数据下限` });
+        messages.push({ level: "error", message: `${title}第${index + 1}行数量上限不能小于数量下限` });
       }
       if (key === "storage_battery_packs" && validateDeviceFieldValue(row.soc_upper, deviceFieldRules.soc_upper) && validateDeviceFieldValue(row.soc_lower, deviceFieldRules.soc_lower) && Number(row.soc_upper) < Number(row.soc_lower)) {
         messages.push({ level: "error", message: `${title}第${index + 1}行SOC上限不能小于SOC下限` });
@@ -2022,7 +2336,7 @@ function collectPlanningParameterWarnings() {
       return;
     }
     if (options.integer && !Number.isInteger(value)) {
-      messages.push({ level: "error", message: `${label}必须为整数` });
+      messages.push({ level: "error", message: options.integerMessage || `${label}必须为整数` });
     }
     if (options.positive && value <= 0) {
       messages.push({ level: "error", message: `${label}必须大于0` });
@@ -2038,6 +2352,11 @@ function collectPlanningParameterWarnings() {
   const lower = Number(row.frequency_security_lower);
   if (Number.isFinite(upper) && Number.isFinite(lower) && upper < lower) {
     messages.push({ level: "error", message: "频率安全上限不能小于频率安全下限" });
+  }
+  const steadyUpper = Number(row.steady_state_frequency_upper_hz);
+  const steadyLower = Number(row.steady_state_frequency_lower_hz);
+  if (Number.isFinite(steadyUpper) && Number.isFinite(steadyLower) && steadyUpper < steadyLower) {
+    messages.push({ level: "error", message: "稳态频率上限(Hz)不能小于稳态频率下限(Hz)" });
   }
   return messages;
 }
