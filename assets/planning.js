@@ -835,7 +835,11 @@ function setTimeSeriesImportHint(message, level = "") {
 
 function isTimeSeriesImportWarning(result) {
   const message = String(result?.message || "");
-  return message.includes("自动补齐") || message.includes("已使用前8760行") || message.includes("缺失时点");
+  return message.includes("自动补齐")
+    || message.includes("已使用前8760行")
+    || message.includes("缺失时点")
+    || message.includes("无效数值")
+    || message.includes("已修复");
 }
 
 function setTimeSeriesImportSummary(message) {

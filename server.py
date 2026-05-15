@@ -2860,8 +2860,9 @@ def normalize_imported_time_series(headers: list[str], raw_rows: list[dict[str, 
             target_hour = next_available_time_series_hour(parsed_by_hour, row_index)
         item = {"hour_index": target_hour, "datetime": imported_datetime(raw_row, column_map.get("datetime"), target_hour)}
         for key in TIME_SERIES_IMPORT_REQUIRED_COLUMNS:
-            item[key] = imported_numeric_value(raw_row.get(column_map[key]), key, row_index)
+            item[key] = imported_numeric_value_or_none(raw_row.get(column_map[key]))
         parsed_by_hour[target_hour] = item
+    repaired_numeric_count = repair_imported_numeric_values(parsed_by_hour)
     imported_rows = fill_imported_time_series_hours(parsed_by_hour)
     missing_count = sum(1 for item in imported_rows if item.get("_filled"))
     for item in imported_rows:
@@ -2873,6 +2874,8 @@ def normalize_imported_time_series(headers: list[str], raw_rows: list[dict[str, 
         message += f"，文件共有{source_hour_count}行，已按最后一行自动补齐{TIME_SERIES_IMPORT_ROW_COUNT - source_hour_count}行"
     if missing_count:
         message += f"，已补齐{missing_count}个缺失时点"
+    if repaired_numeric_count:
+        message += f"，已修复{repaired_numeric_count}个无效数值"
     return {"time_series": imported_rows, "time_series_count": len(imported_rows), "message": message}
 
 
@@ -2998,19 +3001,42 @@ def imported_datetime(raw_row: dict[str, object], column: str | None, index: int
     return f"H{index:04d}"
 
 
-def imported_numeric_value(value: object, key: str, row_index: int) -> float | int:
-    if value in ("", None):
-        label = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[key][0]
-        raise ValueError(f"导入失败，第{row_index}行{label}为空")
+def imported_numeric_value_or_none(value: object) -> float | int | None:
+    if value in ("", None) or not str(value).strip():
+        return None
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
-        label = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[key][0]
-        raise ValueError(f"导入失败，第{row_index}行{label}不是数值") from exc
+    except (TypeError, ValueError):
+        return None
     if not math.isfinite(number):
-        label = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[key][0]
-        raise ValueError(f"导入失败，第{row_index}行{label}不是有效数值")
+        return None
     return int(number) if number.is_integer() else number
+
+
+def repair_imported_numeric_values(parsed_by_hour: dict[int, dict]) -> int:
+    hours = sorted(parsed_by_hour)
+    repaired_count = 0
+    for key, (label, _) in TIME_SERIES_IMPORT_REQUIRED_COLUMNS.items():
+        valid_hours = [hour for hour in hours if parsed_by_hour[hour].get(key) is not None]
+        if not valid_hours:
+            raise ValueError(f"导入失败，{label}没有任何有效数值，无法用相邻点修复")
+        previous_valid_hour = None
+        next_valid_index = 0
+        for hour in hours:
+            if parsed_by_hour[hour].get(key) is not None:
+                previous_valid_hour = hour
+                if next_valid_index < len(valid_hours) and valid_hours[next_valid_index] == hour:
+                    next_valid_index += 1
+                continue
+            if previous_valid_hour is not None:
+                source_hour = previous_valid_hour
+            else:
+                while next_valid_index < len(valid_hours) and valid_hours[next_valid_index] < hour:
+                    next_valid_index += 1
+                source_hour = valid_hours[next_valid_index]
+            parsed_by_hour[hour][key] = parsed_by_hour[source_hour][key]
+            repaired_count += 1
+    return repaired_count
 
 
 def generate_load_curve(mode: str, minimum: object, maximum: object, average: object) -> dict:

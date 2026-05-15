@@ -2106,6 +2106,33 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(payload["time_series"][8759]["load"], 120)
         self.assertIn("已补齐8758个缺失时点", payload["message"])
 
+    def test_planning_time_series_import_repairs_invalid_numeric_values_with_neighbors(self):
+        rows = [
+            "时间,风速,太阳辐射,室温,负荷",
+            "H0001,bad,500,10,100",
+            "H0002,4,NaN,11,abc",
+            "H0003,6,700,,120",
+        ]
+        content = "\n".join(rows).encode("utf-8")
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/time-series/import",
+            "POST",
+            json.dumps({"filename": "dirty.csv", "content_base64": base64.b64encode(content).decode("ascii")}).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["time_series_count"], 8760)
+        self.assertEqual(payload["time_series"][0]["wind_speed"], 4)
+        self.assertEqual(payload["time_series"][1]["solar_irradiance"], 500)
+        self.assertEqual(payload["time_series"][1]["load"], 100)
+        self.assertEqual(payload["time_series"][2]["temperature"], 11)
+        self.assertEqual(payload["time_series"][2]["wind_speed"], 6)
+        self.assertEqual(payload["time_series"][2]["solar_irradiance"], 700)
+        self.assertEqual(payload["time_series"][2]["load"], 120)
+        self.assertIn("已修复4个无效数值", payload["message"])
+
     def test_planning_time_series_import_parses_xlsx(self):
         workbook = Workbook()
         sheet = workbook.active
@@ -2897,6 +2924,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("composition-bar-segment", script)
         self.assertIn("overview_disks", script)
         self.assertIn("overview-composition-stack", script)
+        self.assertIn("formatOverviewTableForDisplay", script)
+        self.assertIn("formatOverviewPlanningRows", script)
+        self.assertIn("formatOverviewTableForDisplay", evaluation_script)
+        self.assertIn("formatOverviewPlanningRows", evaluation_script)
         self.assertIn("renderOverviewCompositionBars", evaluation_script)
         self.assertIn("composition-bar-track", evaluation_script)
         self.assertIn("optimization-overview-grid", script)
@@ -2905,7 +2936,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("规划年效益", script)
         for label in ("运行成本", "建设成本", "柴发电量", "新能源电量"):
             self.assertIn(label, script)
-        for field in ("设备类型", "设计台数", "指标", "数值", "单位"):
+        self.assertIn('{ "名称": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }', script)
+        self.assertIn('{ "名称": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }', evaluation_script)
+        for field in ("名称", "设计台数", "指标", "数值", "单位"):
             self.assertIn(field, script)
         self.assertIn(".optimization-overview-grid", css)
         self.assertIn("grid-template-columns: minmax(240px, var(--overview-left-column-width, 1fr)) 10px minmax(280px, var(--overview-middle-column-width, 0.95fr)) 10px minmax(240px, 1fr)", css)

@@ -684,7 +684,7 @@ function setMetric(id, item) {
 
 function defaultOverviewTables() {
   return [
-    { title: "规划结果", rows: [{ "设备类型": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }] },
+    { title: "规划结果", rows: [{ "名称": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }] },
     { title: "规划年指标", rows: [{ "指标": "-", "数值": "-", "单位": "" }] },
   ];
 }
@@ -737,11 +737,27 @@ function renderOverviewTables(tables, disks) {
 }
 
 function renderOverviewTableCard(table) {
+  const displayTable = formatOverviewTableForDisplay(table);
   return `
     <section class="overview-table-card">
-      <h2>${escapeHtml(table.title || "")}</h2>
-      <div class="data-table optimization-overview-table">${renderResultTable(table.rows || [])}</div>
+      <h2>${escapeHtml(displayTable.title || "")}</h2>
+      <div class="data-table optimization-overview-table">${renderResultTable(displayTable.rows || [])}</div>
     </section>`;
+}
+
+function formatOverviewTableForDisplay(table = {}) {
+  if (table.title !== "规划结果") return table;
+  return { ...table, rows: formatOverviewPlanningRows(table.rows || []) };
+}
+
+function formatOverviewPlanningRows(rows) {
+  return rows.map((row) => ({
+    "名称": row["名称"] ?? row["设备类型"] ?? "",
+    "设计台数": row["设计台数"] ?? "",
+    "单台容量": row["单台容量"] ?? "",
+    "总容量": row["总容量"] ?? "",
+    "单位": row["单位"] ?? "",
+  }));
 }
 
 function renderOverviewCompositionBars(disks) {
