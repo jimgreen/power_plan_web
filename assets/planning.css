@@ -2541,6 +2541,152 @@ body.modal-open {
   max-height: none;
 }
 
+.planning-parameter-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: minmax(0, auto);
+  gap: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.planning-parameter-grid.summary {
+  height: auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.planning-parameter-group {
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  overflow: auto;
+  border: 1px solid #d7e6e2;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.planning-parameter-group h3 {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #d7e6e2;
+  background: #e8f4f1;
+  color: #24413d;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.planning-parameter-group h3 span {
+  min-width: 0;
+}
+
+.planning-parameter-group-status {
+  margin-left: auto;
+  color: #607c77;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.planning-parameter-group.disabled {
+  opacity: 0.62;
+}
+
+.planning-parameter-group.disabled td input,
+.planning-parameter-group.disabled td select {
+  cursor: not-allowed;
+}
+
+.planning-parameter-switch {
+  flex: 0 0 auto;
+  position: relative;
+  width: 42px;
+  height: 22px;
+}
+
+.planning-parameter-switch input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.planning-parameter-switch span {
+  position: absolute;
+  inset: 0;
+  border: 1px solid #9bb8b2;
+  border-radius: 999px;
+  background: #d9e7e3;
+  transition: background 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.planning-parameter-switch span::before {
+  content: "";
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  left: 2px;
+  top: 2px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.16s ease;
+}
+
+.planning-parameter-switch input:checked + span {
+  border-color: #0d5c59;
+  background: #0d5c59;
+}
+
+.planning-parameter-switch input:checked + span::before {
+  transform: translateX(20px);
+}
+
+.planning-parameter-resize-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 14px;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.planning-parameter-resize-handle::before {
+  content: "";
+  width: 96px;
+  height: 4px;
+  border-radius: 999px;
+  background: #9db4ae;
+}
+
+.planning-parameter-resize-handle:hover::before,
+.planning-parameter-resize-handle.dragging::before,
+.planning-parameter-resize-handle:focus-visible::before {
+  background: #0d5c59;
+}
+
+.planning-parameter-group table {
+  min-width: 0;
+}
+
+.planning-parameter-group th,
+.planning-parameter-group td {
+  padding: 7px 8px;
+  white-space: normal;
+}
+
+.planning-parameter-group th {
+  top: 35px;
+}
+
 #devicesTab .device-card:last-child,
 #planningTab .planning-parameters-card:last-child,
 #limitsTab .summary-section:last-child {
@@ -2600,6 +2746,14 @@ td input[type="checkbox"] {
 
 .planning-parameters-table table {
   min-width: 760px;
+}
+
+.planning-parameters-table .planning-parameter-group table {
+  min-width: 0;
+}
+
+.planning-parameter-grid.summary .planning-parameter-resize-handle {
+  display: none;
 }
 
 .switch-cell {
@@ -3321,6 +3475,45 @@ td input::placeholder,
   color: #ffffff;
 }
 
+.planning-parameter-group {
+  border-color: var(--hud-line);
+  background: rgba(4, 18, 42, 0.82);
+  box-shadow: inset 0 0 18px rgba(24, 175, 255, 0.1);
+}
+
+.planning-parameter-group h3 {
+  border-bottom-color: rgba(20, 190, 255, 0.28);
+  background: rgba(5, 34, 70, 0.94);
+  color: var(--hud-text);
+}
+
+.planning-parameter-group-status {
+  color: var(--hud-muted);
+}
+
+.planning-parameter-group.disabled {
+  opacity: 0.55;
+  filter: grayscale(0.18);
+}
+
+.planning-parameter-switch span {
+  border-color: rgba(20, 190, 255, 0.32);
+  background: rgba(1, 14, 42, 0.82);
+  box-shadow: inset 0 0 12px rgba(24, 175, 255, 0.08);
+}
+
+.planning-parameter-switch span::before {
+  background: var(--hud-muted-strong);
+}
+
+.planning-parameter-switch input:checked + span {
+  border-color: rgba(108, 238, 255, 0.94);
+  background: linear-gradient(180deg, rgba(4, 76, 140, 0.86), rgba(3, 34, 86, 0.82));
+  box-shadow:
+    inset 0 0 18px rgba(24, 175, 255, 0.42),
+    0 0 16px rgba(0, 190, 255, 0.22);
+}
+
 .chart-hover-line,
 .chart-cursor line,
 .comparison-chart-hover-line {
@@ -3405,6 +3598,7 @@ td input::placeholder,
 .optimization-log-resize-handle::before,
 .result-column-resize-handle::before,
 .evaluation-main-resize-handle::before,
+.planning-parameter-resize-handle::before,
 .comparison-table-column-resize-handle::before,
 .comparison-table-curve-resize-handle::before {
   background: rgba(33, 213, 255, 0.52);
@@ -3426,6 +3620,9 @@ td input::placeholder,
 .evaluation-main-resize-handle:hover::before,
 .evaluation-main-resize-handle.dragging::before,
 .evaluation-main-resize-handle:focus-visible::before,
+.planning-parameter-resize-handle:hover::before,
+.planning-parameter-resize-handle.dragging::before,
+.planning-parameter-resize-handle:focus-visible::before,
 .comparison-table-column-resize-handle:hover::before,
 .comparison-table-column-resize-handle.dragging::before,
 .comparison-table-column-resize-handle:focus-visible::before,

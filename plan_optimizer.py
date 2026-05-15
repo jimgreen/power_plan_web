@@ -103,14 +103,16 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         1.0,
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
     )
-    storage_charge_efficiency = min(1.0, max(0.0001, numeric(planning_parameters.get("storage_charge_efficiency"), 0.95)))
-    storage_discharge_efficiency = min(
-        1.0,
-        max(0.0001, numeric(planning_parameters.get("storage_discharge_efficiency"), 0.95)),
-    )
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
     device_rows = normalized_device_rows(scheme_payload)
+    storage_charge_efficiency, storage_discharge_efficiency = storage_efficiencies(
+        device_rows["storage_pcs"],
+        numeric(planning_parameters.get("storage_charge_efficiency"), 0.95),
+        numeric(planning_parameters.get("storage_discharge_efficiency"), 0.95),
+    )
     storage_soc_lower_ratio, storage_soc_upper_ratio = storage_soc_limits(device_rows["storage_battery_packs"])
+    storage_self_discharge_rate = fleet_self_discharge_rate(device_rows["storage_battery_packs"], 0.01)
+    hydrogen_self_discharge_rate = fleet_self_discharge_rate(device_rows["hydrogen_tanks"], 0.001)
     loads = np.array([max(0.0, numeric(row.get("load"), 0.0)) for row in time_series], dtype=float)
     wind_available_per_unit = {
         device["id"]: np.array(
@@ -143,6 +145,8 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
         "storage_charge_efficiency": storage_charge_efficiency,
         "storage_discharge_efficiency": storage_discharge_efficiency,
+        "storage_self_discharge_rate": storage_self_discharge_rate,
+        "hydrogen_self_discharge_rate": hydrogen_self_discharge_rate,
         "post_disturbance_power_balance_enabled": post_disturbance_power_balance_enabled,
         "load_up_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
         "load_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_down_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
@@ -251,6 +255,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
 
     charge_efficiency = model["storage_charge_efficiency"]
     discharge_efficiency = model["storage_discharge_efficiency"]
+    storage_self_discharge_per_hour = model["storage_self_discharge_rate"] / 24.0
+    hydrogen_self_discharge_per_hour = model["hydrogen_self_discharge_rate"] / 24.0
 
     for hour in range(n):
         dispatch_milp.add_power_balance_constraint(
@@ -375,6 +381,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             discharge_efficiency=discharge_efficiency,
             soc_lower_ratio=model["storage_soc_lower_ratio"],
             soc_upper_ratio=model["storage_soc_upper_ratio"],
+            self_discharge_rate_per_hour=storage_self_discharge_per_hour,
         )
         for index in grid_storage_up_indices:
             builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -1.0}, -np.inf, 0.0)
@@ -427,6 +434,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             },
             capacity_terms=hydrogen_capacity_terms,
             initial_ratio=model["initial_hydrogen_storage_ratio"],
+            self_discharge_rate_per_hour=hydrogen_self_discharge_per_hour,
         )
 
     for day_end_hour in range(23, n, 24):
@@ -552,6 +560,8 @@ def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, 
                 device["fuel_rate"] = max(0.0, numeric(source.get("fuel_rate"), 0.26))
             elif key == "storage_pcs":
                 device["is_grid_forming"] = truthy_flag(source.get("is_grid_forming"), False)
+                device["storage_charge_efficiency"] = optional_efficiency(source.get("storage_charge_efficiency"))
+                device["storage_discharge_efficiency"] = optional_efficiency(source.get("storage_discharge_efficiency"))
             elif key == "storage_battery_packs":
                 soc_upper = min(1.0, max(0.0, numeric(source.get("soc_upper"), 0.9)))
                 soc_lower = min(1.0, max(0.0, numeric(source.get("soc_lower"), 0.1)))
@@ -559,11 +569,14 @@ def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, 
                     soc_upper, soc_lower = soc_lower, soc_upper
                 device["soc_upper"] = soc_upper
                 device["soc_lower"] = soc_lower
+                device["self_discharge_rate"] = min(0.01, max(0.0, numeric(source.get("self_discharge_rate"), 0.01)))
             elif key == "hydrogen_electrolyzers":
                 device["power_lower"] = min(capacity, max(0.0, numeric(source.get("power_lower"), 0.0)))
                 device["electric_to_hydrogen_efficiency"] = max(0.0, numeric(source.get("electric_to_hydrogen_efficiency"), 0.7))
             elif key == "fuel_cells":
                 device["hydrogen_to_electric_efficiency"] = max(0.0001, numeric(source.get("hydrogen_to_electric_efficiency"), 0.55))
+            elif key == "hydrogen_tanks":
+                device["self_discharge_rate"] = min(0.01, max(0.0, numeric(source.get("self_discharge_rate"), 0.001)))
             normalized[key].append(device)
     return normalized
 
@@ -581,6 +594,51 @@ def storage_soc_limits(storage_battery_devices: list[dict[str, Any]]) -> tuple[f
     if upper < lower:
         upper, lower = lower, upper
     return lower, upper
+
+
+def fleet_self_discharge_rate(devices: list[dict[str, Any]], default: float) -> float:
+    active_rates = [
+        min(0.01, max(0.0, numeric(device.get("self_discharge_rate"), default)))
+        for device in devices
+        if device["quantity_upper"] > 0 and device["capacity"] > 0
+    ]
+    if not active_rates:
+        return min(0.01, max(0.0, float(default)))
+    return max(active_rates)
+
+
+def storage_efficiencies(storage_pcs_devices: list[dict[str, Any]], legacy_charge: float, legacy_discharge: float) -> tuple[float, float]:
+    active_devices = [
+        device
+        for device in storage_pcs_devices
+        if device["quantity_upper"] > 0 and device["capacity"] > 0
+    ]
+    if not active_devices:
+        active_devices = storage_pcs_devices
+    if not active_devices:
+        return (
+            min(1.0, max(0.0001, legacy_charge)),
+            min(1.0, max(0.0001, legacy_discharge)),
+        )
+    charge_values = [
+        numeric(device.get("storage_charge_efficiency"), legacy_charge)
+        for device in active_devices
+        if device.get("storage_charge_efficiency") not in ("", None)
+    ]
+    discharge_values = [
+        numeric(device.get("storage_discharge_efficiency"), legacy_discharge)
+        for device in active_devices
+        if device.get("storage_discharge_efficiency") not in ("", None)
+    ]
+    charge = sum(charge_values) / len(charge_values) if charge_values else legacy_charge
+    discharge = sum(discharge_values) / len(discharge_values) if discharge_values else legacy_discharge
+    return min(1.0, max(0.0001, charge)), min(1.0, max(0.0001, discharge))
+
+
+def optional_efficiency(value: Any) -> float | str:
+    if value in ("", None):
+        return ""
+    return min(1.0, max(0.0001, numeric(value, 0.95)))
 
 
 def truthy_flag(value: Any, default: bool = False) -> bool:
@@ -718,6 +776,8 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"初始氢储={format_log_number(model['initial_hydrogen_storage_ratio'] * 100)}%，"
             f"储能效率={format_log_number(model['storage_charge_efficiency'] * 100)}%/"
             f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
+            f"电储自损耗={format_log_number(model['storage_self_discharge_rate'] * 100)}%/天，"
+            f"氢储自损耗={format_log_number(model['hydrogen_self_discharge_rate'] * 100)}%/天，"
             f"求解上限={model['optimization_time_limit_seconds']}秒"
         ),
         8,

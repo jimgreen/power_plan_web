@@ -286,11 +286,6 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
         1.0,
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
     )
-    storage_charge_efficiency = min(1.0, max(0.0001, numeric(planning_parameters.get("storage_charge_efficiency"), 0.95)))
-    storage_discharge_efficiency = min(
-        1.0,
-        max(0.0001, numeric(planning_parameters.get("storage_discharge_efficiency"), 0.95)),
-    )
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
     capacities = capacities_from_planning_rows(planning_result_rows)
     device_params = first_device_params(scheme_payload)
@@ -298,7 +293,18 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
     storage_pcs_params = device_params.get("storage_pcs", {})
     storage_battery_params = device_params.get("storage_battery_packs", {})
     electrolyzer_params = device_params.get("hydrogen_electrolyzers", {})
+    hydrogen_tank_params = device_params.get("hydrogen_tanks", {})
     fuel_cell_params = device_params.get("fuel_cells", {})
+    storage_charge_efficiency = storage_efficiency_value(
+        storage_pcs_params.get("storage_charge_efficiency"),
+        planning_parameters.get("storage_charge_efficiency"),
+        0.95,
+    )
+    storage_discharge_efficiency = storage_efficiency_value(
+        storage_pcs_params.get("storage_discharge_efficiency"),
+        planning_parameters.get("storage_discharge_efficiency"),
+        0.95,
+    )
 
     loads = np.array([max(0.0, numeric(row.get("load"), 0.0)) for row in time_series], dtype=float)
     wind_available = np.array([
@@ -338,6 +344,8 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
     storage_soc_lower_ratio = min(1.0, max(0.0, numeric(storage_battery_params.get("soc_lower"), 0.1)))
     if storage_soc_upper_ratio < storage_soc_lower_ratio:
         storage_soc_upper_ratio, storage_soc_lower_ratio = storage_soc_lower_ratio, storage_soc_upper_ratio
+    storage_self_discharge_rate = min(0.01, max(0.0, numeric(storage_battery_params.get("self_discharge_rate"), 0.01)))
+    hydrogen_self_discharge_rate = min(0.01, max(0.0, numeric(hydrogen_tank_params.get("self_discharge_rate"), 0.001)))
 
     return {
         "time_series": time_series,
@@ -371,6 +379,8 @@ def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: l
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
         "storage_charge_efficiency": storage_charge_efficiency,
         "storage_discharge_efficiency": storage_discharge_efficiency,
+        "storage_self_discharge_rate": storage_self_discharge_rate,
+        "hydrogen_self_discharge_rate": hydrogen_self_discharge_rate,
         "post_disturbance_power_balance_enabled": post_disturbance_power_balance_enabled,
         "load_up_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
         "load_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_down_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
@@ -531,6 +541,8 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
 
     storage_charge_efficiency = model["storage_charge_efficiency"]
     storage_discharge_efficiency = model["storage_discharge_efficiency"]
+    storage_self_discharge_per_hour = model["storage_self_discharge_rate"] / 24.0
+    hydrogen_self_discharge_per_hour = model["hydrogen_self_discharge_rate"] / 24.0
     electric_to_hydrogen_efficiency = max(0.0, model["electric_to_hydrogen_efficiency"])
     hydrogen_to_electric_efficiency = max(0.0001, model["hydrogen_to_electric_efficiency"])
     initial_storage = model["storage_energy_capacity"] * model["initial_storage_soc_ratio"]
@@ -611,6 +623,7 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
             discharge_efficiency=storage_discharge_efficiency,
             soc_lower_ratio=model["storage_soc_lower_ratio"],
             soc_upper_ratio=model["storage_soc_upper_ratio"],
+            self_discharge_rate_per_hour=storage_self_discharge_per_hour,
         )
         for index in grid_storage_up_indices:
             builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -1.0}, -np.inf, 0.0)
@@ -650,10 +663,15 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
             builder,
             storage_index=var(("hydrogen_storage", hour)),
             previous_storage_index=var(("hydrogen_storage", hour - 1)) if hour > 0 else None,
-            production_terms={var(("electrolyzer_power", hour)): electric_to_hydrogen_efficiency},
-            consumption_terms={var(("fuel_cell_power", hour)): 1.0 / hydrogen_to_electric_efficiency},
+            production_terms={
+                var(("electrolyzer_power", hour)): electric_to_hydrogen_efficiency
+            } if model["electrolyzer_power_upper"] > 1e-9 else {},
+            consumption_terms={
+                var(("fuel_cell_power", hour)): 1.0 / hydrogen_to_electric_efficiency
+            } if model["fuel_cell_power_capacity"] > 1e-9 else {},
             fixed_capacity=model["hydrogen_tank_capacity"],
             fixed_initial_value=initial_hydrogen,
+            self_discharge_rate_per_hour=hydrogen_self_discharge_per_hour,
         )
 
     for day_end_hour in range(23, n, 24):
@@ -881,6 +899,11 @@ def pv_generation(irradiance: float, capacity: float, params: dict[str, Any] | N
     if capacity <= 0:
         return 0.0
     return max(0.0, min(capacity, capacity * max(0.0, irradiance) / 1000.0))
+
+
+def storage_efficiency_value(primary: Any, legacy: Any, default: float) -> float:
+    value = primary if primary not in ("", None) else legacy
+    return min(1.0, max(0.0001, numeric(value, default)))
 
 
 def first_row(rows: Any) -> dict[str, Any]:

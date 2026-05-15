@@ -18,14 +18,14 @@ const state = {
 };
 
 const deviceSpecs = [
-  ["diesel_generators", "柴发", ["name", "capacity", "cost", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["wind_turbines", "风机", ["name", "capacity", "cost", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["photovoltaics", "光伏", ["name", "capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["storage_pcs", "储能PCS", ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "is_grid_forming", "design_life_years"]],
-  ["storage_battery_packs", "储能电池组", ["name", "battery_capacity", "soc_upper", "soc_lower", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["hydrogen_electrolyzers", "电制氢", ["name", "power_capacity", "power_lower", "cost", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["hydrogen_tanks", "储氢罐", ["name", "hydrogen_tank_capacity", "cost", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["fuel_cells", "燃料电池", ["name", "power_capacity", "cost", "hydrogen_to_electric_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["diesel_generators", "柴发", ["name", "cost", "capacity", "power_upper", "power_lower", "fuel_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["wind_turbines", "风机", ["name", "cost", "capacity", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["photovoltaics", "光伏", ["name", "cost", "capacity", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["storage_pcs", "储能PCS", ["name", "cost", "power_capacity", "storage_charge_efficiency", "storage_discharge_efficiency", "quantity_lower", "quantity_upper", "is_grid_forming", "design_life_years"]],
+  ["storage_battery_packs", "储能电池组", ["name", "cost", "battery_capacity", "soc_upper", "soc_lower", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["hydrogen_electrolyzers", "电制氢", ["name", "cost", "power_capacity", "power_lower", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["hydrogen_tanks", "储氢罐", ["name", "cost", "hydrogen_tank_capacity", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["fuel_cells", "燃料电池", ["name", "cost", "power_capacity", "hydrogen_to_electric_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
 ];
 
 const summarySeries = [
@@ -41,8 +41,6 @@ const planningParameterSpecs = [
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 120, integer: true, positive: true, defaultValue: 60 }],
   ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
-  ["storage_charge_efficiency", "电储能充电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
-  ["storage_discharge_efficiency", "电储能放电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
   ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
   ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: 0 }],
   ["renewable_disturbance_enabled", "是否考虑新能源扰动", "boolean", { defaultValue: 0 }],
@@ -68,13 +66,12 @@ const planningParameterGroups = [
       "optimization_time_limit_minutes",
       "initial_storage_soc_ratio",
       "initial_hydrogen_storage_ratio",
-      "storage_charge_efficiency",
-      "storage_discharge_efficiency",
     ],
   },
   {
     key: "disturbance",
     title: "是否考虑扰动后平衡约束相关参数",
+    toggleKey: "post_disturbance_power_balance_enabled",
     keys: [
       "post_disturbance_power_balance_enabled",
       "renewable_n_1_enabled",
@@ -88,6 +85,7 @@ const planningParameterGroups = [
   {
     key: "frequency",
     title: "是否考虑频率安全约束相关参数",
+    toggleKey: "frequency_security_constraint_enabled",
     keys: [
       "frequency_security_constraint_enabled",
       "frequency_security_upper",
@@ -126,10 +124,13 @@ const labels = {
   temperature: "温度",
   capacity: "功率容量(kW)",
   power_capacity: "功率容量(kW)",
+  storage_charge_efficiency: "充电效率(0.0-1.0)",
+  storage_discharge_efficiency: "放电效率(0.0-1.0)",
   battery_capacity: "电池容量(kWh)",
   soc_upper: "SOC上限",
   soc_lower: "SOC下限",
-  hydrogen_tank_capacity: "氢储容量(Nm3)",
+  self_discharge_rate: "自损耗率(0-1%/天)",
+  hydrogen_tank_capacity: "容量(Nm3)",
   quantity_lower: "数据下限(台)",
   quantity_upper: "数据上限(台)",
   design_life_years: "设计年限(年）",
@@ -149,8 +150,11 @@ const deviceFieldDefaults = {
   design_life_years: 20,
   rated_wind_speed: 12,
   is_grid_forming: 0,
+  storage_charge_efficiency: 0.95,
+  storage_discharge_efficiency: 0.95,
   soc_upper: 0.9,
   soc_lower: 0.1,
+  self_discharge_rate: 0.01,
 };
 
 const deviceFieldRules = {
@@ -160,11 +164,14 @@ const deviceFieldRules = {
   cost: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "成本(万元/台)必须为非负浮点数" },
   capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
   power_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率容量(kW)必须为正实数" },
+  storage_charge_efficiency: { min: 0, max: 1, positive: true, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "充电效率(0.0-1.0)必须在0到1之间，且必须大于0" },
+  storage_discharge_efficiency: { min: 0, max: 1, positive: true, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "放电效率(0.0-1.0)必须在0到1之间，且必须大于0" },
   battery_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电池容量(kWh)必须为正实数" },
   soc_upper: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC上限(0.0-1.0)必须在0到1之间" },
   soc_lower: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC下限(0.0-1.0)必须在0到1之间" },
+  self_discharge_rate: { min: 0, max: 0.01, attrs: ['min="0"', 'max="0.01"', 'step="any"', 'inputmode="decimal"'], message: "自损耗率(0-1%/天)必须在0到0.01之间" },
   is_grid_forming: { integer: true, min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="1"', 'inputmode="numeric"', 'pattern="[01]"'], message: "是否构网必须为0或1" },
-  hydrogen_tank_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢储容量(Nm3)必须为正实数" },
+  hydrogen_tank_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "容量(Nm3)必须为正实数" },
   electric_to_hydrogen_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电-氢效率(Nm3/kWh)必须为正实数" },
   hydrogen_to_electric_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢-电效率(kWh/Nm3)必须为正实数" },
   fuel_rate: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "油耗率(kg/kWh)必须为正实数" },
@@ -1557,6 +1564,9 @@ function defaultDeviceFieldValue(field, spec) {
   if (field === "name") {
     return `${spec[1]}${(state.payload[spec[0]] || []).length + 1}`;
   }
+  if (field === "self_discharge_rate") {
+    return spec[0] === "hydrogen_tanks" ? 0.001 : 0.01;
+  }
   return Object.prototype.hasOwnProperty.call(deviceFieldDefaults, field) ? deviceFieldDefaults[field] : 0;
 }
 
@@ -1575,19 +1585,48 @@ function renderPlanningParameters() {
     return;
   }
   const row = planningParameterRow();
-  host.innerHTML = `<table><thead><tr><th>参数名称</th><th>参数值</th><th>取值范围</th></tr></thead><tbody>${planningParameterSpecs
-    .map(([key, label, type, options]) => `<tr><td>${label}</td><td>${planningParameterControl(key, type, options, row[key])}</td><td>${planningParameterRangeText(type, options)}</td></tr>`)
-    .join("")}</tbody></table>`;
-  host.querySelectorAll("[data-planning-key]").forEach((input) => {
+  host.innerHTML = `<div class="planning-parameter-grid">${planningParameterGroups
+    .map((group, index) => `${index ? '<div class="planning-parameter-resize-handle" role="separator" tabindex="0" aria-orientation="horizontal" title="拖拽调整表格高度"></div>' : ""}${renderPlanningParameterGroupTable(group, row, true)}`)
+    .join("")}</div>`;
+  host.querySelectorAll("[data-planning-key]:not([data-planning-group-toggle])").forEach((input) => {
     const eventName = input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input";
     input.addEventListener(eventName, onPlanningParameterInput);
   });
+  host.querySelectorAll("[data-planning-group-toggle]").forEach((input) => input.addEventListener("change", onPlanningGroupToggle));
+  bindPlanningParameterResizeHandles(host);
 }
 
-function planningParameterControl(key, type, options, value) {
+function renderPlanningParameterGroupTable(group, row, editable = false) {
+  const groupEnabled = isPlanningGroupEnabled(group, row);
+  const rows = group.keys
+    .filter((key) => !group.toggleKey || key !== group.toggleKey)
+    .map((key) => planningParameterSpecsByKey.get(key))
+    .filter(Boolean)
+    .map(([key, label, type, options]) => {
+      const value = editable ? planningParameterControl(key, type, options, row[key], group, groupEnabled) : escapeHtml(formatPlanningParameterValue(row[key], type));
+      return `<tr><td>${label}</td><td>${value}</td><td>${planningParameterRangeText(type, options)}</td></tr>`;
+    })
+    .join("");
+  const toggle = editable && group.toggleKey ? planningGroupToggle(group, row) : "";
+  const status = group.toggleKey ? `<em class="planning-parameter-group-status">${groupEnabled ? "已启用" : "未启用"}</em>` : "";
+  return `<section class="planning-parameter-group ${groupEnabled ? "" : "disabled"}" data-planning-group="${escapeHtml(group.key)}"><h3>${toggle}<span>${escapeHtml(group.title)}</span>${status}</h3><table><thead><tr><th>参数名称</th><th>参数值</th><th>取值范围</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+}
+
+function planningGroupToggle(group, row) {
+  const checked = truthyPlanningValue(row[group.toggleKey]);
+  return `<label class="planning-parameter-switch"><input type="checkbox" data-planning-group-toggle="${escapeHtml(group.key)}" data-planning-key="${escapeHtml(group.toggleKey)}" ${checked ? "checked" : ""}><span></span></label>`;
+}
+
+function isPlanningGroupEnabled(group, row) {
+  return !group.toggleKey || truthyPlanningValue(row[group.toggleKey]);
+}
+
+function planningParameterControl(key, type, options, value, group = null, groupEnabled = true) {
+  const isGroupToggle = group && group.toggleKey === key;
+  const disabled = group && group.toggleKey && !groupEnabled && !isGroupToggle;
   if (type === "boolean") {
     const checked = truthyPlanningValue(value);
-    return `<select class="planning-bool-select" data-planning-key="${key}" data-planning-type="boolean"><option value="1" ${checked ? "selected" : ""}>是</option><option value="0" ${checked ? "" : "selected"}>否</option></select>`;
+    return `<select class="planning-bool-select" data-planning-key="${key}" data-planning-type="boolean" ${disabled ? "disabled" : ""}><option value="1" ${checked ? "selected" : ""}>是</option><option value="0" ${checked ? "" : "selected"}>否</option></select>`;
   }
   const attrs = [
     `data-planning-key="${key}"`,
@@ -1595,8 +1634,55 @@ function planningParameterControl(key, type, options, value) {
     options.min !== undefined ? `min="${options.min}"` : "",
     options.max !== undefined ? `max="${options.max}"` : "",
     `step="${options.integer ? 1 : 0.01}"`,
+    disabled ? "disabled" : "",
   ].filter(Boolean).join(" ");
   return `<input ${attrs} value="${escapeHtml(value)}">`;
+}
+
+function onPlanningGroupToggle(event) {
+  const input = event.target;
+  const row = planningParameterRow();
+  row[input.dataset.planningKey] = input.checked ? 1 : 0;
+  renderPlanningParameters();
+  renderLimitSummary();
+  renderSummary();
+}
+
+function bindPlanningParameterResizeHandles(host) {
+  host.querySelectorAll(".planning-parameter-resize-handle").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => startPlanningParameterResize(event, handle));
+  });
+}
+
+function startPlanningParameterResize(event, handle) {
+  const previous = handle.previousElementSibling;
+  const next = handle.nextElementSibling;
+  if (!previous || !next) return;
+  event.preventDefault();
+  handle.setPointerCapture?.(event.pointerId);
+  handle.classList.add("dragging");
+  const startY = event.clientY;
+  const previousStart = previous.getBoundingClientRect().height;
+  const nextStart = next.getBoundingClientRect().height;
+  const minHeight = 120;
+
+  const onMove = (moveEvent) => {
+    const delta = moveEvent.clientY - startY;
+    const previousHeight = Math.max(minHeight, previousStart + delta);
+    const nextHeight = Math.max(minHeight, nextStart - delta);
+    previous.style.height = `${Math.round(previousHeight)}px`;
+    next.style.height = `${Math.round(nextHeight)}px`;
+  };
+  const onEnd = () => {
+    handle.classList.remove("dragging");
+    handle.releasePointerCapture?.(event.pointerId);
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onEnd);
+    document.removeEventListener("pointercancel", onEnd);
+  };
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onEnd);
+  document.addEventListener("pointercancel", onEnd);
 }
 
 function onPlanningParameterInput(event) {
@@ -1636,9 +1722,9 @@ function normalizePlanningParameterRow(row) {
 function renderPlanningParameterSummaryTable() {
   if (!state.payload) return "";
   const row = planningParameterRow();
-  return `<table><thead><tr><th>参数名称</th><th>参数值</th><th>取值范围</th></tr></thead><tbody>${planningParameterSpecs
-    .map(([key, label, type, options]) => `<tr><td>${label}</td><td>${escapeHtml(formatPlanningParameterValue(row[key], type))}</td><td>${planningParameterRangeText(type, options)}</td></tr>`)
-    .join("")}</tbody></table>`;
+  return `<div class="planning-parameter-grid summary">${planningParameterGroups
+    .map((group) => renderPlanningParameterGroupTable(group, row, false))
+    .join("")}</div>`;
 }
 
 function formatPlanningParameterValue(value, type) {

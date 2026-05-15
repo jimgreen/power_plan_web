@@ -35,8 +35,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "柴发参数",
         [
             "name",
-            "capacity",
             "cost",
+            "capacity",
             "power_upper",
             "power_lower",
             "fuel_rate",
@@ -49,8 +49,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "风机参数",
         [
             "name",
-            "capacity",
             "cost",
+            "capacity",
             "cut_in_wind_speed",
             "rated_wind_speed",
             "cut_out_wind_speed",
@@ -63,8 +63,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "光伏参数",
         [
             "name",
-            "capacity",
             "cost",
+            "capacity",
             "quantity_lower",
             "quantity_upper",
             "design_life_years",
@@ -72,19 +72,39 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
     ),
     "storage_pcs": (
         "储能PCS参数",
-        ["name", "power_capacity", "cost", "quantity_lower", "quantity_upper", "is_grid_forming", "design_life_years"],
+        [
+            "name",
+            "cost",
+            "power_capacity",
+            "storage_charge_efficiency",
+            "storage_discharge_efficiency",
+            "quantity_lower",
+            "quantity_upper",
+            "is_grid_forming",
+            "design_life_years",
+        ],
     ),
     "storage_battery_packs": (
         "储能电池组参数",
-        ["name", "battery_capacity", "soc_upper", "soc_lower", "cost", "quantity_lower", "quantity_upper", "design_life_years"],
+        [
+            "name",
+            "cost",
+            "battery_capacity",
+            "soc_upper",
+            "soc_lower",
+            "self_discharge_rate",
+            "quantity_lower",
+            "quantity_upper",
+            "design_life_years",
+        ],
     ),
     "hydrogen_electrolyzers": (
         "电制氢参数",
         [
             "name",
+            "cost",
             "power_capacity",
             "power_lower",
-            "cost",
             "electric_to_hydrogen_efficiency",
             "quantity_lower",
             "quantity_upper",
@@ -95,8 +115,9 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "储氢罐参数",
         [
             "name",
-            "hydrogen_tank_capacity",
             "cost",
+            "hydrogen_tank_capacity",
+            "self_discharge_rate",
             "quantity_lower",
             "quantity_upper",
             "design_life_years",
@@ -106,8 +127,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "燃料电池参数",
         [
             "name",
-            "power_capacity",
             "cost",
+            "power_capacity",
             "hydrogen_to_electric_efficiency",
             "quantity_lower",
             "quantity_upper",
@@ -122,8 +143,6 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "optimization_time_limit_minutes",
             "initial_storage_soc_ratio",
             "initial_hydrogen_storage_ratio",
-            "storage_charge_efficiency",
-            "storage_discharge_efficiency",
             "post_disturbance_power_balance_enabled",
             "renewable_n_1_enabled",
             "renewable_disturbance_enabled",
@@ -179,6 +198,8 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
         {
             "name": "储能PCS1",
             "power_capacity": 50,
+            "storage_charge_efficiency": 0.95,
+            "storage_discharge_efficiency": 0.95,
             "cost": 0,
             "quantity_lower": 0,
             "quantity_upper": 0,
@@ -191,6 +212,7 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "battery_capacity": 200,
             "soc_upper": 0.9,
             "soc_lower": 0.1,
+            "self_discharge_rate": 0.01,
             "cost": 0,
             "quantity_lower": 0,
             "quantity_upper": 0,
@@ -211,6 +233,7 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
         {
             "name": "储氢罐1",
             "hydrogen_tank_capacity": 100,
+            "self_discharge_rate": 0.001,
             "cost": 0,
             "quantity_lower": 0,
             "quantity_upper": 0,
@@ -236,8 +259,6 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "optimization_time_limit_minutes": 60,
     "initial_storage_soc_ratio": 0.5,
     "initial_hydrogen_storage_ratio": 0.5,
-    "storage_charge_efficiency": 0.95,
-    "storage_discharge_efficiency": 0.95,
     "storage_frequency_regulation_enabled": 0,
     "renewable_disturbance_enabled": 0,
     "load_up_disturbance_factor": 0,
@@ -265,8 +286,11 @@ FIELD_DEFAULTS: dict[str, Any] = {
     "design_life_years": 20,
     "rated_wind_speed": 12,
     "is_grid_forming": 0,
+    "storage_charge_efficiency": 0.95,
+    "storage_discharge_efficiency": 0.95,
     "soc_upper": 0.9,
     "soc_lower": 0.1,
+    "self_discharge_rate": 0.01,
 }
 
 DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
@@ -276,11 +300,14 @@ DEVICE_FIELD_RULES: dict[str, dict[str, Any]] = {
     "cost": {"non_negative": True, "message": "成本(万元/台)必须为非负浮点数"},
     "capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
     "power_capacity": {"positive": True, "message": "功率容量(kW)必须为正实数"},
+    "storage_charge_efficiency": {"min": 0, "max": 1, "positive": True, "message": "充电效率(0.0-1.0)必须在0到1之间，且必须大于0"},
+    "storage_discharge_efficiency": {"min": 0, "max": 1, "positive": True, "message": "放电效率(0.0-1.0)必须在0到1之间，且必须大于0"},
     "battery_capacity": {"positive": True, "message": "电池容量(kWh)必须为正实数"},
     "soc_upper": {"min": 0, "max": 1, "message": "SOC上限(0.0-1.0)必须在0到1之间"},
     "soc_lower": {"min": 0, "max": 1, "message": "SOC下限(0.0-1.0)必须在0到1之间"},
+    "self_discharge_rate": {"min": 0, "max": 0.01, "message": "自损耗率(0-1%/天)必须在0到0.01之间"},
     "is_grid_forming": {"integer": True, "min": 0, "max": 1, "message": "是否构网必须为0或1"},
-    "hydrogen_tank_capacity": {"positive": True, "message": "氢储容量(Nm3)必须为正实数"},
+    "hydrogen_tank_capacity": {"positive": True, "message": "容量(Nm3)必须为正实数"},
     "electric_to_hydrogen_efficiency": {"positive": True, "message": "电-氢效率(Nm3/kWh)必须为正实数"},
     "hydrogen_to_electric_efficiency": {"positive": True, "message": "氢-电效率(kWh/Nm3)必须为正实数"},
     "fuel_rate": {"positive": True, "message": "油耗率(kg/kWh)必须为正实数"},
@@ -327,7 +354,7 @@ def default_payload(scheme: str) -> dict[str, Any]:
     # a create action without special-casing missing sheets.
     payload: dict[str, Any] = {"scheme": scheme, "time_series": default_time_series(), "validation": []}
     for key in DEFAULT_DEVICE_ROWS:
-        payload[key] = [with_field_defaults(row, SHEET_SPECS[key][1]) for row in DEFAULT_DEVICE_ROWS[key]]
+        payload[key] = [with_field_defaults(row, SHEET_SPECS[key][1], key) for row in DEFAULT_DEVICE_ROWS[key]]
     payload["planning_parameters"] = [deepcopy(DEFAULT_PLANNING_PARAMETERS)]
     payload["capacity_limits"] = []
     return payload
@@ -338,11 +365,20 @@ def default_rows_for_key(key: str) -> list[dict[str, Any]]:
         return default_time_series()
     if key == "planning_parameters":
         return [deepcopy(DEFAULT_PLANNING_PARAMETERS)]
-    return [with_field_defaults(row, SHEET_SPECS[key][1]) for row in DEFAULT_DEVICE_ROWS.get(key, [])]
+    return [with_field_defaults(row, SHEET_SPECS[key][1], key) for row in DEFAULT_DEVICE_ROWS.get(key, [])]
 
 
 def field_default(header: str, fallback: Any = "") -> Any:
     return deepcopy(FIELD_DEFAULTS.get(header, fallback))
+
+
+def field_default_for_key(key: str, header: str, fallback: Any = "") -> Any:
+    if header == "self_discharge_rate":
+        if key == "hydrogen_tanks":
+            return 0.001
+        if key == "storage_battery_packs":
+            return 0.01
+    return field_default(header, fallback)
 
 
 def truthy_flag(value: Any) -> bool:
@@ -358,19 +394,19 @@ def numeric_boolean_value(value: Any) -> int:
 
 
 def normalize_planning_parameter_row(row: dict[str, Any]) -> dict[str, Any]:
-    normalized = with_field_defaults(row, SHEET_SPECS["planning_parameters"][1])
+    normalized = with_field_defaults(row, SHEET_SPECS["planning_parameters"][1], "planning_parameters")
     for field in PLANNING_BOOLEAN_FIELDS:
         normalized[field] = numeric_boolean_value(normalized.get(field, 0))
     return normalized
 
 
-def with_field_defaults(row: dict[str, Any], headers: list[str]) -> dict[str, Any]:
+def with_field_defaults(row: dict[str, Any], headers: list[str], key: str = "") -> dict[str, Any]:
     # Fill gaps from the current schema so newer columns appear in older
     # workbooks without requiring a manual migration.
     normalized = deepcopy(row)
     for header in headers:
         if header not in normalized:
-            normalized[header] = field_default(header, "")
+            normalized[header] = field_default_for_key(key, header, "")
     return normalized
 
 
@@ -521,7 +557,7 @@ def build_workbook(payload: dict[str, Any]) -> Workbook:
         if key == "planning_parameters" and isinstance(rows, dict):
             rows = [rows]
         for row in rows:
-            sheet.append([row.get(header, field_default(header, "")) for header in headers])
+            sheet.append([row.get(header, field_default_for_key(key, header, "")) for header in headers])
     return workbook
 
 
@@ -560,6 +596,7 @@ def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None
 def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict[str, Any]:
     workbook = load_workbook(path, data_only=True, read_only=True)
     payload: dict[str, Any] = {"scheme": scheme, "validation": [], "capacity_limits": []}
+    header_presence: dict[str, set[str]] = {}
     try:
         for key, (sheet_name, headers) in SHEET_SPECS.items():
             if key not in selected_keys:
@@ -582,6 +619,7 @@ def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict
                 for index, value in enumerate(header_values)
                 if value is not None and str(value) in headers
             }
+            header_presence[key] = set(header_index)
             rows = []
             try:
                 for values in sheet.iter_rows(min_row=2, values_only=True):
@@ -592,14 +630,14 @@ def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict
                         if header in header_index:
                             source_index = header_index[header]
                         elif has_named_header:
-                            row[header] = field_default(header, "")
+                            row[header] = field_default_for_key(key, header, "")
                             continue
                         else:
                             source_index = index
                         row[header] = (
                             values[source_index]
                             if source_index < len(values) and values[source_index] is not None
-                            else field_default(header, "")
+                            else field_default_for_key(key, header, "")
                         )
                     if key == "planning_parameters" and "optimization_time_limit_minutes" not in header_index:
                         legacy_index = next(
@@ -632,6 +670,18 @@ def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict
                             row["load_up_disturbance_factor"] = legacy_load
                             row["load_down_disturbance_factor"] = legacy_load
                             row["renewable_down_disturbance_factor"] = 0.0
+                    if key == "planning_parameters":
+                        for legacy_field in ("storage_charge_efficiency", "storage_discharge_efficiency"):
+                            legacy_index = next(
+                                (
+                                    index
+                                    for index, value in enumerate(header_values)
+                                    if value is not None and str(value) == legacy_field
+                                ),
+                                None,
+                            )
+                            if legacy_index is not None and legacy_index < len(values) and values[legacy_index] not in (None, ""):
+                                row[legacy_field] = values[legacy_index]
                     rows.append(row)
             except Exception as exc:
                 if key == "time_series":
@@ -641,9 +691,31 @@ def read_workbook_once(path: Path, scheme: str, selected_keys: set[str]) -> dict
                 payload[key] = [normalize_planning_parameter_row(row) for row in (rows or default_rows_for_key(key))]
             else:
                 payload[key] = rows
+        migrate_legacy_storage_efficiency(payload, header_presence.get("storage_pcs", set()))
     finally:
         workbook.close()
     return payload
+
+
+def migrate_legacy_storage_efficiency(payload: dict[str, Any], storage_pcs_headers: set[str]) -> None:
+    rows = payload.get("storage_pcs")
+    if not isinstance(rows, list) or not rows:
+        return
+    planning_row = first_planning_parameter_row(payload)
+    legacy_charge = planning_row.get("storage_charge_efficiency", "")
+    legacy_discharge = planning_row.get("storage_discharge_efficiency", "")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if "storage_charge_efficiency" not in storage_pcs_headers and legacy_charge not in ("", None):
+            row["storage_charge_efficiency"] = legacy_charge
+        if "storage_discharge_efficiency" not in storage_pcs_headers and legacy_discharge not in ("", None):
+            row["storage_discharge_efficiency"] = legacy_discharge
+    if isinstance(payload.get("planning_parameters"), list):
+        for row in payload["planning_parameters"]:
+            if isinstance(row, dict):
+                row.pop("storage_charge_efficiency", None)
+                row.pop("storage_discharge_efficiency", None)
 
 
 def is_time_series_zip_member_corrupted(path: Path) -> bool:
@@ -931,13 +1003,6 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         flag = number_in_range(key, label, 0, 1)
         if flag is not None and not float(flag).is_integer():
             messages.append({"level": "error", "message": f"{label}必须为0或1"})
-    for key, label in (
-        ("storage_charge_efficiency", "电储能充电效率(0.0-1.0)"),
-        ("storage_discharge_efficiency", "电储能放电效率(0.0-1.0)"),
-    ):
-        efficiency = number_in_range(key, label, 0, 1)
-        if efficiency is not None and efficiency <= 0:
-            messages.append({"level": "error", "message": f"{label}必须大于0"})
     number_in_range("load_up_disturbance_factor", "负荷向上扰动系数(0.0-0.5)", 0, 0.5)
     number_in_range("load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", 0, 0.5)
     number_in_range("renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", 0, 0.5)

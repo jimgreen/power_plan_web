@@ -519,8 +519,8 @@ class PowerPlanServerTest(unittest.TestCase):
         payload["time_series"][0]["solar_irradiance"] = 0
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.2
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.8
-        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.91
-        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.89
+        payload["storage_pcs"][0]["storage_charge_efficiency"] = 0.91
+        payload["storage_pcs"][0]["storage_discharge_efficiency"] = 0.89
         payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
         payload["diesel_generators"][0]["capacity"] = 100
         payload["diesel_generators"][0]["power_lower"] = 20
@@ -1518,6 +1518,10 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(len(created["time_series"]), 8760)
             self.assertIn("planning_parameters", created)
             self.assertNotIn("design_life_years", created["planning_parameters"][0])
+            self.assertEqual(created["storage_battery_packs"][0]["self_discharge_rate"], 0.01)
+            self.assertEqual(created["hydrogen_tanks"][0]["self_discharge_rate"], 0.001)
+            self.assertEqual(created["storage_pcs"][0]["storage_charge_efficiency"], 0.95)
+            self.assertEqual(created["storage_pcs"][0]["storage_discharge_efficiency"], 0.95)
 
             created["time_series"][0]["load"] = 123.4
             created["planning_parameters"][0]["storage_frequency_regulation_enabled"] = 1
@@ -1533,6 +1537,10 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(loaded["time_series"][0]["load"], 123.4)
             self.assertNotIn("design_life_years", loaded["planning_parameters"][0])
             self.assertEqual(loaded["planning_parameters"][0]["storage_frequency_regulation_enabled"], 1)
+            self.assertEqual(loaded["storage_battery_packs"][0]["self_discharge_rate"], 0.01)
+            self.assertEqual(loaded["hydrogen_tanks"][0]["self_discharge_rate"], 0.001)
+            self.assertEqual(loaded["storage_pcs"][0]["storage_charge_efficiency"], 0.95)
+            self.assertEqual(loaded["storage_pcs"][0]["storage_discharge_efficiency"], 0.95)
 
             status, headers, body = server.handle_planning_api_path("/api/planning/schemes/方案A/overview", "GET", b"")
             overview = json.loads(body.decode("utf-8"))
@@ -1569,6 +1577,36 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(names, ["方案A", "方案C"])
         finally:
             server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_planning_store_backfills_key_specific_self_discharge_defaults_for_legacy_workbook(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_planning_legacy_defaults"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        path = planning_root / "parameters.xlsx"
+        payload = server.planning_store.default_payload("方案A")
+        workbook = server.planning_store.build_workbook(payload)
+        try:
+            for sheet_name in ("储能电池组参数", "储氢罐参数"):
+                sheet = workbook[sheet_name]
+                for cell in sheet[1]:
+                    if cell.value == "self_discharge_rate":
+                        sheet.delete_cols(cell.column)
+                        break
+            workbook.save(path)
+        finally:
+            workbook.close()
+
+        try:
+            loaded = server.planning_store.read_workbook(
+                path,
+                "方案A",
+                include_keys=["storage_battery_packs", "hydrogen_tanks"],
+            )
+
+            self.assertEqual(loaded["storage_battery_packs"][0]["self_discharge_rate"], 0.01)
+            self.assertEqual(loaded["hydrogen_tanks"][0]["self_discharge_rate"], 0.001)
+        finally:
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_planning_time_series_import_parses_csv_and_validates_required_columns(self):
@@ -2623,20 +2661,31 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('data-summary-panel="planning"', html)
         self.assertIn('id="planningSummary"', html)
         self.assertIn("planningParameterSpecs", script)
+        self.assertIn("planningParameterGroups", script)
+        self.assertIn("planningGroupToggle", script)
+        self.assertIn("isPlanningGroupEnabled", script)
+        self.assertIn("bindPlanningParameterResizeHandles", script)
+        self.assertIn("planning-parameter-resize-handle", script)
+        self.assertIn("renderPlanningParameterGroupTable", script)
         self.assertIn("renderPlanningParameters", script)
         self.assertIn("renderPlanningParameterSummaryTable", script)
+        self.assertIn('grid-template-columns: minmax(0, 1fr)', css)
+        self.assertNotIn('grid-template-columns: repeat(3, minmax(220px, 1fr))', css)
         self.assertIn("collectPlanningParameterWarnings", script)
         self.assertIn("planning_parameters", script)
         self.assertIn(".planning-parameters-card", css)
         self.assertIn("#planningTab #planningParametersTable", css)
+        self.assertIn(".planning-parameter-grid", css)
+        self.assertIn(".planning-parameter-group", css)
+        self.assertIn(".planning-parameter-switch", css)
+        self.assertIn(".planning-parameter-group.disabled", css)
+        self.assertIn(".planning-parameter-resize-handle", css)
         for label in (
             "柴油价格(万元/吨)",
             "绿色电量占比下限(0.0-1.0)",
             "规划求解时间上限(分钟)",
             "初始电储SOC(0.0-1.0)",
             "初始氢储SOC(0.0-1.0)",
-            "电储能充电效率(0.0-1.0)",
-            "电储能放电效率(0.0-1.0)",
             "储能是否参与调频",
             "是否考虑扰动后平衡约束",
             "负荷向上扰动系数(0.0-0.5)",
@@ -2646,9 +2695,12 @@ class PowerPlanServerTest(unittest.TestCase):
             "频率安全上限(1.0-1.5)",
             "频率安全下限(0.5-1.0)",
             "是否考虑新能源N-1",
+            "是否考虑新能源扰动",
             "是否考虑负荷扰动",
         ):
             self.assertIn(label, script)
+        self.assertNotIn('["storage_charge_efficiency", "充电效率(0.0-1.0)", "number"', script)
+        self.assertNotIn('["storage_discharge_efficiency", "放电效率(0.0-1.0)", "number"', script)
         self.assertNotIn("设计使用年限(年)", script)
 
     def test_planning_boolean_parameters_use_yes_no_selects(self):
@@ -2680,6 +2732,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("规划求解时间上限(分钟)", script)
         self.assertIn("defaultValue: 60", script)
         self.assertIn("max: 120", script)
+        self.assertIn('spec[0] === "hydrogen_tanks" ? 0.001 : 0.01', script)
         self.assertNotIn("规划负荷系数(0.1-10.0)", script)
         self.assertNotIn("设计容量上限不能小于下限", script)
 
@@ -2706,6 +2759,8 @@ class PowerPlanServerTest(unittest.TestCase):
             "cost",
             "capacity",
             "power_capacity",
+            "storage_charge_efficiency",
+            "storage_discharge_efficiency",
             "battery_capacity",
             "hydrogen_tank_capacity",
             "electric_to_hydrogen_efficiency",
@@ -2718,6 +2773,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "is_grid_forming",
             "soc_upper",
             "soc_lower",
+            "self_discharge_rate",
         ):
             self.assertIn(field, script)
         for message in (
@@ -2726,7 +2782,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "成本(万元/台)必须为非负浮点数",
             "功率容量(kW)必须为正实数",
             "电池容量(kWh)必须为正实数",
-            "氢储容量(Nm3)必须为正实数",
+            "容量(Nm3)必须为正实数",
             "电-氢效率(Nm3/kWh)必须为正实数",
             "氢-电效率(kWh/Nm3)必须为正实数",
             "油耗率(kg/kWh)必须为正实数",
@@ -2735,10 +2791,16 @@ class PowerPlanServerTest(unittest.TestCase):
             "额定风速(m/s)必须为正实数",
             "切出风速(m/s)必须为非负实数",
             "是否构网必须为0或1",
+            "充电效率(0.0-1.0)必须在0到1之间，且必须大于0",
+            "放电效率(0.0-1.0)必须在0到1之间，且必须大于0",
             "SOC上限(0.0-1.0)必须在0到1之间",
             "SOC下限(0.0-1.0)必须在0到1之间",
+            "自损耗率(0-1%/天)必须在0到0.01之间",
         ):
             self.assertIn(message, script)
+        self.assertIn("自损耗率(0-1%/天)", script)
+        self.assertIn("充电效率(0.0-1.0)", script)
+        self.assertIn("放电效率(0.0-1.0)", script)
 
     def test_planning_scheme_actions_validate_duplicates_and_delete_current_scheme(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
@@ -3138,11 +3200,21 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('capacity: "功率容量(kW)"', script)
         self.assertIn('power_capacity: "功率容量(kW)"', script)
         self.assertIn('battery_capacity: "电池容量(kWh)"', script)
-        self.assertIn('hydrogen_tank_capacity: "氢储容量(Nm3)"', script)
+        self.assertIn('hydrogen_tank_capacity: "容量(Nm3)"', script)
         self.assertNotIn('capacity: "容量"', script)
         self.assertNotIn('power_capacity: "功率容量"', script)
         self.assertNotIn('battery_capacity: "电池容量"', script)
+        self.assertNotIn('hydrogen_tank_capacity: "氢储容量(Nm3)"', script)
         self.assertNotIn('hydrogen_tank_capacity: "储氢罐容量"', script)
+
+    def test_planning_device_cost_columns_follow_name(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+
+        for line in script.splitlines():
+            if line.strip().startswith("[") and "quantity_upper" in line and "planningParameterSpecs" not in line:
+                fields = [item.strip().strip('"') for item in line.split("[", 2)[2].split("]", 1)[0].split(",")]
+                self.assertEqual(fields[0], "name")
+                self.assertEqual(fields[1], "cost")
 
     def test_planning_device_tables_include_design_life_column(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
@@ -3167,8 +3239,8 @@ class PowerPlanServerTest(unittest.TestCase):
             line for line in script.splitlines() if line.strip().startswith('["hydrogen_electrolyzers"')
         )
         self.assertIn("power_lower", electrolyzer_line)
+        self.assertLess(electrolyzer_line.index("cost"), electrolyzer_line.index("power_capacity"))
         self.assertLess(electrolyzer_line.index("power_capacity"), electrolyzer_line.index("power_lower"))
-        self.assertLess(electrolyzer_line.index("power_lower"), electrolyzer_line.index("cost"))
         self.assertIn('power_lower: "功率下限(kW)"', script)
 
     def test_static_path_resolves_index(self):

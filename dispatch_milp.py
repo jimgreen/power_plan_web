@@ -300,6 +300,7 @@ def add_storage_constraints(
     fixed_initial_value: float | None = None,
     soc_lower_ratio: float = 0.0,
     soc_upper_ratio: float = 1.0,
+    self_discharge_rate_per_hour: float = 0.0,
 ) -> dict[str, int]:
     # Storage is the most coupled device family in the model: charge/discharge
     # binaries, SOC dynamics and SOC threshold flags all come from this block.
@@ -359,18 +360,19 @@ def add_storage_constraints(
         charge_index: -float(charge_efficiency),
         discharge_index: 1.0 / max(0.0001, float(discharge_efficiency)),
     }
+    retention_factor = min(1.0, max(0.0, 1.0 - float(self_discharge_rate_per_hour)))
     if previous_soc_index is None:
         if energy_capacity_terms:
             for column, coefficient in energy_capacity_terms.items():
-                terms[column] = terms.get(column, 0.0) - float(initial_ratio) * coefficient
+                terms[column] = terms.get(column, 0.0) - retention_factor * float(initial_ratio) * coefficient
             builder.add_constraint(terms, 0.0, 0.0)
         else:
             initial_value = fixed_initial_value
             if initial_value is None:
                 initial_value = float(initial_ratio) * float(fixed_energy_capacity or 0.0)
-            builder.add_constraint(terms, float(initial_value), float(initial_value))
+            builder.add_constraint(terms, retention_factor * float(initial_value), retention_factor * float(initial_value))
     else:
-        terms[previous_soc_index] = terms.get(previous_soc_index, 0.0) - 1.0
+        terms[previous_soc_index] = terms.get(previous_soc_index, 0.0) - retention_factor
         builder.add_constraint(terms, 0.0, 0.0)
     return {"soc_above_lower": lower_margin_index, "soc_below_upper": upper_margin_index}
 
@@ -530,6 +532,7 @@ def add_hydrogen_constraints(
     fixed_capacity: float | None = None,
     initial_ratio: float = 0.5,
     fixed_initial_value: float | None = None,
+    self_discharge_rate_per_hour: float = 0.0,
 ) -> None:
     if capacity_terms is not None or fixed_capacity is not None:
         add_capacity_upper_constraint(
@@ -544,18 +547,19 @@ def add_hydrogen_constraints(
         terms[column] = terms.get(column, 0.0) - coefficient
     for column, coefficient in consumption_terms.items():
         terms[column] = terms.get(column, 0.0) + coefficient
+    retention_factor = min(1.0, max(0.0, 1.0 - float(self_discharge_rate_per_hour)))
     if previous_storage_index is None:
         if capacity_terms:
             for column, coefficient in capacity_terms.items():
-                terms[column] = terms.get(column, 0.0) - float(initial_ratio) * coefficient
+                terms[column] = terms.get(column, 0.0) - retention_factor * float(initial_ratio) * coefficient
             builder.add_constraint(terms, 0.0, 0.0)
         else:
             initial_value = fixed_initial_value
             if initial_value is None:
                 initial_value = float(initial_ratio) * float(fixed_capacity or 0.0)
-            builder.add_constraint(terms, float(initial_value), float(initial_value))
+            builder.add_constraint(terms, retention_factor * float(initial_value), retention_factor * float(initial_value))
     else:
-        terms[previous_storage_index] = terms.get(previous_storage_index, 0.0) - 1.0
+        terms[previous_storage_index] = terms.get(previous_storage_index, 0.0) - retention_factor
         builder.add_constraint(terms, 0.0, 0.0)
 
 

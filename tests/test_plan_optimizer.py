@@ -12,6 +12,7 @@ sys.path.insert(0, str(WEB_ROOT))
 
 import plan_optimizer
 import planning_store
+import estimate
 
 
 class PlanOptimizerTest(unittest.TestCase):
@@ -186,6 +187,172 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn(("storage_charge_on", 0), variables)
         self.assertIn(("storage_discharge_on", 0), variables)
 
+    def test_planning_optimization_applies_storage_and_hydrogen_self_discharge(self):
+        payload = self._payload()
+        payload["storage_pcs"][0].update({"power_capacity": 10, "quantity_lower": 1, "quantity_upper": 1})
+        payload["storage_battery_packs"][0].update(
+            {"battery_capacity": 24, "quantity_lower": 1, "quantity_upper": 1, "self_discharge_rate": 0.012}
+        )
+        payload["hydrogen_tanks"][0].update(
+            {"hydrogen_tank_capacity": 24, "quantity_lower": 1, "quantity_upper": 1, "self_discharge_rate": 0.006}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:2])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower
+            captured["constraint_upper"] = constraint_upper
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+
+        def has_equality(expected_terms):
+            matrix = captured["constraints"]
+            expected = {variables[key]: coefficient for key, coefficient in expected_terms.items()}
+            for row in range(matrix.shape[0]):
+                if abs(captured["constraint_lower"][row]) > 1e-9 or abs(captured["constraint_upper"][row]) > 1e-9:
+                    continue
+                vector = matrix.getrow(row)
+                terms = {
+                    int(column): float(value)
+                    for column, value in zip(vector.indices, vector.data)
+                    if abs(value) > 1e-9
+                }
+                if set(terms) != set(expected):
+                    continue
+                if all(abs(terms[column] - expected[column]) < 1e-9 for column in expected):
+                    return True
+            return False
+
+        self.assertAlmostEqual(model["storage_self_discharge_rate"], 0.01)
+        self.assertAlmostEqual(model["hydrogen_self_discharge_rate"], 0.006)
+        self.assertTrue(has_equality(
+            {
+                ("storage_soc", 1): 1.0,
+                ("storage_charge", 1): -0.95,
+                ("storage_discharge", 1): 1.0 / 0.95,
+                ("storage_soc", 0): -(1.0 - 0.01 / 24.0),
+            }
+        ))
+        self.assertTrue(has_equality(
+            {
+                ("hydrogen_storage", 1): 1.0,
+                ("hydrogen_storage", 0): -(1.0 - 0.006 / 24.0),
+            }
+        ))
+
+    def test_planning_optimization_reads_storage_efficiencies_from_storage_pcs(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.31
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.32
+        payload["storage_pcs"][0].update(
+            {
+                "power_capacity": 10,
+                "quantity_lower": 1,
+                "quantity_upper": 1,
+                "storage_charge_efficiency": 0.91,
+                "storage_discharge_efficiency": 0.89,
+            }
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+
+        self.assertEqual(model["storage_charge_efficiency"], 0.91)
+        self.assertEqual(model["storage_discharge_efficiency"], 0.89)
+
+    def test_planning_optimization_keeps_legacy_planning_parameter_efficiency_fallback(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.91
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.89
+        payload["storage_pcs"][0].pop("storage_charge_efficiency", None)
+        payload["storage_pcs"][0].pop("storage_discharge_efficiency", None)
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+
+        self.assertEqual(model["storage_charge_efficiency"], 0.91)
+        self.assertEqual(model["storage_discharge_efficiency"], 0.89)
+
+    def test_dispatch_evaluation_reads_storage_efficiencies_from_storage_pcs(self):
+        payload = self._payload()
+        payload["time_series"] = payload["time_series"][:1]
+        payload["planning_parameters"][0]["storage_charge_efficiency"] = 0.31
+        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 0.32
+        payload["storage_pcs"][0]["storage_charge_efficiency"] = 0.91
+        payload["storage_pcs"][0]["storage_discharge_efficiency"] = 0.89
+        result_rows = [
+            {"设备类型": "储能PCS", "设计台数": 1, "单台容量": 10, "总容量": 10, "单位": "kW"},
+            {"设备类型": "储能电池组", "设计台数": 1, "单台容量": 24, "总容量": 24, "单位": "kWh"},
+        ]
+        model = estimate.build_dispatch_model(payload, result_rows)
+
+        self.assertEqual(model["storage_charge_efficiency"], 0.91)
+        self.assertEqual(model["storage_discharge_efficiency"], 0.89)
+
+    def test_dispatch_evaluation_applies_storage_and_hydrogen_self_discharge(self):
+        payload = self._payload()
+        payload["time_series"] = payload["time_series"][:2]
+        for row in payload["time_series"]:
+            row["load"] = 0
+            row["wind_speed"] = 0
+            row["solar_irradiance"] = 0
+        payload["storage_battery_packs"][0]["self_discharge_rate"] = 0.01
+        payload["hydrogen_tanks"][0]["self_discharge_rate"] = 0.006
+        result_rows = [
+            {"设备类型": "储能PCS", "设计台数": 1, "单台容量": 10, "总容量": 10, "单位": "kW"},
+            {"设备类型": "储能电池组", "设计台数": 1, "单台容量": 24, "总容量": 24, "单位": "kWh"},
+            {"设备类型": "储氢罐", "设计台数": 1, "单台容量": 24, "总容量": 24, "单位": "Nm3"},
+        ]
+        model = estimate.build_dispatch_model(payload, result_rows)
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower
+            captured["constraint_upper"] = constraint_upper
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(estimate, "solve_milp", side_effect=fake_solve_milp):
+            estimate.solve_dispatch_model(model)
+
+        variables = model["variables"]
+
+        def has_equality(expected_terms):
+            matrix = captured["constraints"]
+            expected = {variables[key]: coefficient for key, coefficient in expected_terms.items()}
+            for row in range(matrix.shape[0]):
+                if abs(captured["constraint_lower"][row]) > 1e-9 or abs(captured["constraint_upper"][row]) > 1e-9:
+                    continue
+                vector = matrix.getrow(row)
+                terms = {
+                    int(column): float(value)
+                    for column, value in zip(vector.indices, vector.data)
+                    if abs(value) > 1e-9
+                }
+                if set(terms) != set(expected):
+                    continue
+                if all(abs(terms[column] - expected[column]) < 1e-9 for column in expected):
+                    return True
+            return False
+
+        self.assertAlmostEqual(model["storage_self_discharge_rate"], 0.01)
+        self.assertAlmostEqual(model["hydrogen_self_discharge_rate"], 0.006)
+        self.assertTrue(has_equality(
+            {
+                ("storage_soc", 1): 1.0,
+                ("storage_charge", 1): -0.95,
+                ("storage_discharge", 1): 1.0 / 0.95,
+                ("storage_soc", 0): -(1.0 - 0.01 / 24.0),
+            }
+        ))
+        self.assertTrue(has_equality(
+            {
+                ("hydrogen_storage", 1): 1.0,
+                ("hydrogen_storage", 0): -(1.0 - 0.006 / 24.0),
+            }
+        ))
+
     def test_planning_optimization_models_each_renewable_unit_for_exact_curtailment_rate(self):
         payload = self._payload()
         payload["wind_turbines"][0].update(
@@ -338,8 +505,8 @@ class PlanOptimizerTest(unittest.TestCase):
         )
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.25
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.75
-        payload["planning_parameters"][0]["storage_charge_efficiency"] = 1
-        payload["planning_parameters"][0]["storage_discharge_efficiency"] = 1
+        payload["storage_pcs"][0]["storage_charge_efficiency"] = 1
+        payload["storage_pcs"][0]["storage_discharge_efficiency"] = 1
 
         result = plan_optimizer.run_optimization(payload, horizon_hours=1)
         row = result["dispatch_rows"][0]
