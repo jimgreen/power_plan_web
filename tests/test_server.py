@@ -511,6 +511,19 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertAlmostEqual(dispatch_rows[day_end_hour]["storage_soc"], expected_storage_start, places=3)
         self.assertAlmostEqual(dispatch_rows[-1]["hydrogen_storage"], expected_hydrogen_start, places=3)
 
+    def test_estimate_capacity_mapping_keeps_fuel_cells_out_of_storage_energy(self):
+        result_rows = [
+            {"设备类型": "储能PCS", "设计台数": 1, "单台容量": 50, "总容量": 50, "单位": "kW"},
+            {"设备类型": "储能电池组", "设计台数": 1, "单台容量": 100, "总容量": 100, "单位": "kWh"},
+            {"设备类型": "燃料电池", "设计台数": 1, "单台容量": 20, "总容量": 20, "单位": "kW"},
+        ]
+
+        capacities = estimate.capacities_from_planning_rows(result_rows)
+
+        self.assertEqual(capacities["storage_power_capacity"], 50)
+        self.assertEqual(capacities["storage_energy_capacity"], 100)
+        self.assertEqual(capacities["fuel_cell_power_capacity"], 20)
+
     def test_estimate_dispatch_uses_unit_binaries_and_initial_storage_ratios(self):
         payload = server.planning_store.default_payload("方案A")
         payload["time_series"] = payload["time_series"][:1]

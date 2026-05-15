@@ -853,14 +853,14 @@ def capacities_from_planning_rows(rows: list[dict[str, Any]]) -> dict[str, float
             capacities["pv_capacity"] += total
         elif "储能PCS" in device_type or "电储PCS" in device_type or ("PCS" in device_type and "储" in device_type):
             capacities["storage_power_capacity"] += total
+        elif "燃料电池" in device_type:
+            capacities["fuel_cell_power_capacity"] += total
         elif "电池" in device_type or "储能" in device_type or "电储" in device_type:
             capacities["storage_energy_capacity"] += total
         elif "电制氢" in device_type or "制氢" in device_type:
             capacities["electrolyzer_power_capacity"] += total
         elif "储氢" in device_type:
             capacities["hydrogen_tank_capacity"] += total
-        elif "燃料电池" in device_type:
-            capacities["fuel_cell_power_capacity"] += total
     if capacities["storage_power_capacity"] <= 0 and capacities["storage_energy_capacity"] > 0:
         capacities["storage_power_capacity"] = capacities["storage_energy_capacity"]
     return capacities
