@@ -323,8 +323,10 @@ class PowerPlanServerTest(unittest.TestCase):
 
     def test_optimization_api_start_stop_and_logs(self):
         original_runtime = server.OPTIMIZATION_RUNTIME
+        original_run_optimization = server.OptimizationRuntime._run_optimization
         server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
         try:
+            server.OptimizationRuntime._run_optimization = lambda self, token, scheme: None
             status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A")
             initial = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
@@ -415,6 +417,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(json.loads(body.decode("utf-8"))["error"], "bad_request")
         finally:
             server.OPTIMIZATION_RUNTIME = original_runtime
+            server.OptimizationRuntime._run_optimization = original_run_optimization
 
     def test_estimate_dispatch_minimizes_diesel_for_8760_hours(self):
         payload = server.planning_store.default_payload("方案A")
@@ -1735,12 +1738,17 @@ class PowerPlanServerTest(unittest.TestCase):
                 }
             )
 
-        with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
-            status, headers, body = server.handle_planning_api_path(
-                "/api/planning/geocode",
-                "POST",
-                json.dumps({"place": "北京"}, ensure_ascii=False).encode("utf-8"),
-            )
+        original_key = server.AMAP_WEB_SERVICE_KEY
+        server.AMAP_WEB_SERVICE_KEY = ""
+        try:
+            with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/geocode",
+                    "POST",
+                    json.dumps({"place": "北京"}, ensure_ascii=False).encode("utf-8"),
+                )
+        finally:
+            server.AMAP_WEB_SERVICE_KEY = original_key
 
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(status, 200)
@@ -1851,12 +1859,17 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("nominatim.openstreetmap.org", url)
             return FakeResponse([{"lat": "39.9042", "lon": "116.4074", "display_name": "北京"}])
 
-        with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
-            status, headers, body = server.handle_planning_api_path(
-                "/api/planning/geocode",
-                "POST",
-                json.dumps({"place": "北京"}, ensure_ascii=False).encode("utf-8"),
-            )
+        original_key = server.AMAP_WEB_SERVICE_KEY
+        server.AMAP_WEB_SERVICE_KEY = ""
+        try:
+            with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/geocode",
+                    "POST",
+                    json.dumps({"place": "北京"}, ensure_ascii=False).encode("utf-8"),
+                )
+        finally:
+            server.AMAP_WEB_SERVICE_KEY = original_key
 
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(status, 200)
@@ -2365,6 +2378,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('data-chart-hover="green"', script)
         self.assertIn('data-chart-hover-line="green"', script)
         self.assertIn('data-chart-hover-tooltip="green"', script)
+        self.assertIn('data-series-toggle', script)
+        self.assertIn('aria-pressed', script)
+        self.assertIn("greenSeriesVisibility", script)
+        self.assertIn("toggleGreenSeriesVisibility", script)
+        self.assertIn("isSeriesVisible", script)
         self.assertNotIn("green-axis-label", script)
         self.assertNotIn("green-y-axis-title", script)
         self.assertNotIn("green-x-axis-title", script)
@@ -2424,6 +2442,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("height: 100%", green_chart_svg_css)
         self.assertIn("min-height: 0", green_chart_svg_css)
         self.assertIn(".green-chart-legend", css)
+        self.assertIn(".green-chart-legend button", css)
+        self.assertIn(".green-chart-legend button.is-hidden", css)
         self.assertIn(".green-result-table", css)
         self.assertNotIn(".green-daily-data-table", css)
         self.assertNotIn(".green-daily-data-section", css)
@@ -2456,6 +2476,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('data-chart-hover="safety"', script)
         self.assertIn('data-chart-hover-line="safety"', script)
         self.assertIn('data-chart-hover-tooltip="safety"', script)
+        self.assertIn('data-series-toggle', script)
+        self.assertIn('aria-pressed', script)
+        self.assertIn("safetySeriesVisibility", script)
+        self.assertIn("toggleSafetySeriesVisibility", script)
+        self.assertIn("isSeriesVisible", script)
         self.assertIn("formatFrequencyDeviation", script)
         self.assertNotIn("safety-axis-label", script)
         self.assertNotIn("safety-y-axis-title", script)
@@ -2505,6 +2530,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("width: 100%", safety_chart_svg_css)
         self.assertIn("height: 100%", safety_chart_svg_css)
         self.assertIn("min-height: 0", safety_chart_svg_css)
+        self.assertIn(".safety-chart-legend", css)
+        self.assertIn(".safety-chart-legend button", css)
+        self.assertIn(".safety-chart-legend button.is-hidden", css)
         self.assertIn(".safety-center-line", css)
         self.assertIn(".safety-result-table", css)
 
@@ -2616,7 +2644,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "新能源向下扰动系数(0.0-0.5)",
             "是否考虑频率安全约束",
             "频率安全上限(1.0-1.5)",
-            "频率安全下限(0.9-1.0)",
+            "频率安全下限(0.5-1.0)",
             "是否考虑新能源N-1",
             "是否考虑负荷扰动",
         ):
@@ -2954,6 +2982,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("selectMapProvider", script)
         self.assertIn("loadBaiduMapScript", script)
         self.assertIn("initBaiduMapPicker", script)
+        self.assertIn("api.map.baidu.com/api?v=3.0", script)
+        self.assertIn("window.BMap", script)
         self.assertIn("loadGoogleMapScript", script)
         self.assertIn("initGoogleMapPicker", script)
         self.assertIn("importTimeSeriesFile", script)

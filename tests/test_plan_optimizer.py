@@ -186,6 +186,118 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn(("storage_charge_on", 0), variables)
         self.assertIn(("storage_discharge_on", 0), variables)
 
+    def test_planning_optimization_models_each_renewable_unit_for_exact_curtailment_rate(self):
+        payload = self._payload()
+        payload["wind_turbines"][0].update(
+            {"capacity": 10, "quantity_lower": 0, "quantity_upper": 2}
+        )
+        payload["photovoltaics"][0].update(
+            {"capacity": 8, "quantity_lower": 0, "quantity_upper": 1}
+        )
+        payload["time_series"][0]["solar_irradiance"] = 1000
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["integrality"] = integrality
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower
+            captured["constraint_upper"] = constraint_upper
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        self.assertIn(("renewable_curtailment_rate", 0), variables)
+        self.assertIn(("renewable_unit_built", "wind_turbines", 0, 0), variables)
+        self.assertIn(("renewable_unit_built", "wind_turbines", 0, 1), variables)
+        self.assertIn(("renewable_unit_built", "photovoltaics", 0, 0), variables)
+        self.assertIn(("renewable_curtailment_product", 0, "wind_turbines", 0, 0), variables)
+        self.assertIn(("renewable_curtailment_product", 0, "wind_turbines", 0, 1), variables)
+        self.assertIn(("renewable_curtailment_product", 0, "photovoltaics", 0, 0), variables)
+        self.assertEqual(captured["integrality"][variables[("renewable_unit_built", "wind_turbines", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("renewable_unit_built", "photovoltaics", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("renewable_curtailment_rate", 0)]], 0)
+
+        def has_constraint(expected_terms, expected_lower, expected_upper):
+            matrix = captured["constraints"]
+            expected = {variables[key]: coefficient for key, coefficient in expected_terms.items()}
+            for row in range(matrix.shape[0]):
+                vector = matrix.getrow(row)
+                terms = {
+                    int(column): float(value)
+                    for column, value in zip(vector.indices, vector.data)
+                    if abs(value) > 1e-9
+                }
+                if set(terms) != set(expected):
+                    continue
+                if not all(abs(terms[column] - expected[column]) < 1e-9 for column in expected):
+                    continue
+                lower = captured["constraint_lower"][row]
+                upper = captured["constraint_upper"][row]
+                lower_matches = np.isneginf(expected_lower) and np.isneginf(lower) or abs(lower - expected_lower) < 1e-9
+                upper_matches = np.isposinf(expected_upper) and np.isposinf(upper) or abs(upper - expected_upper) < 1e-9
+                if lower_matches and upper_matches:
+                    return True
+            return False
+
+        self.assertTrue(has_constraint(
+            {
+                ("qty", "wind_turbines", 0): 1.0,
+                ("renewable_unit_built", "wind_turbines", 0, 0): -1.0,
+                ("renewable_unit_built", "wind_turbines", 0, 1): -1.0,
+            },
+            0.0,
+            0.0,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 1.0,
+                ("renewable_curtailment_rate", 0): -1.0,
+            },
+            -np.inf,
+            0.0,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 1.0,
+                ("renewable_unit_built", "wind_turbines", 0, 0): -1.0,
+            },
+            -np.inf,
+            0.0,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 1.0,
+                ("renewable_curtailment_rate", 0): -1.0,
+                ("renewable_unit_built", "wind_turbines", 0, 0): -1.0,
+            },
+            -1.0,
+            np.inf,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                ("wind_curtailed", 0): 1.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): -10.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 1): -10.0,
+            },
+            0.0,
+            0.0,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                ("wind_power", 0): 1.0,
+                ("renewable_unit_built", "wind_turbines", 0, 0): -10.0,
+                ("renewable_unit_built", "wind_turbines", 0, 1): -10.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 10.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0, 1): 10.0,
+            },
+            0.0,
+            0.0,
+        ))
+
     def test_planning_model_tracks_grid_forming_storage_and_soc_limits(self):
         payload = self._payload()
         payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1

@@ -21,6 +21,9 @@ const state = {
   evaluationResultRailWidth: null,
   curveDataKey: "",
   activeLogView: "logs",
+  greenSeriesVisibility: null,
+  safetySeriesVisibility: null,
+  seriesToggleBound: false,
 };
 
 const optimizationResizeMinHeights = {
@@ -66,6 +69,63 @@ const resultColumnResizeConfig = {
   },
 };
 
+function ensureSeriesVisibility(kind) {
+  const stateKey = `${kind}SeriesVisibility`;
+  const seriesList = kind === "green" ? greenDailySeries : safetyDailySeries;
+  const visibility = state[stateKey] && typeof state[stateKey] === "object" ? state[stateKey] : {};
+  seriesList.forEach((series) => {
+    if (typeof visibility[series.key] !== "boolean") visibility[series.key] = true;
+  });
+  state[stateKey] = visibility;
+  return visibility;
+}
+
+function isSeriesVisible(kind, seriesKey) {
+  return ensureSeriesVisibility(kind)[seriesKey] !== false;
+}
+
+function setSeriesVisibility(kind, seriesKey, visible) {
+  const visibility = ensureSeriesVisibility(kind);
+  visibility[seriesKey] = Boolean(visible);
+  return visibility[seriesKey];
+}
+
+function bindSeriesToggleButtons() {
+  if (state.seriesToggleBound) return;
+  state.seriesToggleBound = true;
+  document.addEventListener("click", (event) => {
+    const button = event.target?.closest?.("[data-series-toggle]");
+    if (!button) return;
+    const [kind, seriesKey] = String(button.dataset.seriesToggle || "").split(":");
+    if (!kind || !seriesKey) return;
+    if (kind === "green") toggleGreenSeriesVisibility(seriesKey, button.closest("[data-result-chart-viewport]"));
+    else if (kind === "safety") toggleSafetySeriesVisibility(seriesKey, button.closest("[data-result-chart-viewport]"));
+  });
+}
+
+function toggleSeriesVisibility(kind, seriesKey, viewport) {
+  if (!seriesKey) return;
+  setSeriesVisibility(kind, seriesKey, !isSeriesVisible(kind, seriesKey));
+  renderAdaptiveResultChart(kind, viewport || document.querySelector(`[data-result-chart-viewport="${kind}"]`));
+}
+
+function toggleGreenSeriesVisibility(seriesKey, viewport) {
+  toggleSeriesVisibility("green", seriesKey, viewport);
+}
+
+function toggleSafetySeriesVisibility(seriesKey, viewport) {
+  toggleSeriesVisibility("safety", seriesKey, viewport);
+}
+
+function renderSeriesLegendButtons(kind, seriesList) {
+  return seriesList
+    .map((series) => {
+      const visible = isSeriesVisible(kind, series.key);
+      return `<button type="button" class="${visible ? "is-visible" : "is-hidden"}" data-series-toggle="${kind}:${series.key}" aria-pressed="${visible ? "true" : "false"}"><i style="background:${series.color}"></i><span>${escapeHtml(series.label)}</span></button>`;
+    })
+    .join("");
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   state.evaluationCurveViewer = window.ResultCurveViewer
     ? window.ResultCurveViewer.create({
@@ -85,6 +145,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clearLogs: clearEvaluationLogs,
     saveLogs: saveEvaluationLogs,
   });
+  bindSeriesToggleButtons();
   lockOptimizationCommandHeight();
   bindEvaluationMainResizeHandle();
   bindOptimizationResultResizeHandle();
@@ -747,8 +808,9 @@ function renderGreenDailyChart(points) {
   const margin = resultChartMargins(width, height);
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const upSeries = greenDailySeries.filter((series) => series.direction === "up");
-  const downSeries = greenDailySeries.filter((series) => series.direction === "down");
+  const upSeries = greenDailySeries.filter((series) => series.direction === "up" && isSeriesVisible("green", series.key));
+  const downSeries = greenDailySeries.filter((series) => series.direction === "down" && isSeriesVisible("green", series.key));
+  if (!upSeries.length && !downSeries.length) return `${renderGreenChartLegend()}<div class="empty-summary">暂无可显示曲线</div>`;
   const upMax = Math.max(
     ...points.map((point) => upSeries.reduce((total, series) => total + numericValue(point[series.key]), 0)),
     1,
@@ -773,9 +835,7 @@ function renderGreenDailyChart(points) {
     label: `-${formatAxisNumber(downMax * ratio)}`,
   }));
   return `
-    <div class="green-chart-legend">${greenDailySeries
-      .map((series) => `<span><i style="background:${series.color}"></i>${escapeHtml(series.label)}</span>`)
-      .join("")}</div>
+    ${renderGreenChartLegend()}
     <svg class="green-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="绿电日曲线" data-chart-kind="green" data-chart-width="${width}" data-chart-height="${height}" data-plot-left="${margin.left}" data-plot-right="${width - margin.right}" data-plot-top="${margin.top}" data-plot-bottom="${height - margin.bottom}">
       <line class="green-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
       <line class="green-zero-line" x1="${margin.left}" y1="${zeroY.toFixed(2)}" x2="${width - margin.right}" y2="${zeroY.toFixed(2)}"></line>
@@ -818,9 +878,10 @@ function renderSafetyDailyChart(points) {
   const plotHeight = height - margin.top - margin.bottom;
   const centerY = margin.top + plotHeight / 2;
   const halfSpan = Math.max(1, plotHeight / 2);
+  const visibleSeries = safetyDailySeries.filter((series) => isSeriesVisible("safety", series.key));
+  if (!visibleSeries.length) return `${renderSafetyChartLegend()}<div class="empty-summary">暂无可显示曲线</div>`;
   const maxDeviation = Math.max(
-    ...points.map((point) => Math.abs(numericFrequency(point.frequency_max) - 50)),
-    ...points.map((point) => Math.abs(numericFrequency(point.frequency_min) - 50)),
+    ...points.map((point) => Math.max(...visibleSeries.map((series) => Math.abs(numericFrequency(point[series.key]) - 50)))),
     0.05,
   );
   const xAt = (index) => margin.left + (points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth);
@@ -830,9 +891,7 @@ function renderSafetyDailyChart(points) {
   const upLabel = `+${formatFrequencyDeviation(maxDeviation)}`;
   const downLabel = `-${formatFrequencyDeviation(maxDeviation)}`;
   return `
-    <div class="safety-chart-legend">${safetyDailySeries
-      .map((series) => `<span><i style="background:${series.color}"></i>${escapeHtml(series.label)}</span>`)
-      .join("")}</div>
+    ${renderSafetyChartLegend()}
     <svg class="safety-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="安全频率日曲线" data-chart-kind="safety" data-chart-width="${width}" data-chart-height="${height}" data-plot-left="${margin.left}" data-plot-right="${width - margin.right}" data-plot-top="${margin.top}" data-plot-bottom="${height - margin.bottom}">
       <line class="safety-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
       <line class="safety-center-line" x1="${margin.left}" y1="${centerY.toFixed(2)}" x2="${width - margin.right}" y2="${centerY.toFixed(2)}"></line>
@@ -841,10 +900,8 @@ function renderSafetyDailyChart(points) {
       <text class="safety-tick-label" x="${margin.left - 8}" y="${margin.top + 2}">${escapeHtml(upLabel)}</text>
       <text class="safety-tick-label safety-zero-label" x="${margin.left - 8}" y="${centerY.toFixed(2)}">0</text>
       <text class="safety-tick-label" x="${margin.left - 8}" y="${height - margin.bottom - 2}">${escapeHtml(downLabel)}</text>
-      <path class="safety-frequency-area up" d="${frequencyAreaPath(points, (point) => point.frequency_max, xAt, yAt, centerY)}"></path>
-      <path class="safety-frequency-area down" d="${frequencyAreaPath(points, (point) => point.frequency_min, xAt, yAt, centerY)}"></path>
-      <path class="safety-frequency-line up" d="${maxPath}"></path>
-      <path class="safety-frequency-line down" d="${minPath}"></path>
+      ${isSeriesVisible("safety", "frequency_max") ? `<path class="safety-frequency-area up" d="${frequencyAreaPath(points, (point) => point.frequency_max, xAt, yAt, centerY)}"></path><path class="safety-frequency-line up" d="${maxPath}"></path>` : ""}
+      ${isSeriesVisible("safety", "frequency_min") ? `<path class="safety-frequency-area down" d="${frequencyAreaPath(points, (point) => point.frequency_min, xAt, yAt, centerY)}"></path><path class="safety-frequency-line down" d="${minPath}"></path>` : ""}
       ${renderSafetyXAxis(points, xAt, centerY, height - margin.bottom, width)}
       <line class="chart-hover-line" data-chart-hover-line="safety" x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${height - margin.bottom}" hidden></line>
       <rect class="chart-hover-capture" data-chart-hover="safety" x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}"></rect>
@@ -894,6 +951,14 @@ function renderGreenStackedAreas(points, seriesList, xAt, yAt) {
       return `<polygon class="green-stack-area" points="${upperLine} ${lowerLine}" fill="${series.color}"><title>${escapeHtml(series.label)}</title></polygon>`;
     })
     .join("");
+}
+
+function renderGreenChartLegend() {
+  return `<div class="green-chart-legend">${renderSeriesLegendButtons("green", greenDailySeries)}</div>`;
+}
+
+function renderSafetyChartLegend() {
+  return `<div class="safety-chart-legend">${renderSeriesLegendButtons("safety", safetyDailySeries)}</div>`;
 }
 
 function renderGreenTick(tick, left, right) {
@@ -1191,6 +1256,7 @@ function positionChartHoverTooltip(tooltip, viewport, event) {
 function renderGreenHoverTooltip(point, index) {
   const day = point?.day ?? index + 1;
   const rows = greenDailySeries
+    .filter((series) => isSeriesVisible("green", series.key))
     .map((series) => {
       const value = formatNumber(numericValue(point?.[series.key]));
       return `<div><span>${escapeHtml(series.label)}</span><strong>${escapeHtml(value)} kWh</strong></div>`;
@@ -1201,12 +1267,16 @@ function renderGreenHoverTooltip(point, index) {
 
 function renderSafetyHoverTooltip(point, index) {
   const day = point?.day ?? index + 1;
-  const maxFrequency = numericFrequency(point?.frequency_max);
-  const minFrequency = numericFrequency(point?.frequency_min);
-  return `
-    <h3>第 ${escapeHtml(day)} 天</h3>
-    <div><span>向上频率最大值</span><strong>${escapeHtml(formatFrequency(maxFrequency))} (${escapeHtml(formatSignedDeviation(maxFrequency - 50))})</strong></div>
-    <div><span>向下频率最小值</span><strong>${escapeHtml(formatFrequency(minFrequency))} (${escapeHtml(formatSignedDeviation(minFrequency - 50))})</strong></div>`;
+  const rows = [];
+  if (isSeriesVisible("safety", "frequency_max")) {
+    const maxFrequency = numericFrequency(point?.frequency_max);
+    rows.push(`<div><span>向上频率最大值</span><strong>${escapeHtml(formatFrequency(maxFrequency))} (${escapeHtml(formatSignedDeviation(maxFrequency - 50))})</strong></div>`);
+  }
+  if (isSeriesVisible("safety", "frequency_min")) {
+    const minFrequency = numericFrequency(point?.frequency_min);
+    rows.push(`<div><span>向下频率最小值</span><strong>${escapeHtml(formatFrequency(minFrequency))} (${escapeHtml(formatSignedDeviation(minFrequency - 50))})</strong></div>`);
+  }
+  return `<h3>第 ${escapeHtml(day)} 天</h3>${rows.join("")}`;
 }
 
 function numericSvgAttribute(svg, dataKey, fallbackName) {

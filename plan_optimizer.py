@@ -170,15 +170,21 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 cost=device["annual_cost"],
             )
 
+    def var(key: tuple[Any, ...]) -> int:
+        return builder.var(key)
+
     diesel_devices = active_devices(model, "diesel_generators")
-    wind_devices = model["device_rows"]["wind_turbines"]
-    pv_devices = model["device_rows"]["photovoltaics"]
+    wind_devices = renewable_candidate_devices(model, "wind_turbines")
+    pv_devices = renewable_candidate_devices(model, "photovoltaics")
+    renewable_devices = [*wind_devices, *pv_devices]
     storage_pcs_devices = model["device_rows"]["storage_pcs"]
     grid_storage_pcs_devices = [device for device in storage_pcs_devices if device.get("is_grid_forming")]
     storage_battery_devices = model["device_rows"]["storage_battery_packs"]
     electrolyzer_devices = active_devices(model, "hydrogen_electrolyzers")
     hydrogen_tank_devices = model["device_rows"]["hydrogen_tanks"]
     fuel_cell_devices = active_devices(model, "fuel_cells")
+
+    add_renewable_unit_build_variables(builder, renewable_devices)
 
     for hour in range(n):
         wind_upper = sum(model["wind_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in wind_devices)
@@ -191,6 +197,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         builder.add_var(("wind_curtailed", hour), 0.0, max(0.0, wind_upper), cost=CURTAILMENT_COST)
         builder.add_var(("pv_power", hour), 0.0, max(0.0, pv_upper))
         builder.add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper), cost=CURTAILMENT_COST)
+        add_renewable_hour_variables(builder, hour, renewable_devices)
         builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
         builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper), cost=CYCLING_COST)
         builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
@@ -236,9 +243,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 cost=CYCLING_COST,
             )
 
-    def var(key: tuple[Any, ...]) -> int:
-        return builder.var(key)
-
     def qty_terms(devices: list[dict[str, Any]], coefficient_key: str = "capacity", multiplier: float = 1.0) -> dict[int, float]:
         return {
             var(("qty", device["key"], device["index"])): numeric(device.get(coefficient_key), 0.0) * multiplier
@@ -264,24 +268,22 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             load=loads[hour],
         )
 
-        dispatch_milp.add_availability_constraint(
+        add_renewable_curtailment_linearization(builder, hour, renewable_devices)
+        add_exact_renewable_aggregate_constraints(
             builder,
-            production_indices=[var(("wind_power", hour))],
-            curtailed_index=var(("wind_curtailed", hour)),
-            available_terms={
-                var(("qty", device["key"], device["index"])): model["wind_available_per_unit"][device["id"]][hour]
-                for device in wind_devices
-            },
+            model=model,
+            hour=hour,
+            devices=wind_devices,
+            power_key="wind_power",
+            curtailed_key="wind_curtailed",
         )
-
-        dispatch_milp.add_availability_constraint(
+        add_exact_renewable_aggregate_constraints(
             builder,
-            production_indices=[var(("pv_power", hour))],
-            curtailed_index=var(("pv_curtailed", hour)),
-            available_terms={
-                var(("qty", device["key"], device["index"])): model["pv_available_per_unit"][device["id"]][hour]
-                for device in pv_devices
-            },
+            model=model,
+            hour=hour,
+            devices=pv_devices,
+            power_key="pv_power",
+            curtailed_key="pv_curtailed",
         )
 
         for device in diesel_devices:
@@ -597,6 +599,104 @@ def active_devices(model: dict[str, Any], key: str) -> list[dict[str, Any]]:
         for device in model["device_rows"][key]
         if device["quantity_upper"] > 0 and device["capacity"] > 0
     ]
+
+
+def renewable_candidate_devices(model: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    # Wind/PV curtailment is modeled by physical candidate slots. Rows with no
+    # possible capacity cannot affect dispatch, so they stay as plain qty rows.
+    return [
+        device
+        for device in model["device_rows"][key]
+        if device["quantity_upper"] > 0 and device["capacity"] > 0
+    ]
+
+
+def add_renewable_unit_build_variables(
+    builder: dispatch_milp.MilpModelBuilder,
+    devices: list[dict[str, Any]],
+) -> None:
+    # q_i is still the construction-cost variable. The binary slot variables
+    # let the optimizer express products between "built" and hourly curtailment
+    # rate without leaving linear MILP form.
+    for device in devices:
+        qty_index = builder.var(("qty", device["key"], device["index"]))
+        build_indices = []
+        for unit in range(device["quantity_upper"]):
+            build_indices.append(builder.add_var(
+                ("renewable_unit_built", device["key"], device["index"], unit),
+                0.0,
+                1.0,
+                integer=True,
+            ))
+        if build_indices:
+            builder.add_constraint(
+                {qty_index: 1.0, **{index: -1.0 for index in build_indices}},
+                0.0,
+                0.0,
+            )
+
+
+def add_renewable_hour_variables(
+    builder: dispatch_milp.MilpModelBuilder,
+    hour: int,
+    devices: list[dict[str, Any]],
+) -> None:
+    # One common rate per hour enforces equal curtailment percentage across all
+    # built wind and PV slots. z_{t,i,u} below represents built_{i,u} * rate_t.
+    if not devices:
+        return
+    builder.add_var(("renewable_curtailment_rate", hour), 0.0, 1.0)
+    for device in devices:
+        for unit in range(device["quantity_upper"]):
+            builder.add_var(
+                ("renewable_curtailment_product", hour, device["key"], device["index"], unit),
+                0.0,
+                1.0,
+            )
+
+
+def add_renewable_curtailment_linearization(
+    builder: dispatch_milp.MilpModelBuilder,
+    hour: int,
+    devices: list[dict[str, Any]],
+) -> None:
+    if not devices:
+        return
+    rate_index = builder.var(("renewable_curtailment_rate", hour))
+    for device in devices:
+        for unit in range(device["quantity_upper"]):
+            built_index = builder.var(("renewable_unit_built", device["key"], device["index"], unit))
+            product_index = builder.var(("renewable_curtailment_product", hour, device["key"], device["index"], unit))
+            builder.add_constraint({product_index: 1.0, rate_index: -1.0}, -np.inf, 0.0)
+            builder.add_constraint({product_index: 1.0, built_index: -1.0}, -np.inf, 0.0)
+            builder.add_constraint({product_index: 1.0, rate_index: -1.0, built_index: -1.0}, -1.0, np.inf)
+
+
+def add_exact_renewable_aggregate_constraints(
+    builder: dispatch_milp.MilpModelBuilder,
+    *,
+    model: dict[str, Any],
+    hour: int,
+    devices: list[dict[str, Any]],
+    power_key: str,
+    curtailed_key: str,
+) -> None:
+    # Aggregate variables remain the public interface for power balance,
+    # reports and existing safety constraints. The equalities below bind them
+    # to exact per-slot output/curtailment under the shared hourly rate.
+    power_terms: dict[int, float] = {builder.var((power_key, hour)): 1.0}
+    curtailed_terms: dict[int, float] = {builder.var((curtailed_key, hour)): 1.0}
+    availability_map_key = "wind_available_per_unit" if power_key == "wind_power" else "pv_available_per_unit"
+    for device in devices:
+        availability = float(model[availability_map_key][device["id"]][hour])
+        for unit in range(device["quantity_upper"]):
+            built_index = builder.var(("renewable_unit_built", device["key"], device["index"], unit))
+            product_index = builder.var(("renewable_curtailment_product", hour, device["key"], device["index"], unit))
+            power_terms[built_index] = power_terms.get(built_index, 0.0) - availability
+            power_terms[product_index] = power_terms.get(product_index, 0.0) + availability
+            curtailed_terms[product_index] = curtailed_terms.get(product_index, 0.0) - availability
+    builder.add_constraint(power_terms, 0.0, 0.0)
+    builder.add_constraint(curtailed_terms, 0.0, 0.0)
 
 
 def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) -> None:

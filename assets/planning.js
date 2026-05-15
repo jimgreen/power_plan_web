@@ -43,16 +43,58 @@ const planningParameterSpecs = [
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["storage_charge_efficiency", "电储能充电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
   ["storage_discharge_efficiency", "电储能放电效率(0.0-1.0)", "number", { min: 0, max: 1, positive: true, defaultValue: 0.95 }],
-  ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: 0 }],
+  ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
+  ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: 0 }],
+  ["renewable_disturbance_enabled", "是否考虑新能源扰动", "boolean", { defaultValue: 0 }],
+  ["load_disturbance_enabled", "是否考虑负荷扰动", "boolean", { defaultValue: 0 }],
   ["load_up_disturbance_factor", "负荷向上扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: 0 }],
   ["frequency_security_upper", "频率安全上限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.5 }],
-  ["frequency_security_lower", "频率安全下限(0.9-1.0)", "number", { min: 0.9, max: 1, defaultValue: 1.0 }],
-  ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
-  ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: 0 }],
-  ["load_disturbance_enabled", "是否考虑负荷扰动", "boolean", { defaultValue: 0 }],
+  ["frequency_security_lower", "频率安全下限(0.5-1.0)", "number", { min: 0.5, max: 1, defaultValue: 1.0 }],
+  ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: 0 }],
+];
+
+const planningParameterSpecsByKey = new Map(planningParameterSpecs.map((spec) => [spec[0], spec]));
+
+const planningParameterGroups = [
+  {
+    key: "normal",
+    title: "常规参数",
+    keys: [
+      "diesel_price",
+      "green_power_ratio_lower",
+      "optimization_time_limit_minutes",
+      "initial_storage_soc_ratio",
+      "initial_hydrogen_storage_ratio",
+      "storage_charge_efficiency",
+      "storage_discharge_efficiency",
+    ],
+  },
+  {
+    key: "disturbance",
+    title: "是否考虑扰动后平衡约束相关参数",
+    keys: [
+      "post_disturbance_power_balance_enabled",
+      "renewable_n_1_enabled",
+      "renewable_disturbance_enabled",
+      "load_disturbance_enabled",
+      "load_up_disturbance_factor",
+      "load_down_disturbance_factor",
+      "renewable_down_disturbance_factor",
+    ],
+  },
+  {
+    key: "frequency",
+    title: "是否考虑频率安全约束相关参数",
+    keys: [
+      "frequency_security_constraint_enabled",
+      "frequency_security_upper",
+      "frequency_security_lower",
+      "storage_frequency_regulation_enabled",
+    ],
+  },
 ];
 
 const visibleDevices = new Set(deviceSpecs.map(([key]) => key));
@@ -930,27 +972,35 @@ async function selectMapProvider(provider) {
 async function loadSelectedMapProvider() {
   const config = await loadMapConfig();
   if (!config) return;
-  const key = mapProviderKey(config, state.mapProvider);
-  resetMapCanvas();
-  if (!key) {
-    setMapPickerHint(`可按地名查找；未配置${mapProviderLabel(state.mapProvider)} Key。`);
-    return;
-  }
-  try {
-    if (state.mapProvider === "baidu") {
-      await loadBaiduMapScript(key);
-      initBaiduMapPicker();
-    } else if (state.mapProvider === "google") {
-      await loadGoogleMapScript(key);
-      initGoogleMapPicker();
-    } else {
-      await loadAmapScript(key);
-      initAmapPicker();
+  const providers = [state.mapProvider, "amap", "baidu", "google"].filter((provider, index, array) => provider && array.indexOf(provider) === index);
+  const errors = [];
+  for (const provider of providers) {
+    const key = mapProviderKey(config, provider);
+    resetMapCanvas();
+    if (!key) {
+      errors.push(`${mapProviderLabel(provider)}未配置 Key`);
+      continue;
     }
-    setMapPickerHint(`当前接口：${mapProviderLabel(state.mapProvider)}。根据地名查找坐标，或点击地图选点。`);
-  } catch (error) {
-    setMapPickerHint(`地图加载失败：${error.message || error}`);
+    try {
+      if (provider === "baidu") {
+        await loadBaiduMapScript(key);
+        initBaiduMapPicker();
+      } else if (provider === "google") {
+        await loadGoogleMapScript(key);
+        initGoogleMapPicker();
+      } else {
+        await loadAmapScript(key);
+        initAmapPicker();
+      }
+      state.mapProvider = provider;
+      renderMapProviderTabs(config);
+      setMapPickerHint(`当前接口：${mapProviderLabel(provider)}。根据地名查找坐标，或点击地图选点。`);
+      return;
+    } catch (error) {
+      errors.push(`${mapProviderLabel(provider)}：${error.message || error}`);
+    }
   }
+  setMapPickerHint(`地图加载失败：${errors.join("；") || "未能加载任何地图服务"}`);
 }
 
 function closeMapPicker() {
@@ -1019,18 +1069,24 @@ function loadAmapScript(key) {
 }
 
 function loadBaiduMapScript(key) {
-  if (window.BMapGL) return Promise.resolve();
+  if (window.BMap) return Promise.resolve();
   if (window.__powerPlanBaiduLoading) return window.__powerPlanBaiduLoading;
   window.__powerPlanBaiduLoading = new Promise((resolve, reject) => {
     const callbackName = `powerPlanBaiduMapLoaded_${Date.now()}`;
+    const timeoutId = window.setTimeout(() => {
+      delete window[callbackName];
+      reject(new Error("百度地图脚本加载超时"));
+    }, 10000);
     window[callbackName] = () => {
+      window.clearTimeout(timeoutId);
       delete window[callbackName];
       resolve();
     };
     const script = document.createElement("script");
-    script.src = `https://api.map.baidu.com/api?v=1.0&type=webgl&ak=${encodeURIComponent(key)}&callback=${callbackName}`;
+    script.src = `https://api.map.baidu.com/api?v=3.0&ak=${encodeURIComponent(key)}&callback=${callbackName}`;
     script.async = true;
     script.onerror = () => {
+      window.clearTimeout(timeoutId);
       delete window[callbackName];
       reject(new Error("百度地图脚本加载失败"));
     };
@@ -1087,15 +1143,15 @@ function initBaiduMapPicker() {
   const latitude = Number(document.getElementById("weatherLatitude").value);
   const longitude = Number(document.getElementById("weatherLongitude").value);
   const center = Number.isFinite(latitude) && Number.isFinite(longitude)
-    ? new window.BMapGL.Point(longitude, latitude)
-    : new window.BMapGL.Point(116.39723, 39.9075);
-  state.mapInstance = new window.BMapGL.Map("mapPickerCanvas");
+    ? new window.BMap.Point(longitude, latitude)
+    : new window.BMap.Point(116.39723, 39.9075);
+  state.mapInstance = new window.BMap.Map("mapPickerCanvas");
   state.mapInstance.centerAndZoom(center, 5);
   state.mapInstance.enableScrollWheelZoom(true);
-  state.mapMarker = new window.BMapGL.Marker(center);
+  state.mapMarker = new window.BMap.Marker(center);
   state.mapInstance.addOverlay(state.mapMarker);
   state.mapInstance.addEventListener("click", (event) => {
-    setMapPoint(event.latlng.lat, event.latlng.lng);
+    setMapPoint(event.point.lat, event.point.lng);
   });
 }
 
@@ -1119,8 +1175,8 @@ function setMapPoint(latitude, longitude, source = "map") {
   state.mapPoint = { latitude, longitude };
   document.getElementById("weatherLatitude").value = Number(latitude).toFixed(6);
   document.getElementById("weatherLongitude").value = Number(longitude).toFixed(6);
-  if (state.mapProvider === "baidu" && state.mapInstance && window.BMapGL) {
-    const point = new window.BMapGL.Point(longitude, latitude);
+  if (state.mapProvider === "baidu" && state.mapInstance && window.BMap) {
+    const point = new window.BMap.Point(longitude, latitude);
     state.mapInstance.centerAndZoom(point, state.mapInstance.getZoom ? state.mapInstance.getZoom() : 5);
     if (state.mapMarker) state.mapMarker.setPosition(point);
   } else if (state.mapProvider === "google" && state.mapInstance && window.google?.maps) {

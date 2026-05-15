@@ -124,16 +124,17 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "initial_hydrogen_storage_ratio",
             "storage_charge_efficiency",
             "storage_discharge_efficiency",
-            "storage_frequency_regulation_enabled",
+            "post_disturbance_power_balance_enabled",
+            "renewable_n_1_enabled",
+            "renewable_disturbance_enabled",
+            "load_disturbance_enabled",
             "load_up_disturbance_factor",
             "load_down_disturbance_factor",
             "renewable_down_disturbance_factor",
             "frequency_security_constraint_enabled",
             "frequency_security_upper",
             "frequency_security_lower",
-            "post_disturbance_power_balance_enabled",
-            "renewable_n_1_enabled",
-            "load_disturbance_enabled",
+            "storage_frequency_regulation_enabled",
         ],
     ),
 }
@@ -238,6 +239,7 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "storage_charge_efficiency": 0.95,
     "storage_discharge_efficiency": 0.95,
     "storage_frequency_regulation_enabled": 0,
+    "renewable_disturbance_enabled": 0,
     "load_up_disturbance_factor": 0,
     "load_down_disturbance_factor": 0,
     "renewable_down_disturbance_factor": 0,
@@ -254,6 +256,7 @@ PLANNING_BOOLEAN_FIELDS = {
     "frequency_security_constraint_enabled",
     "post_disturbance_power_balance_enabled",
     "renewable_n_1_enabled",
+    "renewable_disturbance_enabled",
     "load_disturbance_enabled",
 }
 
@@ -917,9 +920,17 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
     number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
     number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
-    post_disturbance = number_in_range("post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", 0, 1)
-    if post_disturbance is not None and not float(post_disturbance).is_integer():
-        messages.append({"level": "error", "message": "是否考虑扰动后平衡约束必须为0或1"})
+    for key, label in (
+        ("storage_frequency_regulation_enabled", "储能是否参与调频"),
+        ("frequency_security_constraint_enabled", "是否考虑频率安全约束"),
+        ("post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束"),
+        ("renewable_n_1_enabled", "是否考虑新能源N-1"),
+        ("renewable_disturbance_enabled", "是否考虑新能源扰动"),
+        ("load_disturbance_enabled", "是否考虑负荷扰动"),
+    ):
+        flag = number_in_range(key, label, 0, 1)
+        if flag is not None and not float(flag).is_integer():
+            messages.append({"level": "error", "message": f"{label}必须为0或1"})
     for key, label in (
         ("storage_charge_efficiency", "电储能充电效率(0.0-1.0)"),
         ("storage_discharge_efficiency", "电储能放电效率(0.0-1.0)"),
@@ -931,7 +942,7 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
     number_in_range("load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", 0, 0.5)
     number_in_range("renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", 0, 0.5)
     frequency_upper = number_in_range("frequency_security_upper", "频率安全上限(1.0-1.5)", 1, 1.5)
-    frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(0.9-1.0)", 0.9, 1)
+    frequency_lower = number_in_range("frequency_security_lower", "频率安全下限(0.5-1.0)", 0.5, 1)
     if frequency_upper is not None and frequency_lower is not None and frequency_upper < frequency_lower:
         messages.append({"level": "error", "message": "频率安全上限不能小于频率安全下限"})
     return messages
