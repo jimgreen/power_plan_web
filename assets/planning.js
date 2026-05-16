@@ -12,11 +12,20 @@ const state = {
   mapCleanup: null,
   mapProvider: "amap",
   chartMeta: null,
+  chartDrag: null,
+  loadPreviewMeta: null,
+  loadPreviewDrag: null,
+  timeSeriesImportManualChartHeight: null,
+  timeSeriesImportVisibleCurves: new Set(["wind_speed", "solar_irradiance", "temperature", "load"]),
+  timeSeriesImportChartMeta: null,
+  timeSeriesImportDrag: null,
   timeChartManualHeight: null,
   layoutObserver: null,
   pendingTimeSeriesImport: null,
   pendingLoadCurve: null,
   originalLoadCurve: null,
+  loadGeneratorSourceCurve: null,
+  loadGeneratorSourceName: "",
   isSwitchingScheme: false,
 };
 
@@ -59,8 +68,15 @@ const deviceSpecs = [
 const summarySeries = [
   ["wind_speed", "风速", "#1f9bb4", "m/s"],
   ["solar_irradiance", "太阳辐照", "#d79018", "W/m2"],
-  ["temperature", "温度", "#7a5aa6", "℃"],
+  ["temperature", "环境温度", "#7a5aa6", "℃"],
   ["load", "负荷", "#2d6b45", "kW"],
+];
+
+const timeSeriesImportSeries = [
+  ["wind_speed", "风速", "#21d5ff", "m/s"],
+  ["solar_irradiance", "太阳辐射", "#ffd166", "W/m2"],
+  ["temperature", "环境温度", "#b292ff", "℃"],
+  ["load", "负荷", "#64e6a3", "kW"],
 ];
 
 const planningParameterSpecs = [
@@ -177,7 +193,7 @@ const deviceGroups = [
 const labels = {
   name: "名称",
   solar_irradiance: "太阳辐照",
-  temperature: "温度",
+  temperature: "环境温度",
   capacity: "容量(kW)",
   power_capacity: "容量(kW)",
   storage_charge_efficiency: "充电效率(0.0-1.0)",
@@ -262,6 +278,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindTabs();
   bindSummaryTabs();
   bindTimeResizeHandle();
+  bindTimeSeriesImportResizeHandle();
   bindActions();
   bindAdaptiveLayout();
   syncAdaptiveLayout();
@@ -315,12 +332,19 @@ function bindActions() {
   document.getElementById("closeTimeSeriesImport").addEventListener("click", closeTimeSeriesImport);
   document.getElementById("confirmTimeSeriesImport").addEventListener("click", confirmImportedTimeSeries);
   document.getElementById("cancelTimeSeriesImport").addEventListener("click", cancelTimeSeriesImport);
+  document.querySelectorAll("[data-import-curve]").forEach((button) => {
+    button.addEventListener("click", () => toggleTimeSeriesImportCurve(button.dataset.importCurve));
+  });
+  const timeSeriesImportChart = document.getElementById("timeSeriesImportChart");
+  timeSeriesImportChart.addEventListener("pointerdown", startTimeSeriesImportValueDrag);
+  document.getElementById("loadGeneratorMode").addEventListener("change", onLoadGeneratorModeChange);
   document.getElementById("openLoadGenerator").addEventListener("click", openLoadGenerator);
   document.getElementById("closeLoadGenerator").addEventListener("click", closeLoadGenerator);
   document.getElementById("generateLoadCurve").addEventListener("click", generateLoadCurve);
-  document.getElementById("importLoadCurveFile").addEventListener("click", importLoadCurveFile);
   document.getElementById("loadCurveImportFile").addEventListener("change", onLoadCurveImportFileChange);
   document.getElementById("saveLoadTemplate").addEventListener("click", saveLoadTemplate);
+  const loadGeneratorPreview = document.getElementById("loadGeneratorPreview");
+  loadGeneratorPreview.addEventListener("pointerdown", startLoadPreviewValueDrag);
   document.getElementById("confirmLoadGenerator").addEventListener("click", confirmGeneratedLoadCurve);
   document.getElementById("cancelLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("geocodePlace").addEventListener("click", geocodePlace);
@@ -334,8 +358,10 @@ function bindActions() {
   document.querySelectorAll("[data-curve]").forEach((button) => {
     button.addEventListener("click", () => selectCurve(button.dataset.curve));
   });
-  document.getElementById("timeChart").addEventListener("mousemove", onChartMouseMove);
-  document.getElementById("timeChart").addEventListener("mouseleave", hideChartCursor);
+  const timeChart = document.getElementById("timeChart");
+  timeChart.addEventListener("mousemove", onChartMouseMove);
+  timeChart.addEventListener("mouseleave", hideChartCursor);
+  timeChart.addEventListener("pointerdown", startChartValueDrag);
   document.addEventListener("mousemove", onHistogramMouseMove);
   document.addEventListener("mouseleave", hideHistogramTip);
   window.addEventListener("resize", syncAdaptiveLayout);
@@ -479,8 +505,64 @@ function bindTimeResizeHandle() {
   handle.setAttribute("aria-valuenow", String(Math.round(chart.getBoundingClientRect().height || 240)));
 }
 
+function bindTimeSeriesImportResizeHandle() {
+  const handle = document.getElementById("timeSeriesImportResizeHandle");
+  const chart = document.getElementById("timeSeriesImportChart");
+  if (!handle || !chart) return;
+
+  const applyHeight = (height) => {
+    const safeHeight = clampTimeSeriesImportChartHeight(height);
+    state.timeSeriesImportManualChartHeight = safeHeight;
+    document.documentElement.style.setProperty("--time-series-import-chart-height", `${Math.round(safeHeight)}px`);
+    handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
+    renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = chart.getBoundingClientRect().height || 240;
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      applyHeight(startHeight + moveEvent.clientY - startY);
+    };
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const currentHeight = chart.getBoundingClientRect().height || 240;
+    const keySteps = {
+      ArrowUp: -12,
+      ArrowDown: 12,
+      PageUp: -48,
+      PageDown: 48,
+    };
+    if (event.key in keySteps) {
+      event.preventDefault();
+      applyHeight(currentHeight + keySteps[event.key]);
+    }
+  });
+
+  handle.setAttribute("aria-valuenow", String(Math.round(chart.getBoundingClientRect().height || 240)));
+}
+
 function clampTimeChartHeight(height) {
   return Math.min(Math.max(Number(height) || 240, 120), maxTimeChartHeight());
+}
+
+function clampTimeSeriesImportChartHeight(height) {
+  return Math.min(Math.max(Number(height) || 240, 120), 430);
 }
 
 function maxTimeChartHeight() {
@@ -526,6 +608,7 @@ function renderLoadGeneratorModeOptions() {
   const currentValue = select.value || "random";
   const fixedOptions = [
     ["random", "随机曲线"],
+    ["file", "文件导入"],
   ];
   const templateOptions = state.loadCurveTemplates
     .map((template) => `<option value="template:${escapeHtml(template.name)}">${escapeHtml(template.name)}</option>`)
@@ -866,14 +949,234 @@ function applyImportedTimeSeries(rows, message, updateStatus = true) {
 function renderTimeSeriesImportPreview(rows) {
   const host = document.getElementById("timeSeriesImportPreview");
   if (!host) return;
+  renderTimeSeriesImportChart(rows);
   if (!Array.isArray(rows) || rows.length === 0) {
     host.innerHTML = "<div class=\"empty-summary\">打开文件后，在这里预览8760点曲线。</div>";
     return;
   }
+  const fields = [
+    ["wind_speed", "风速"],
+    ["solar_irradiance", "太阳辐射"],
+    ["temperature", "环境温度"],
+    ["load", "负荷"],
+  ];
   const tableRows = rows
-    .map((row, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(row.datetime || "")}</td><td>${escapeHtml(formatNumber(row.wind_speed))}</td><td>${escapeHtml(formatNumber(row.solar_irradiance))}</td><td>${escapeHtml(formatNumber(row.temperature))}</td><td>${escapeHtml(formatNumber(row.load))}</td></tr>`)
+    .map((row, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(row.datetime || "")}</td>${fields
+      .map(([key]) => `<td><input type="number" step="any" inputmode="decimal" data-time-series-import-index="${index}" data-time-series-import-key="${escapeHtml(key)}" value="${escapeHtml(row[key] ?? "")}"></td>`)
+      .join("")}</tr>`)
     .join("");
-  host.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th><th>风速</th><th>太阳辐射</th><th>室温</th><th>负荷</th></tr></thead><tbody>${tableRows}</tbody></table>`;
+  host.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th>${fields.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>`;
+  host.querySelectorAll("[data-time-series-import-index]").forEach((input) => input.addEventListener("input", onTimeSeriesImportInput));
+}
+
+function renderTimeSeriesImportChart(rows) {
+  const svg = document.getElementById("timeSeriesImportChart");
+  if (!svg) return;
+  const width = svg.clientWidth || 900;
+  const height = svg.clientHeight || state.timeSeriesImportManualChartHeight || 240;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  if (!Array.isArray(rows) || rows.length === 0) {
+    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="12" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">打开文件后显示曲线预览</text>`;
+    state.timeSeriesImportChartMeta = null;
+    return;
+  }
+  const visibleSpecs = timeSeriesImportSeries.filter(([key]) => state.timeSeriesImportVisibleCurves.has(key));
+  if (!visibleSpecs.length) {
+    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="12" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">请选择至少一条曲线</text>`;
+    state.timeSeriesImportChartMeta = null;
+    return;
+  }
+
+  const padding = { left: 54, right: 24, top: 28, bottom: 34 };
+  const plotWidth = Math.max(1, width - padding.left - padding.right);
+  const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+  const x = (index) => padding.left + (index / Math.max(1, rows.length - 1)) * plotWidth;
+  const scalesByKey = new Map();
+  const yForSeries = (key) => {
+    const values = rows.map((row) => Number(row[key])).filter(Number.isFinite);
+    const rawMin = values.length ? Math.min(...values) : 0;
+    const rawMax = values.length ? Math.max(...values) : 1;
+    const min = rawMin === rawMax ? rawMin - 1 : rawMin;
+    const max = rawMin === rawMax ? rawMax + 1 : rawMax;
+    const span = max - min || 1;
+    const scale = {
+      min,
+      max,
+      rawMin,
+      rawMax,
+      span,
+      y(value) {
+        const number = Number(value);
+        const safeValue = Number.isFinite(number) ? number : rawMin;
+        return padding.top + plotHeight - ((safeValue - min) / span) * plotHeight;
+      },
+      valueFromY(localY) {
+        const ratio = (padding.top + plotHeight - localY) / plotHeight;
+        return min + ratio * span;
+      },
+    };
+    scalesByKey.set(key, scale);
+    return scale;
+  };
+  const grid = [0, 0.25, 0.5, 0.75, 1]
+    .map((ratio) => {
+      const y = padding.top + plotHeight * ratio;
+      return `<line x1="${padding.left}" x2="${width - padding.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(137, 180, 186, 0.36)"/>`;
+    })
+    .join("");
+  const xTicks = monthRanges
+    .map(([label, start]) => {
+      const tickX = x(start);
+      return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padding.top + plotHeight}" y2="${padding.top + plotHeight + 5}" stroke="rgba(137, 180, 186, 0.5)"/><text x="${tickX.toFixed(1)}" y="${height - 10}" text-anchor="middle" fill="#dffbff" font-size="10">${label}</text>`;
+    })
+    .join("");
+  const paths = visibleSpecs
+    .map(([key, title, color, unit]) => {
+      const scale = yForSeries(key);
+      const d = rows.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${scale.y(row[key]).toFixed(1)}`).join(" ");
+      return `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.7" vector-effect="non-scaling-stroke"><title>${escapeHtml(title)} ${escapeHtml(formatNumber(scale.rawMin))}-${escapeHtml(formatNumber(scale.rawMax))}${escapeHtml(unit)}</title></path>`;
+    })
+    .join("");
+  const legend = visibleSpecs
+    .map(([, title, color], index) => {
+      const legendX = padding.left + index * 132;
+      return `<g transform="translate(${legendX}, 16)"><line x1="0" x2="22" y1="0" y2="0" stroke="${color}" stroke-width="2"/><text x="28" y="4" fill="#dffbff" font-size="12">${escapeHtml(title)}</text></g>`;
+    })
+    .join("");
+  svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="12" fill="transparent"/><g>${grid}</g><line x1="${padding.left}" x2="${width - padding.right}" y1="${padding.top + plotHeight}" y2="${padding.top + plotHeight}" stroke="rgba(180, 226, 230, 0.7)"/><line x1="${padding.left}" x2="${padding.left}" y1="${padding.top}" y2="${padding.top + plotHeight}" stroke="rgba(180, 226, 230, 0.7)"/><g>${xTicks}</g>${paths}<g>${legend}</g>`;
+  state.timeSeriesImportChartMeta = { rows, visibleSpecs, width, height, padding, plotWidth, plotHeight, scalesByKey };
+}
+
+function startTimeSeriesImportValueDrag(event) {
+  if (!state.timeSeriesImportChartMeta || !Array.isArray(state.pendingTimeSeriesImport) || !state.pendingTimeSeriesImport.length) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  if (event.isPrimary === false) return;
+  const point = timeSeriesImportValueFromPointer(event);
+  if (!point) return;
+  const timeSeriesImportChart = document.getElementById("timeSeriesImportChart");
+  if (!timeSeriesImportChart) return;
+
+  event.preventDefault();
+  state.timeSeriesImportDrag = { pointerId: event.pointerId, curveKey: point.curveKey, edited: false, lastPoint: null };
+  timeSeriesImportChart.classList.add("editing");
+  timeSeriesImportChart.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", onTimeSeriesImportValueDragMove);
+  window.addEventListener("pointerup", endTimeSeriesImportValueDrag);
+  window.addEventListener("pointercancel", endTimeSeriesImportValueDrag);
+  applyTimeSeriesImportValueEdit(event);
+}
+
+function onTimeSeriesImportValueDragMove(event) {
+  if (!state.timeSeriesImportDrag) return;
+  if (event.pointerId !== undefined && state.timeSeriesImportDrag.pointerId !== undefined && event.pointerId !== state.timeSeriesImportDrag.pointerId) return;
+  event.preventDefault();
+  applyTimeSeriesImportValueEdit(event);
+}
+
+function endTimeSeriesImportValueDrag(event) {
+  if (!state.timeSeriesImportDrag) return;
+  if (event?.pointerId !== undefined && state.timeSeriesImportDrag.pointerId !== undefined && event.pointerId !== state.timeSeriesImportDrag.pointerId) return;
+  const timeSeriesImportChart = document.getElementById("timeSeriesImportChart");
+  if (timeSeriesImportChart) {
+    timeSeriesImportChart.classList.remove("editing");
+    timeSeriesImportChart.releasePointerCapture?.(state.timeSeriesImportDrag.pointerId);
+  }
+  state.timeSeriesImportDrag = null;
+  window.removeEventListener("pointermove", onTimeSeriesImportValueDragMove);
+  window.removeEventListener("pointerup", endTimeSeriesImportValueDrag);
+  window.removeEventListener("pointercancel", endTimeSeriesImportValueDrag);
+}
+
+function applyTimeSeriesImportValueEdit(event) {
+  if (!state.timeSeriesImportChartMeta || !Array.isArray(state.pendingTimeSeriesImport)) return false;
+  const point = timeSeriesImportValueFromPointer(event, state.timeSeriesImportDrag?.curveKey);
+  if (!point) return false;
+  const { curveKey } = point;
+  const points = interpolatedCurveEditPoints(state.timeSeriesImportDrag?.lastPoint, point);
+  let edited = false;
+  points.forEach(({ index: pointIndex, value }) => {
+    if (!state.pendingTimeSeriesImport[pointIndex]) return;
+    const editedValue = roundEditedCurveValue(clampEditedCurveValue(value, curveKey));
+    state.pendingTimeSeriesImport[pointIndex][curveKey] = editedValue;
+    updateTimeSeriesImportCell(pointIndex, curveKey, editedValue);
+    edited = true;
+  });
+  if (!edited) return false;
+  if (state.timeSeriesImportDrag) {
+    state.timeSeriesImportDrag.edited = true;
+    state.timeSeriesImportDrag.lastPoint = point;
+  }
+  renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  setTimeSeriesImportHint("导入曲线已调整，请确认后保存。", "ok");
+  return true;
+}
+
+function timeSeriesImportValueFromPointer(event, preferredCurveKey = "") {
+  const meta = state.timeSeriesImportChartMeta;
+  const svg = document.getElementById("timeSeriesImportChart");
+  const rows = Array.isArray(state.pendingTimeSeriesImport) ? state.pendingTimeSeriesImport : meta?.rows;
+  if (!meta || !svg || !Array.isArray(rows) || !rows.length) return null;
+  const rect = svg.getBoundingClientRect();
+  const localX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * meta.width;
+  const localY = ((event.clientY - rect.top) / Math.max(1, rect.height)) * meta.height;
+  const xRatio = Math.min(1, Math.max(0, (localX - meta.padding.left) / meta.plotWidth));
+  const index = Math.round(xRatio * Math.max(1, rows.length - 1));
+  const row = rows[index];
+  if (!row) return null;
+
+  let curveKey = preferredCurveKey;
+  if (!curveKey || !meta.scalesByKey.has(curveKey)) {
+    let nearest = null;
+    meta.visibleSpecs.forEach(([key]) => {
+      const scale = meta.scalesByKey.get(key);
+      if (!scale) return;
+      const distance = Math.abs(scale.y(row[key]) - localY);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { key, distance };
+      }
+    });
+    curveKey = nearest?.key || "";
+  }
+  const scale = curveKey ? meta.scalesByKey.get(curveKey) : null;
+  if (!scale) return null;
+  return { index, curveKey, value: scale.valueFromY(localY) };
+}
+
+function onTimeSeriesImportInput(event) {
+  const input = event.target;
+  const index = Number(input.dataset.timeSeriesImportIndex);
+  const key = input.dataset.timeSeriesImportKey;
+  if (!Array.isArray(state.pendingTimeSeriesImport) || !state.pendingTimeSeriesImport[index] || !key) return;
+  const value = coerceInput(input.value);
+  const nextValue = typeof value === "number" ? roundEditedCurveValue(clampEditedCurveValue(value, key)) : value;
+  state.pendingTimeSeriesImport[index][key] = nextValue;
+  if (input.value !== String(nextValue)) input.value = nextValue;
+  renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  setTimeSeriesImportHint("导入曲线已调整，请确认后保存。", "ok");
+}
+
+function updateTimeSeriesImportCell(index, key, value) {
+  const input = document.querySelector(`[data-time-series-import-index="${index}"][data-time-series-import-key="${key}"]`);
+  if (input) input.value = value;
+}
+
+function toggleTimeSeriesImportCurve(curveKey) {
+  if (!curveKey) return;
+  if (state.timeSeriesImportVisibleCurves.has(curveKey)) {
+    state.timeSeriesImportVisibleCurves.delete(curveKey);
+  } else {
+    state.timeSeriesImportVisibleCurves.add(curveKey);
+  }
+  syncTimeSeriesImportCurveToggles();
+  renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+}
+
+function syncTimeSeriesImportCurveToggles() {
+  document.querySelectorAll("[data-import-curve]").forEach((button) => {
+    const active = state.timeSeriesImportVisibleCurves.has(button.dataset.importCurve);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
 }
 
 function arrayBufferToBase64(buffer) {
@@ -933,10 +1236,14 @@ function openTimeSeriesImportModal() {
     return;
   }
   state.pendingTimeSeriesImport = null;
+  state.timeSeriesImportVisibleCurves = new Set(timeSeriesImportSeries.map(([key]) => key));
+  state.timeSeriesImportChartMeta = null;
+  state.timeSeriesImportDrag = null;
+  syncTimeSeriesImportCurveToggles();
   const input = document.getElementById("timeSeriesImportFile");
   if (input) input.value = "";
   renderTimeSeriesImportPreview([]);
-  setTimeSeriesImportHint("请选择包含风速、太阳辐射、室温、负荷的 Excel 或 CSV 文件。");
+  setTimeSeriesImportHint("请选择包含风速、太阳辐射、环境温度、负荷的 Excel 或 CSV 文件。");
   setTimeSeriesImportSummary("未选择文件");
   showModalInBody(document.getElementById("timeSeriesImportModal"));
 }
@@ -948,19 +1255,28 @@ function openLoadGenerator() {
   }
   prefillLoadGeneratorValues();
   state.originalLoadCurve = currentLoadCurveRows();
+  state.loadGeneratorSourceCurve = null;
+  state.loadGeneratorSourceName = "";
   state.pendingLoadCurve = null;
   showModalInBody(document.getElementById("loadGeneratorModal"));
   setLoadGeneratorHint("输入最大值、最小值、平均值，并选择生成模式。");
   renderLoadGeneratorPreview(state.originalLoadCurve, []);
+  loadLoadGeneratorModeSource(document.getElementById("loadGeneratorMode").value).catch((error) => {
+    setLoadGeneratorHint(error.message || String(error), "error");
+  });
 }
 
 function closeLoadGenerator() {
+  state.loadPreviewMeta = null;
+  state.loadPreviewDrag = null;
   hideModal(document.getElementById("loadGeneratorModal"));
 }
 
 function cancelLoadGenerator() {
   state.pendingLoadCurve = null;
   state.originalLoadCurve = null;
+  state.loadGeneratorSourceCurve = null;
+  state.loadGeneratorSourceName = "";
   closeLoadGenerator();
   setWeatherImportStatus("负荷生成已取消");
 }
@@ -983,10 +1299,19 @@ async function generateLoadCurve() {
   }
   const mode = document.getElementById("loadGeneratorMode").value;
   const { max, min, average } = currentLoadGeneratorTargets();
+  const sourceRows = loadGeneratorPreviewSourceRows();
+  if (mode === "file" && (!Array.isArray(state.loadGeneratorSourceCurve) || state.loadGeneratorSourceCurve.length !== 8760)) {
+    setLoadGeneratorHint("请先选择负荷文件", "error");
+    importLoadCurveFile();
+    return;
+  }
   setLoadGeneratorHint("正在生成负荷曲线...");
+  const requestBody = mode === "file"
+    ? { mode, max, min, average, source_load_curve: state.loadGeneratorSourceCurve }
+    : { mode, max, min, average };
   const result = await api("/api/planning/load-curve/generate", {
     method: "POST",
-    body: JSON.stringify({ mode, max, min, average }),
+    body: JSON.stringify(requestBody),
   }).catch((error) => {
     setLoadGeneratorHint(error.message || String(error), "error");
     setWeatherImportStatus(`负荷生成失败：${error.message || String(error)}`, "error");
@@ -994,7 +1319,7 @@ async function generateLoadCurve() {
   });
   if (!result) return;
   state.pendingLoadCurve = result.load_curve || [];
-  renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
+  renderLoadGeneratorPreview(sourceRows, state.pendingLoadCurve);
   setLoadGeneratorHint("负荷曲线已生成，请检查预览后点击确定。", "ok");
 }
 
@@ -1044,6 +1369,9 @@ function loadCurveRowsForTemplate() {
   if (Array.isArray(state.pendingLoadCurve) && state.pendingLoadCurve.length === 8760) {
     return state.pendingLoadCurve;
   }
+  if (Array.isArray(state.loadGeneratorSourceCurve) && state.loadGeneratorSourceCurve.length === 8760) {
+    return state.loadGeneratorSourceCurve;
+  }
   return currentLoadCurveRows();
 }
 
@@ -1051,8 +1379,49 @@ function currentLoadTemplateName() {
   const select = document.getElementById("loadGeneratorMode");
   const selected = select?.selectedOptions?.[0];
   const value = select?.value || "";
+  if (value === "file" && state.loadGeneratorSourceName) return state.loadGeneratorSourceName.replace(/\.[^.]+$/, "");
   if (value.startsWith("template:")) return value.slice("template:".length);
   return selected?.textContent?.trim() || "负荷模板";
+}
+
+function onLoadGeneratorModeChange(event) {
+  const mode = event.target.value;
+  state.pendingLoadCurve = null;
+  loadLoadGeneratorModeSource(mode).catch((error) => {
+    setLoadGeneratorHint(error.message || String(error), "error");
+  });
+}
+
+async function loadLoadGeneratorModeSource(mode) {
+  if (mode === "file") {
+    setLoadGeneratorHint("请选择负荷文件");
+    importLoadCurveFile();
+    return;
+  }
+  const modeAtStart = mode;
+  setLoadGeneratorHint("正在载入原始负荷曲线...");
+  let rows = [];
+  let sourceName = "";
+  if (mode.startsWith("template:")) {
+    const templateName = mode.slice("template:".length);
+    const template = state.loadCurveTemplates.find((item) => item.name === templateName);
+    rows = normalizeLoadCurveRows(template?.load_curve || []);
+    sourceName = templateName;
+  }
+  if (!rows.length) {
+    const result = await api("/api/planning/load-curve/generate", {
+      method: "POST",
+      body: JSON.stringify({ mode, min: 0, max: 1, average: 0.5 }),
+    });
+    if (document.getElementById("loadGeneratorMode").value !== modeAtStart) return;
+    rows = normalizeLoadCurveRows(result.load_curve || []);
+    sourceName = result.mode || mode;
+  }
+  state.loadGeneratorSourceCurve = rows;
+  state.loadGeneratorSourceName = sourceName;
+  state.pendingLoadCurve = null;
+  renderLoadGeneratorPreview(loadGeneratorPreviewSourceRows(), []);
+  setLoadGeneratorHint("原始负荷曲线已载入，请点击生成负荷曲线。", "ok");
 }
 
 function importLoadCurveFile() {
@@ -1060,9 +1429,9 @@ function importLoadCurveFile() {
     setLoadGeneratorHint("请先选择方案", "error");
     return;
   }
-  const input = document.getElementById("loadCurveImportFile");
-  input.value = "";
-  input.click();
+  const loadCurveImportFile = document.getElementById("loadCurveImportFile");
+  loadCurveImportFile.value = "";
+  loadCurveImportFile.click();
 }
 
 async function onLoadCurveImportFileChange(event) {
@@ -1070,23 +1439,43 @@ async function onLoadCurveImportFileChange(event) {
   if (!file) return;
   setLoadGeneratorHint(`正在导入负荷文件：${file.name}`);
   try {
-    const { max, min, average } = currentLoadGeneratorTargets();
     const content_base64 = await arrayBufferToBase64(await file.arrayBuffer());
     const result = await api("/api/planning/load-curve/import", {
       method: "POST",
-      body: JSON.stringify({ filename: file.name, content_base64, max, min, average }),
+      body: JSON.stringify({ filename: file.name, content_base64, raw: true }),
     });
-    state.pendingLoadCurve = result.load_curve || [];
-    renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
+    state.loadGeneratorSourceCurve = normalizeLoadCurveRows(result.load_curve || []);
+    state.loadGeneratorSourceName = file.name;
+    state.pendingLoadCurve = null;
+    renderLoadGeneratorPreview(loadGeneratorPreviewSourceRows(), []);
     const level = isTimeSeriesImportWarning(result) ? "warning" : "ok";
-    setLoadGeneratorHint(result.message || "负荷文件导入成功，请检查预览后点击确定。", level);
+    setLoadGeneratorHint(result.message || "负荷文件已导入为原始曲线，请点击生成负荷曲线。", level);
   } catch (error) {
+    state.loadGeneratorSourceCurve = null;
+    state.loadGeneratorSourceName = "";
     state.pendingLoadCurve = null;
     renderLoadGeneratorPreview(state.originalLoadCurve, []);
     setLoadGeneratorHint(`负荷文件导入失败：${error.message || String(error)}`, "error");
   } finally {
     event.target.value = "";
   }
+}
+
+function normalizeLoadCurveRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((row, index) => {
+      const load = Number(typeof row === "object" && row !== null ? row.load : row);
+      return Number.isFinite(load) ? { hour_index: index + 1, load } : null;
+    })
+    .filter(Boolean);
+}
+
+function loadGeneratorPreviewSourceRows() {
+  if (Array.isArray(state.loadGeneratorSourceCurve) && state.loadGeneratorSourceCurve.length) {
+    return state.loadGeneratorSourceCurve;
+  }
+  return state.originalLoadCurve || [];
 }
 
 function currentLoadGeneratorTargets() {
@@ -1110,6 +1499,8 @@ async function confirmGeneratedLoadCurve() {
   applyGeneratedLoadCurve(state.pendingLoadCurve);
   state.pendingLoadCurve = null;
   state.originalLoadCurve = null;
+  state.loadGeneratorSourceCurve = null;
+  state.loadGeneratorSourceName = "";
   closeLoadGenerator();
   setWeatherImportStatus("负荷曲线已确认，请保存方案", "ok");
 }
@@ -1164,6 +1555,7 @@ function renderLoadGeneratorPreview(originalRows, generatedRows) {
   const allValues = [...original, ...generated];
   if (!allValues.length) {
     svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">生成后显示负荷曲线预览</text>`;
+    state.loadPreviewMeta = null;
     return;
   }
   const padding = { left: 46, right: 18, top: 18, bottom: 30 };
@@ -1172,6 +1564,7 @@ function renderLoadGeneratorPreview(originalRows, generatedRows) {
   const span = max - min || 1;
   const plotWidth = width - padding.left - padding.right;
   const plotHeight = height - padding.top - padding.bottom;
+  const editable = generated.length > 0;
   const linePoints = (values) => values.map((value, index) => {
     const x = padding.left + (index / Math.max(1, values.length - 1)) * plotWidth;
     const y = padding.top + (1 - (value - min) / span) * plotHeight;
@@ -1194,6 +1587,80 @@ function renderLoadGeneratorPreview(originalRows, generatedRows) {
     <text x="${padding.left}" y="${padding.top - 5}" fill="#dffbff" font-size="12">最大 ${roundUiNumber(max)}</text>
     <text x="${padding.left}" y="${height - 8}" fill="#dffbff" font-size="12">最小 ${roundUiNumber(min)} / 平均 ${roundUiNumber(avg)}</text>
   `;
+  state.loadPreviewMeta = { editable, width, height, padding, plotWidth, plotHeight, minValue: min, valueSpan: span, rows: generatedRows };
+}
+
+function startLoadPreviewValueDrag(event) {
+  if (!state.loadPreviewMeta?.editable || !Array.isArray(state.pendingLoadCurve) || !state.pendingLoadCurve.length) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  if (event.isPrimary === false) return;
+  const loadGeneratorPreview = document.getElementById("loadGeneratorPreview");
+  if (!loadGeneratorPreview) return;
+
+  event.preventDefault();
+  state.loadPreviewDrag = { pointerId: event.pointerId, edited: false, lastPoint: null };
+  loadGeneratorPreview.classList.add("editing");
+  loadGeneratorPreview.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", onLoadPreviewValueDragMove);
+  window.addEventListener("pointerup", endLoadPreviewValueDrag);
+  window.addEventListener("pointercancel", endLoadPreviewValueDrag);
+  applyLoadPreviewValueEdit(event);
+}
+
+function onLoadPreviewValueDragMove(event) {
+  if (!state.loadPreviewDrag) return;
+  if (event.pointerId !== undefined && state.loadPreviewDrag.pointerId !== undefined && event.pointerId !== state.loadPreviewDrag.pointerId) return;
+  event.preventDefault();
+  applyLoadPreviewValueEdit(event);
+}
+
+function endLoadPreviewValueDrag(event) {
+  if (!state.loadPreviewDrag) return;
+  if (event?.pointerId !== undefined && state.loadPreviewDrag.pointerId !== undefined && event.pointerId !== state.loadPreviewDrag.pointerId) return;
+  const loadGeneratorPreview = document.getElementById("loadGeneratorPreview");
+  if (loadGeneratorPreview) {
+    loadGeneratorPreview.classList.remove("editing");
+    loadGeneratorPreview.releasePointerCapture?.(state.loadPreviewDrag.pointerId);
+  }
+  state.loadPreviewDrag = null;
+  window.removeEventListener("pointermove", onLoadPreviewValueDragMove);
+  window.removeEventListener("pointerup", endLoadPreviewValueDrag);
+  window.removeEventListener("pointercancel", endLoadPreviewValueDrag);
+}
+
+function applyLoadPreviewValueEdit(event) {
+  if (!state.loadPreviewMeta?.editable || !Array.isArray(state.pendingLoadCurve)) return false;
+  const point = loadPreviewValueFromPointer(event);
+  if (!point) return false;
+  const points = interpolatedCurveEditPoints(state.loadPreviewDrag?.lastPoint, point);
+  let edited = false;
+  points.forEach(({ index: pointIndex, value }) => {
+    if (!state.pendingLoadCurve[pointIndex]) return;
+    state.pendingLoadCurve[pointIndex].load = roundEditedCurveValue(Math.max(0, value));
+    edited = true;
+  });
+  if (!edited) return false;
+  if (state.loadPreviewDrag) {
+    state.loadPreviewDrag.edited = true;
+    state.loadPreviewDrag.lastPoint = point;
+  }
+  renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
+  setLoadGeneratorHint("负荷曲线已调整，请检查预览后点击确定。", "ok");
+  return true;
+}
+
+function loadPreviewValueFromPointer(event) {
+  const meta = state.loadPreviewMeta;
+  const svg = document.getElementById("loadGeneratorPreview");
+  if (!meta || !svg) return null;
+  const rect = svg.getBoundingClientRect();
+  const localX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * meta.width;
+  const localY = ((event.clientY - rect.top) / Math.max(1, rect.height)) * meta.height;
+  const xRatio = Math.min(1, Math.max(0, (localX - meta.padding.left) / meta.plotWidth));
+  const index = Math.round(xRatio * Math.max(1, state.pendingLoadCurve.length - 1));
+  const yRatio = (meta.padding.top + meta.plotHeight - localY) / meta.plotHeight;
+  const value = meta.minValue + yRatio * meta.valueSpan;
+  return { index, value };
 }
 
 function roundUiNumber(value) {
@@ -1842,6 +2309,125 @@ function onChartMouseMove(event) {
   positionFloatingTipInRect(tip, rect, event);
 }
 
+function startChartValueDrag(event) {
+  if (!state.chartMeta || !state.payload || !isTimeSeriesLoaded()) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  if (event.isPrimary === false) return;
+  const timeChart = document.getElementById("timeChart");
+  if (!timeChart) return;
+
+  event.preventDefault();
+  state.chartDrag = { pointerId: event.pointerId, edited: false, lastPoint: null };
+  timeChart.classList.add("editing");
+  timeChart.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", onChartValueDragMove);
+  window.addEventListener("pointerup", endChartValueDrag);
+  window.addEventListener("pointercancel", endChartValueDrag);
+  applyChartValueEdit(event);
+}
+
+function onChartValueDragMove(event) {
+  if (!state.chartDrag) return;
+  if (event.pointerId !== undefined && state.chartDrag.pointerId !== undefined && event.pointerId !== state.chartDrag.pointerId) return;
+  event.preventDefault();
+  applyChartValueEdit(event);
+}
+
+function endChartValueDrag(event) {
+  if (!state.chartDrag) return;
+  if (event?.pointerId !== undefined && state.chartDrag.pointerId !== undefined && event.pointerId !== state.chartDrag.pointerId) return;
+  const timeChart = document.getElementById("timeChart");
+  const edited = state.chartDrag.edited;
+  if (timeChart) {
+    timeChart.classList.remove("editing");
+    timeChart.releasePointerCapture?.(state.chartDrag.pointerId);
+  }
+  state.chartDrag = null;
+  window.removeEventListener("pointermove", onChartValueDragMove);
+  window.removeEventListener("pointerup", endChartValueDrag);
+  window.removeEventListener("pointercancel", endChartValueDrag);
+  if (edited) {
+    renderTimeTable();
+    renderLimitSummary();
+    renderSummary();
+  }
+}
+
+function applyChartValueEdit(event) {
+  if (!state.chartMeta || !state.payload || !isTimeSeriesLoaded()) return false;
+  const meta = state.chartMeta;
+  const point = chartValueFromPointer(event);
+  if (!point) return false;
+  const points = interpolatedCurveEditPoints(state.chartDrag?.lastPoint, point);
+  let edited = false;
+  points.forEach(({ index: pointIndex, value }) => {
+    const row = state.payload.time_series[pointIndex];
+    if (!row) return;
+    const editedValue = roundEditedCurveValue(clampEditedCurveValue(value, meta.curveKey));
+    state.payload.time_series[pointIndex][meta.curveKey] = editedValue;
+    updateVisibleTimeCell(pointIndex, meta.curveKey, editedValue);
+    edited = true;
+  });
+  if (!edited) return false;
+  setTimeSeriesLoaded(true);
+  if (state.chartDrag) {
+    state.chartDrag.edited = true;
+    state.chartDrag.lastPoint = point;
+  }
+  renderChart();
+  onChartMouseMove(event);
+  setWeatherImportStatus("曲线已修改，请保存方案", "ok");
+  return true;
+}
+
+function chartValueFromPointer(event) {
+  const meta = state.chartMeta;
+  const svg = document.getElementById("timeChart");
+  if (!meta || !svg) return null;
+  const rect = svg.getBoundingClientRect();
+  const localX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * meta.width;
+  const localY = ((event.clientY - rect.top) / Math.max(1, rect.height)) * meta.height;
+  const xRatio = Math.min(1, Math.max(0, (localX - meta.padLeft) / meta.plotWidth));
+  const index = Math.round(xRatio * Math.max(1, meta.rows.length - 1));
+  const yRatio = (meta.padTop + meta.plotHeight - localY) / meta.plotHeight;
+  const value = meta.minValue + yRatio * meta.valueSpan;
+  return { index, value };
+}
+
+function clampEditedCurveValue(value, curveKey) {
+  if (!Number.isFinite(value)) return 0;
+  return curveKey === "temperature" ? value : Math.max(0, value);
+}
+
+function roundEditedCurveValue(value) {
+  return Math.round(value * 1000) / 1000;
+}
+
+function interpolatedCurveEditPoints(previousPoint, currentPoint) {
+  const currentIndex = Math.round(Number(currentPoint?.index));
+  const currentValue = Number(currentPoint?.value);
+  if (!Number.isFinite(currentIndex) || !Number.isFinite(currentValue)) return [];
+  const previousIndex = Math.round(Number(previousPoint?.index));
+  const previousValue = Number(previousPoint?.value);
+  if (!Number.isFinite(previousIndex) || !Number.isFinite(previousValue) || previousIndex === currentIndex) {
+    return [{ index: currentIndex, value: currentValue }];
+  }
+  const startIndex = Math.min(previousIndex, currentIndex);
+  const endIndex = Math.max(previousIndex, currentIndex);
+  const indexSpan = currentIndex - previousIndex;
+  const valueSpan = currentValue - previousValue;
+  return Array.from({ length: endIndex - startIndex + 1 }, (_, offset) => {
+    const index = startIndex + offset;
+    const ratio = (index - previousIndex) / indexSpan;
+    return { index, value: previousValue + valueSpan * ratio };
+  });
+}
+
+function updateVisibleTimeCell(index, key, value) {
+  const input = document.querySelector(`[data-time-index="${index}"][data-key="${key}"]`);
+  if (input) input.value = value;
+}
+
 function positionFloatingTipInRect(tip, bounds, event) {
   const margin = 8;
   const tipWidth = tip.offsetWidth || 180;
@@ -1898,7 +2484,7 @@ function renderTimeTable() {
   const pageRows = rows.slice(start, end);
   document.getElementById("pageInfo").textContent = `${label} 第 ${start + 1}-${Math.min(end, rows.length)} 小时`;
   const fields = ["datetime", "wind_speed", "solar_irradiance", "temperature", "load"];
-  container.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th><th>风速</th><th>太阳辐照</th><th>温度</th><th>负荷</th></tr></thead><tbody>${pageRows
+  container.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th><th>风速</th><th>太阳辐照</th><th>环境温度</th><th>负荷</th></tr></thead><tbody>${pageRows
     .map((row, offset) => {
       const index = start + offset;
       return `<tr><td>${row.hour_index}</td>${fields
@@ -2218,7 +2804,7 @@ function renderSchemeSummary() {
   if (chartsHost) {
     chartsHost.innerHTML = isTimeSeriesLoaded()
       ? summarySeries.map(([key, title, color, unit]) => renderHistogramPanel(rows, key, title, color, unit)).join("")
-      : renderTimeSeriesPlaceholder("加载后显示风速、太阳辐照、温度、负荷直方图。");
+      : renderTimeSeriesPlaceholder("加载后显示风速、太阳辐照、环境温度、负荷直方图。");
   }
 
   if (quantityHost) {

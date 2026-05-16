@@ -210,6 +210,60 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("8760-point load curve", i18n_script)
         self.assertIn("Save Template", i18n_script)
         self.assertIn("Template name already exists", i18n_script)
+        for translated_label in (
+            "Solar Irradiance",
+            "Ambient Temperature",
+            "Load",
+            "Capacity (kW)",
+            "Capacity (kWh)",
+            "Power Upper Limit (kW)",
+            "Power Lower Limit (kW)",
+            "Fuel Consumption Rate (kg/kWh)",
+            "Cut-in Wind Speed (m/s)",
+            "Rated Wind Speed (m/s)",
+            "Cut-out Wind Speed (m/s)",
+            "Quantity Lower Bound (units)",
+            "Quantity Upper Bound (units)",
+            "Design Life (years)",
+            "Self-discharge Rate (0-1%/day)",
+            "Hydrogen-to-Electric Efficiency (kWh/Nm3)",
+            "Electric-to-Hydrogen Efficiency (Nm3/kWh)",
+            "Statistical Histograms",
+            "Candidate Device List",
+            "Validation and Summary",
+            "Time Series Rows",
+            "Device Entries",
+            "No device entries",
+            "Name",
+            "Device Type",
+            "Cost Composition",
+            "Annual Diesel Cost",
+            "Annualized Construction Cost",
+            "Diesel Generation",
+            "Energy Composition",
+            "Curve Preview",
+            "Imported Curve Preview",
+            "Imported Curve Display Toggle",
+            "Resize imported curve preview height",
+        ):
+            self.assertIn(translated_label, i18n_script)
+        for exact_mapping in (
+            '"名称": "Name"',
+            '"设备类型": "Device Type"',
+            '"成本构成": "Cost Composition"',
+            '"年柴油成本": "Annual Diesel Cost"',
+            '"年均建设成本": "Annualized Construction Cost"',
+            '"柴发电量": "Diesel Generation"',
+            '"绿电电量": "Green Energy"',
+            '"电量构成": "Energy Composition"',
+        ):
+            self.assertIn(exact_mapping, i18n_script)
+        for mixed_label in (
+            '"切入风速(m/s)"',
+            '"额定风速(m/s)"',
+            '"切出风速(m/s)"',
+        ):
+            self.assertIn(mixed_label, i18n_script)
         self.assertIn("MutationObserver", i18n_script)
         self.assertIn("patchDialogs", i18n_script)
         self.assertIn("target.parentNode.insertBefore(wrap, target)", i18n_script)
@@ -2435,6 +2489,56 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertAlmostEqual(payload["statistics"]["min"], 10, places=3)
         self.assertAlmostEqual(payload["statistics"]["max"], 100, places=3)
 
+    def test_planning_load_curve_import_can_return_raw_source_and_generate_from_source(self):
+        rows = ["时间,用电功率(kW)", "H0001,10", "H0002,20", "H0003,30"]
+        content = "\n".join(rows).encode("utf-8")
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/load-curve/import",
+            "POST",
+            json.dumps(
+                {
+                    "filename": "raw_load.csv",
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "raw": True,
+                }
+            ).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        raw_values = [row["load"] for row in payload["load_curve"]]
+        self.assertEqual(payload["load_curve_count"], 8760)
+        self.assertEqual(raw_values[0], 10)
+        self.assertEqual(raw_values[-1], 30)
+        self.assertAlmostEqual(min(raw_values), 10, places=3)
+        self.assertAlmostEqual(max(raw_values), 30, places=3)
+        self.assertEqual(payload["statistics"]["min"], 10)
+        self.assertEqual(payload["statistics"]["max"], 30)
+        self.assertIn("原始曲线", payload["message"])
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/load-curve/generate",
+            "POST",
+            json.dumps(
+                {
+                    "mode": "file",
+                    "source_load_curve": payload["load_curve"],
+                    "max": 180,
+                    "min": 40,
+                    "average": 95,
+                }
+            ).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        generated = json.loads(body.decode("utf-8"))
+        values = [row["load"] for row in generated["load_curve"]]
+        self.assertEqual(generated["mode"], "file")
+        self.assertAlmostEqual(min(values), 40, places=3)
+        self.assertAlmostEqual(max(values), 180, places=3)
+        self.assertAlmostEqual(sum(values) / len(values), 95, places=3)
+
     def test_planning_load_curve_templates_save_conflict_overwrite_and_generate(self):
         template_path = WEB_ROOT / "tests" / "tmp_load_curve_templates.csv"
         if template_path.exists():
@@ -3975,7 +4079,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("capacityValue", script)
         self.assertIn("calculateSeriesStats", script)
         self.assertIn("buildHistogram", script)
-        for name in ("风速", "太阳辐照", "温度", "负荷", "最大值", "最小值", "平均值", "数量下限(台)", "数量上限(台)"):
+        for name in ("风速", "太阳辐照", "环境温度", "负荷", "最大值", "最小值", "平均值", "数量下限(台)", "数量上限(台)"):
             self.assertIn(name, script)
         self.assertNotIn("formatFixed2", script)
         self.assertIn("formatInteger", script)
@@ -4087,7 +4191,7 @@ class PowerPlanServerTest(unittest.TestCase):
         for curve_key, label in (
             ("wind_speed", "风速"),
             ("solar_irradiance", "太阳辐照"),
-            ("temperature", "温度"),
+            ("temperature", "环境温度"),
             ("load", "负荷"),
         ):
             self.assertIn(f'<button type="button" data-curve="{curve_key}"', html)
@@ -4100,7 +4204,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('aria-pressed="true"', html)
         self.assertLess(html.index('class="weather-import-bar"'), html.index('class="curve-switch-row"'))
         self.assertIn("temperature", script)
-        self.assertIn("温度", script)
+        self.assertIn("环境温度", script)
 
     def test_planning_time_series_page_can_fetch_geocoded_weather_history(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
@@ -4114,6 +4218,8 @@ class PowerPlanServerTest(unittest.TestCase):
             "timeSeriesImportTitle",
             "openTimeSeriesImportFile",
             "timeSeriesImportHint",
+            "timeSeriesImportChart",
+            "timeSeriesImportResizeHandle",
             "timeSeriesImportPreview",
             "timeSeriesImportSummary",
             "confirmTimeSeriesImport",
@@ -4125,7 +4231,6 @@ class PowerPlanServerTest(unittest.TestCase):
             "loadGeneratorMax",
             "loadGeneratorMin",
             "loadGeneratorAverage",
-            "importLoadCurveFile",
             "loadCurveImportFile",
             "generateLoadCurve",
             "saveLoadTemplate",
@@ -4157,11 +4262,19 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(">坐标选择<", weather_bar)
         self.assertLess(weather_bar.index(">导入曲线<"), weather_bar.index(">负荷生成<"))
         self.assertLess(weather_bar.index(">负荷生成<"), weather_bar.index(">坐标选择<"))
-        for label in ("打开文件", "风速", "太阳辐射", "室温", "负荷", "确定", "取消"):
+        for label in ("打开文件", "曲线预览", "风速", "太阳辐射", "环境温度", "负荷", "确定", "取消"):
             self.assertIn(label, import_modal)
+        self.assertLess(import_modal.index('id="timeSeriesImportChart"'), import_modal.index('id="timeSeriesImportResizeHandle"'))
+        self.assertLess(import_modal.index('id="timeSeriesImportResizeHandle"'), import_modal.index('id="timeSeriesImportPreview"'))
+        for curve_key in ("wind_speed", "solar_irradiance", "temperature", "load"):
+            self.assertIn(f'data-import-curve="{curve_key}"', import_modal)
         for label in ("随机曲线", "负荷最大值", "负荷最小值", "负荷平均值", "文件导入", "保存模板", "确定", "取消"):
             self.assertIn(label, html)
         load_generator_modal = html.split('<div id="loadGeneratorModal"', 1)[1].split('<div id="mapPickerModal"', 1)[0]
+        self.assertIn('<option value="file">文件导入</option>', load_generator_modal)
+        self.assertIn('id="loadCurveImportFile"', load_generator_modal)
+        self.assertNotIn('id="importLoadCurveFile"', load_generator_modal)
+        self.assertNotIn(">文件导入</button>", load_generator_modal)
         for label in ("模式1", "模式2", "模式3"):
             self.assertNotIn(label, load_generator_modal)
         for label in ("高德地图", "OpenStreetMap"):
@@ -4197,6 +4310,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("openTimeSeriesImportFile", script)
         self.assertIn("onTimeSeriesImportFileChange", script)
         self.assertIn("renderTimeSeriesImportPreview", script)
+        self.assertIn("renderTimeSeriesImportChart", script)
+        self.assertIn("bindTimeSeriesImportResizeHandle", script)
+        self.assertIn("toggleTimeSeriesImportCurve", script)
+        self.assertIn("timeSeriesImportVisibleCurves", script)
+        self.assertIn("timeSeriesImportManualChartHeight", script)
+        self.assertIn("timeSeriesImportSeries", script)
         self.assertIn("confirmImportedTimeSeries", script)
         self.assertIn("cancelTimeSeriesImport", script)
         self.assertIn("pendingTimeSeriesImport", script)
@@ -4208,8 +4327,20 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("#loadGeneratorHint.warning", css)
         self.assertIn("openLoadGenerator", script)
         self.assertIn("generateLoadCurve", script)
+        self.assertIn("onLoadGeneratorModeChange", script)
+        self.assertIn("loadLoadGeneratorModeSource", script)
+        self.assertIn("loadGeneratorSourceCurve", script)
+        self.assertIn("loadGeneratorSourceName", script)
+        self.assertIn("loadGeneratorPreviewSourceRows", script)
         self.assertIn("importLoadCurveFile", script)
         self.assertIn("onLoadCurveImportFileChange", script)
+        self.assertIn('loadCurveImportFile.click()', script)
+        self.assertIn('if (mode === "file")', script)
+        self.assertIn("source_load_curve", script)
+        self.assertIn("raw: true", script)
+        self.assertIn("负荷文件已导入为原始曲线，请点击生成负荷曲线。", script)
+        self.assertIn("原始负荷曲线已载入，请点击生成负荷曲线。", script)
+        self.assertNotIn('document.getElementById("importLoadCurveFile").addEventListener', script)
         self.assertIn("loadLoadCurveTemplates", script)
         self.assertIn("saveLoadTemplate", script)
         self.assertIn("saveLoadTemplateRequest(name, rows, true)", script)
@@ -4267,6 +4398,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".weather-import-bar", css)
         self.assertIn(".time-series-import-dialog", css)
         self.assertIn(".time-series-import-toolbar", css)
+        self.assertIn(".time-series-import-chart-panel", css)
+        self.assertIn(".time-series-import-chart", css)
+        self.assertIn(".time-series-import-resize-handle", css)
+        self.assertIn(".time-series-import-curve-toggle", css)
         self.assertIn(".time-series-import-preview", css)
         self.assertIn(".map-provider-tabs", css)
         self.assertIn(".map-provider-tab", css)
@@ -4351,6 +4486,89 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("position: absolute", css)
         self.assertIn("z-index: 40", css)
         self.assertIn("white-space: nowrap", css)
+
+    def test_planning_time_series_chart_supports_drag_value_editing(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn("chartDrag", script)
+        self.assertIn('timeChart.addEventListener("pointerdown", startChartValueDrag)', script)
+        self.assertIn('window.addEventListener("pointermove", onChartValueDragMove)', script)
+        self.assertIn("function startChartValueDrag", script)
+        self.assertIn("function onChartValueDragMove", script)
+        self.assertIn("function endChartValueDrag", script)
+        self.assertIn("function applyChartValueEdit", script)
+        self.assertIn("function chartValueFromPointer", script)
+        self.assertIn("function interpolatedCurveEditPoints", script)
+        self.assertIn("interpolatedCurveEditPoints(state.chartDrag?.lastPoint, point)", script)
+        self.assertIn("state.chartDrag.lastPoint = point", script)
+        self.assertIn("setPointerCapture", script)
+        self.assertIn("state.payload.time_series[pointIndex][meta.curveKey]", script)
+        self.assertIn('setWeatherImportStatus("曲线已修改，请保存方案", "ok")', script)
+        self.assertIn("renderChart();", script)
+        self.assertIn("renderTimeTable();", script)
+        self.assertIn("renderLimitSummary();", script)
+        self.assertIn("renderSummary();", script)
+        self.assertIn("cursor: crosshair", css)
+        self.assertIn("touch-action: none", css)
+        self.assertIn(".time-chart.editing", css)
+        self.assertIn("Curve updated. Please save the scenario", i18n_script)
+
+    def test_planning_load_generator_preview_supports_drag_value_editing(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn("loadPreviewMeta", script)
+        self.assertIn("loadPreviewDrag", script)
+        self.assertIn('loadGeneratorPreview.addEventListener("pointerdown", startLoadPreviewValueDrag)', script)
+        self.assertIn('window.addEventListener("pointermove", onLoadPreviewValueDragMove)', script)
+        self.assertIn("function startLoadPreviewValueDrag", script)
+        self.assertIn("function onLoadPreviewValueDragMove", script)
+        self.assertIn("function endLoadPreviewValueDrag", script)
+        self.assertIn("function applyLoadPreviewValueEdit", script)
+        self.assertIn("function loadPreviewValueFromPointer", script)
+        self.assertIn("interpolatedCurveEditPoints(state.loadPreviewDrag?.lastPoint, point)", script)
+        self.assertIn("state.loadPreviewDrag.lastPoint = point", script)
+        self.assertIn("state.pendingLoadCurve[pointIndex].load", script)
+        self.assertIn('setLoadGeneratorHint("负荷曲线已调整，请检查预览后点击确定。", "ok")', script)
+        self.assertIn("loadGeneratorPreview.classList.add(\"editing\")", script)
+        self.assertIn(".load-generator-preview.editing", css)
+        self.assertIn("Load curve adjusted. Please review the preview and confirm.", i18n_script)
+
+    def test_planning_time_series_import_preview_supports_chart_and_table_value_editing(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
+
+        self.assertIn("timeSeriesImportChartMeta", script)
+        self.assertIn("timeSeriesImportDrag", script)
+        self.assertIn('timeSeriesImportChart.addEventListener("pointerdown", startTimeSeriesImportValueDrag)', script)
+        self.assertIn('window.addEventListener("pointermove", onTimeSeriesImportValueDragMove)', script)
+        self.assertIn("function startTimeSeriesImportValueDrag", script)
+        self.assertIn("function onTimeSeriesImportValueDragMove", script)
+        self.assertIn("function endTimeSeriesImportValueDrag", script)
+        self.assertIn("function applyTimeSeriesImportValueEdit", script)
+        self.assertIn("function timeSeriesImportValueFromPointer", script)
+        self.assertIn("interpolatedCurveEditPoints(state.timeSeriesImportDrag?.lastPoint, point)", script)
+        self.assertIn("state.timeSeriesImportDrag.lastPoint = point", script)
+        self.assertIn("function onTimeSeriesImportInput", script)
+        self.assertIn("function updateTimeSeriesImportCell", script)
+        self.assertIn("data-time-series-import-index", script)
+        self.assertIn("data-time-series-import-key", script)
+        self.assertIn('type="number"', script)
+        self.assertIn('step="any"', script)
+        self.assertIn('inputmode="decimal"', script)
+        self.assertIn("state.pendingTimeSeriesImport[pointIndex][curveKey]", script)
+        self.assertIn("state.pendingTimeSeriesImport[index][key]", script)
+        self.assertIn("renderTimeSeriesImportChart(state.pendingTimeSeriesImport || [])", script)
+        self.assertIn('setTimeSeriesImportHint("导入曲线已调整，请确认后保存。", "ok")', script)
+        self.assertIn("timeSeriesImportChart.classList.add(\"editing\")", script)
+        self.assertIn("timeSeriesImportChartMeta = null", script)
+        self.assertIn("scalesByKey", script)
+        self.assertIn(".time-series-import-chart.editing", css)
+        self.assertIn("Imported curves adjusted. Please confirm to save.", i18n_script)
 
     def test_planning_device_fields_follow_latest_parameter_names(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")

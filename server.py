@@ -2965,7 +2965,7 @@ def normalize_imported_time_series(headers: list[str], raw_rows: list[dict[str, 
     return {"time_series": imported_rows, "time_series_count": len(imported_rows), "message": message}
 
 
-def import_load_curve_file(filename: str, content: bytes, minimum: object, maximum: object, average: object) -> dict:
+def import_load_curve_file(filename: str, content: bytes, minimum: object, maximum: object, average: object, raw: object = False) -> dict:
     suffix = Path(filename or "").suffix.lower()
     if suffix == ".csv":
         headers, rows = read_time_series_csv(content)
@@ -2973,7 +2973,7 @@ def import_load_curve_file(filename: str, content: bytes, minimum: object, maxim
         headers, rows = read_time_series_xlsx(content)
     else:
         raise ValueError("导入文件仅支持 .csv 或 .xlsx 格式")
-    return normalize_imported_load_curve(headers, rows, filename, minimum, maximum, average)
+    return normalize_imported_load_curve(headers, rows, filename, minimum, maximum, average, raw)
 
 
 def normalize_imported_load_curve(
@@ -2983,15 +2983,19 @@ def normalize_imported_load_curve(
     minimum: object,
     maximum: object,
     average: object,
+    raw: object = False,
 ) -> dict:
     if not raw_rows:
         raise ValueError("导入失败，文件没有可用数据行")
-    min_value, max_value, avg_value = validate_load_curve_targets(minimum, maximum, average)
     column_map = match_load_curve_import_columns(headers)
     values, repaired_numeric_count, missing_count, duplicate_count = normalized_imported_load_values(raw_rows, column_map)
-    scaled_values = scale_load_values_to_targets(values, min_value, max_value, avg_value)
+    if truthy_json_value(raw):
+        scaled_values = [round_load_value(float(value)) for value in values]
+    else:
+        min_value, max_value, avg_value = validate_load_curve_targets(minimum, maximum, average)
+        scaled_values = scale_load_values_to_targets(values, min_value, max_value, avg_value)
     rows = [{"hour_index": index + 1, "load": value} for index, value in enumerate(scaled_values)]
-    message = f"已从{filename}导入8760点负荷曲线"
+    message = f"已从{filename}导入8760点负荷{'原始' if truthy_json_value(raw) else ''}曲线"
     if len(raw_rows) != TIME_SERIES_IMPORT_ROW_COUNT:
         message += f"，文件共有{len(raw_rows)}行，已自适应扩展到8760点"
     if missing_count:
@@ -3349,13 +3353,13 @@ def repair_imported_numeric_values(parsed_by_hour: dict[int, dict]) -> int:
     return repaired_count
 
 
-def generate_load_curve(mode: str, minimum: object, maximum: object, average: object) -> dict:
+def generate_load_curve(mode: str, minimum: object, maximum: object, average: object, source_load_curve: object = None) -> dict:
     mode_key = str(mode or "random").strip() or "random"
     min_value, max_value, avg_value = validate_load_curve_targets(minimum, maximum, average)
     if max_value == min_value:
         values = [round_load_value(min_value) for _ in range(TIME_SERIES_IMPORT_ROW_COUNT)]
     else:
-        shape = normalized_load_shape(mode_key)
+        shape = normalized_source_load_shape(source_load_curve) if mode_key == "file" else normalized_load_shape(mode_key)
         adjusted_shape = adjust_shape_mean(shape, (avg_value - min_value) / (max_value - min_value))
         values = [round_load_value(min_value + (max_value - min_value) * value) for value in adjusted_shape]
     rows = [{"hour_index": index + 1, "load": value} for index, value in enumerate(values)]
@@ -3473,9 +3477,11 @@ def load_curve_template_summaries(templates: list[dict]) -> list[dict]:
 
 
 def load_curve_template_summary(template: dict) -> dict:
+    values = template.get("load_curve") or []
     return {
         "name": template.get("name", ""),
         "load_curve_count": int(template.get("load_curve_count") or TIME_SERIES_IMPORT_ROW_COUNT),
+        "load_curve": [{"hour_index": index + 1, "load": round_load_value(value)} for index, value in enumerate(values)],
         "updated_at": template.get("updated_at", ""),
     }
 
@@ -3534,13 +3540,23 @@ def normalized_load_shape(mode: str) -> list[float]:
     elif mode in {"pattern1", "pattern2", "pattern3"}:
         raw = standard_load_shape(mode)
     else:
-        raise ValueError("负荷生成模式必须为随机曲线、模式1、模式2、模式3或已保存模板")
+        raise ValueError("负荷生成模式必须为随机曲线、文件导入、模式1、模式2、模式3或已保存模板")
     minimum = min(raw)
     maximum = max(raw)
     span = maximum - minimum
     if span <= 0:
         return [0.5 for _ in raw]
     return [(value - minimum) / span for value in raw]
+
+
+def normalized_source_load_shape(source_load_curve: object) -> list[float]:
+    values = normalize_load_curve_template_values(source_load_curve)
+    minimum = min(float(value) for value in values)
+    maximum = max(float(value) for value in values)
+    span = maximum - minimum
+    if span <= 0:
+        raise ValueError("文件导入原始曲线没有变化，无法按指定最大值和最小值缩放")
+    return [(float(value) - minimum) / span for value in values]
 
 
 def deterministic_random_shape() -> list[float]:
@@ -3642,6 +3658,7 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                     payload.get("min"),
                     payload.get("max"),
                     payload.get("average"),
+                    payload.get("source_load_curve"),
                 )
             )
         if path == "/api/planning/load-curve/import" and method == "POST":
@@ -3659,6 +3676,7 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                     payload.get("min"),
                     payload.get("max"),
                     payload.get("average"),
+                    payload.get("raw"),
                 )
             )
         if path == "/api/planning/load-curve/templates" and method == "GET":

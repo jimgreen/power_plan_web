@@ -70,7 +70,7 @@
               <div class="curve-buttons">
                 <button type="button" data-curve="wind_speed" class="curve-button active" aria-pressed="true">风速</button>
                 <button type="button" data-curve="solar_irradiance" class="curve-button" aria-pressed="false">太阳辐照</button>
-                <button type="button" data-curve="temperature" class="curve-button" aria-pressed="false">温度</button>
+                <button type="button" data-curve="temperature" class="curve-button" aria-pressed="false">环境温度</button>
                 <button type="button" data-curve="load" class="curve-button" aria-pressed="false">负荷</button>
               </div>
             </div>
@@ -87,8 +87,21 @@
               <div class="time-series-import-toolbar">
                 <button id="openTimeSeriesImportFile" type="button">打开文件</button>
                 <input id="timeSeriesImportFile" type="file" accept=".csv,.xlsx" hidden>
-                <span id="timeSeriesImportHint" role="status" aria-live="polite">请选择包含风速、太阳辐射、室温、负荷的 Excel 或 CSV 文件。</span>
+                <span id="timeSeriesImportHint" role="status" aria-live="polite">请选择包含风速、太阳辐射、环境温度、负荷的 Excel 或 CSV 文件。</span>
               </div>
+              <div class="time-series-import-chart-panel">
+                <div class="time-series-import-chart-head">
+                  <strong>曲线预览</strong>
+                  <div class="time-series-import-curve-toggles" aria-label="导入曲线显示切换">
+                    <button type="button" class="time-series-import-curve-toggle active" data-import-curve="wind_speed" aria-pressed="true">风速</button>
+                    <button type="button" class="time-series-import-curve-toggle active" data-import-curve="solar_irradiance" aria-pressed="true">太阳辐射</button>
+                    <button type="button" class="time-series-import-curve-toggle active" data-import-curve="temperature" aria-pressed="true">环境温度</button>
+                    <button type="button" class="time-series-import-curve-toggle active" data-import-curve="load" aria-pressed="true">负荷</button>
+                  </div>
+                </div>
+                <svg id="timeSeriesImportChart" class="time-series-import-chart" role="img" aria-label="导入曲线预览"></svg>
+              </div>
+              <div id="timeSeriesImportResizeHandle" class="time-series-import-resize-handle" role="separator" aria-orientation="horizontal" aria-label="调整导入曲线预览高度" tabindex="0"></div>
               <div id="timeSeriesImportPreview" class="data-table time-series-import-preview">
                 <div class="empty-summary">打开文件后，在这里预览8760点曲线。</div>
               </div>
@@ -110,6 +123,7 @@
                 <label>指定模式
                   <select id="loadGeneratorMode">
                     <option value="random">随机曲线</option>
+                    <option value="file">文件导入</option>
                   </select>
                 </label>
                 <label>负荷最大值<input id="loadGeneratorMax" type="number" min="0" step="any"></label>
@@ -120,7 +134,6 @@
               <div class="map-picker-foot">
                 <span id="loadGeneratorHint">输入最大值、最小值、平均值，并选择生成模式。</span>
                 <button id="generateLoadCurve" type="button">生成负荷曲线</button>
-                <button id="importLoadCurveFile" type="button">文件导入</button>
                 <input id="loadCurveImportFile" type="file" accept=".csv,.xlsx" hidden>
                 <button id="saveLoadTemplate" type="button">保存模板</button>
                 <button id="confirmLoadGenerator" class="primary" type="button">确定</button>

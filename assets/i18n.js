@@ -32,6 +32,7 @@
     "当前方案:": "Current Scenario:",
     "未选择方案": "No scenario selected",
     "当前方案: 未选择方案": "Current Scenario: No scenario selected",
+    "名称": "Name",
     "时序数据": "Time Series",
     "设备参数": "Device Parameters",
     "规划参数": "Planning Parameters",
@@ -41,7 +42,23 @@
     "初始电储SOC(0.0-1.0)": "Initial Battery SOC (0.0-1.0)",
     "初始氢储SOC(0.0-1.0)": "Initial Hydrogen Storage SOC (0.0-1.0)",
     "成本(万元/台)": "Cost (10k CNY/unit)",
+    "容量": "Capacity",
+    "容量(kW)": "Capacity (kW)",
+    "容量(kWh)": "Capacity (kWh)",
     "容量(Nm3)": "Capacity (Nm3)",
+    "功率上限(kW)": "Power Upper Limit (kW)",
+    "功率下限(kW)": "Power Lower Limit (kW)",
+    "油耗率(kg/kWh)": "Fuel Consumption Rate (kg/kWh)",
+    "切入风速(m/s)": "Cut-in Wind Speed (m/s)",
+    "额定风速(m/s)": "Rated Wind Speed (m/s)",
+    "切出风速(m/s)": "Cut-out Wind Speed (m/s)",
+    "数量下限(台)": "Quantity Lower Bound (units)",
+    "数量上限(台)": "Quantity Upper Bound (units)",
+    "设计年限(年）": "Design Life (years)",
+    "设计年限(年)": "Design Life (years)",
+    "自损耗率(0-1%/天)": "Self-discharge Rate (0-1%/day)",
+    "氢-电效率(kWh/Nm3)": "Hydrogen-to-Electric Efficiency (kWh/Nm3)",
+    "电-氢效率(Nm3/kWh)": "Electric-to-Hydrogen Efficiency (Nm3/kWh)",
     "充电效率(0.0-1.0)": "Charge Efficiency (0.0-1.0)",
     "放电效率(0.0-1.0)": "Discharge Efficiency (0.0-1.0)",
     "惯量常数H(s)": "Inertia Constant H(s)",
@@ -86,13 +103,23 @@
     "是否考虑新能源N-1": "Renewable N-1 Constraint",
     "是否考虑负荷扰动": "Load Disturbance Constraint",
     "方案概览": "Scenario Overview",
+    "统计直方图": "Statistical Histograms",
+    "待选设备列表": "Candidate Device List",
+    "校验与摘要": "Validation and Summary",
+    "时序行数": "Time Series Rows",
+    "时序行数：": "Time Series Rows: ",
+    "设备条目": "Device Entries",
+    "设备条目：": "Device Entries: ",
+    "暂无设备条目": "No device entries",
     "新建方案": "New Scenario",
     "复制方案": "Copy Scenario",
     "修改名称": "Rename",
     "保存方案": "Save Scenario",
     "删除方案": "Delete Scenario",
     "导入曲线": "Import Curves",
+    "曲线已修改，请保存方案": "Curve updated. Please save the scenario",
     "负荷生成": "Generate Load",
+    "负荷曲线已调整，请检查预览后点击确定。": "Load curve adjusted. Please review the preview and confirm.",
     "坐标选择": "Select Coordinates",
     "地图接口切换": "Map Provider Switch",
     "高德地图": "Amap",
@@ -104,7 +131,19 @@
     "获取历史气象": "Fetch Weather History",
     "风速": "Wind Speed",
     "太阳辐射": "Solar Irradiance",
+    "太阳辐照": "Solar Irradiance",
+    "温度": "Ambient Temperature",
+    "室温": "Ambient Temperature",
+    "负荷": "Load",
     "环境温度": "Ambient Temperature",
+    "曲线预览": "Curve Preview",
+    "导入曲线预览": "Imported Curve Preview",
+    "导入曲线显示切换": "Imported Curve Display Toggle",
+    "调整导入曲线预览高度": "Resize imported curve preview height",
+    "导入曲线已调整，请确认后保存。": "Imported curves adjusted. Please confirm to save.",
+    "打开文件后，在这里预览8760点曲线。": "Open a file to preview the 8760-point curves here.",
+    "打开文件后显示曲线预览": "Curve preview appears after opening a file",
+    "请选择至少一条曲线": "Please select at least one curve",
     "负荷总功率": "Total Load Power",
     "启动优化": "Start Optimization",
     "启动评估": "Start Evaluation",
@@ -147,6 +186,15 @@
     "设计台数": "Designed Units",
     "单台容量": "Single Unit Capacity",
     "暂无规划结果": "No planning result",
+    "成本构成": "Cost Composition",
+    "年柴油成本": "Annual Diesel Cost",
+    "年均建设成本": "Annualized Construction Cost",
+    "运行成本": "Operating Cost",
+    "建设成本": "Construction Cost",
+    "电量构成": "Energy Composition",
+    "柴发电量": "Diesel Generation",
+    "绿电电量": "Green Energy",
+    "新能源电量": "Renewable Energy",
     "是否构网": "Grid-forming",
     "SOC上限": "SOC Upper Bound",
     "SOC下限": "SOC Lower Bound",
@@ -286,8 +334,14 @@
     "正在导入负荷文件": "Importing load file",
     "负荷文件导入成功，请检查预览后点击确定。": "Load file imported. Please check the preview and click OK.",
     "负荷文件导入失败：": "Load file import failed: ",
+    "负荷文件已导入为原始曲线，请点击生成负荷曲线。": "Load file imported as the source curve. Click Generate Load Curve.",
+    "原始负荷曲线已载入，请点击生成负荷曲线。": "Source load curve loaded. Click Generate Load Curve.",
+    "正在载入原始负荷曲线...": "Loading source load curve...",
+    "请选择负荷文件": "Please select a load file",
+    "请先选择负荷文件": "Please select a load file first",
     "已从": "Imported ",
     "导入8760点负荷曲线": " as a 8760-point load curve",
+    "导入8760点负荷原始曲线": " as a 8760-point source load curve",
     "文件共有": "source rows: ",
     "行，已自适应扩展到8760点": ", adapted to 8760 points",
     "已按相邻点自动补齐": "filled ",
@@ -438,7 +492,7 @@
 
   function translateToEnglish(text) {
     if (translations.has(text)) return translations.get(text);
-    for (const [zh, en] of translations.entries()) {
+    for (const [zh, en] of partialTranslations(translations)) {
       if (text.includes(zh)) return text.replaceAll(zh, en);
     }
     return text;
@@ -446,10 +500,14 @@
 
   function translateToChinese(text) {
     if (reverseTranslations.has(text)) return reverseTranslations.get(text);
-    for (const [en, zh] of reverseTranslations.entries()) {
+    for (const [en, zh] of partialTranslations(reverseTranslations)) {
       if (text.includes(en)) return text.replaceAll(en, zh);
     }
     return text;
+  }
+
+  function partialTranslations(map) {
+    return Array.from(map.entries()).sort((left, right) => right[0].length - left[0].length);
   }
 
   function patchDialogs() {
