@@ -11,6 +11,7 @@ const state = {
   tableHeight: null,
   tableColumnWidths: [1, 1, 1],
   hoverIndex: null,
+  curveDataKey: "",
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -126,6 +127,7 @@ function renderComparisonTabs() {
       state.tabs = state.tabs.filter((tab, index) => index === 0 || tab.id !== tabId);
       if (!state.tabs.some((tab) => tab.id === state.activeTabId)) state.activeTabId = state.tabs[0]?.id || "";
       renderComparisonTabs();
+      clearComparisonDisplayForSwitch();
       refreshComparisonData().catch(showError);
     });
   });
@@ -136,6 +138,7 @@ function renderComparisonTabs() {
       if (!tab) return;
       tab.scheme = schemeSelect.value;
       tab.result = "";
+      clearComparisonDisplayForSwitch();
       await loadResultFilesForTab(tab);
       renderComparisonTabs();
       refreshComparisonData().catch(showError);
@@ -147,6 +150,7 @@ function renderComparisonTabs() {
       const tab = tabById(resultSelect.dataset.resultSelect);
       if (!tab) return;
       tab.result = resultSelect.value;
+      clearComparisonDisplayForSwitch();
       refreshComparisonData().catch(showError);
     });
   });
@@ -213,15 +217,20 @@ function moveComparisonTab(sourceId, targetId) {
   const [tab] = state.tabs.splice(sourceIndex, 1);
   state.tabs.splice(targetIndex, 0, tab);
   renderComparisonTabs();
+  clearComparisonDisplayForSwitch();
   refreshComparisonData().catch(showError);
 }
 
 async function refreshComparisonData() {
   const items = state.tabs.filter((tab) => tab.scheme && tab.result).map((tab) => ({ scheme: tab.scheme, filename: tab.result }));
+  const requestKey = JSON.stringify(items);
+  state.curveDataKey = requestKey;
   if (!items.length) {
     state.comparison = { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} };
   } else {
-    state.comparison = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
+    const summary = await api(`/api/comparison/data?mode=summary&items=${encodeURIComponent(requestKey)}`);
+    if (state.curveDataKey !== requestKey) return;
+    state.comparison = summary;
   }
   state.selectedCurves = state.selectedCurves.filter((name) => state.comparison.curves.includes(name));
   if (!state.selectedCurves.length && state.comparison.curves.length) {
@@ -229,10 +238,51 @@ async function refreshComparisonData() {
   }
   state.hoverIndex = null;
   renderComparisonTables();
-  state.comparisonCurveViewer?.setData(state.comparison);
+  state.comparisonCurveViewer?.clear("正在加载小时级曲线");
   if (!state.comparisonCurveViewer) {
     renderCurveNameList();
     renderComparisonCurveChart();
+  }
+  loadComparisonCurveData(items).catch(showError);
+}
+
+function clearComparisonDisplayForSwitch() {
+  state.comparison = { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} };
+  state.selectedCurves = [];
+  state.hoverIndex = null;
+  state.curveDataKey = "";
+  renderComparisonTables();
+  state.comparisonCurveViewer?.clear("正在加载小时级曲线");
+  if (!state.comparisonCurveViewer) {
+    renderCurveNameList();
+    renderComparisonCurveChart();
+  }
+}
+
+async function loadComparisonCurveData(items = state.tabs.filter((tab) => tab.scheme && tab.result).map((tab) => ({ scheme: tab.scheme, filename: tab.result }))) {
+  if (!items.length) {
+    state.comparisonCurveViewer?.clear("暂无小时级曲线");
+    return;
+  }
+  const key = JSON.stringify(items);
+  if (state.curveDataKey !== key) return;
+  state.curveDataKey = key;
+  try {
+    const data = await api(`/api/comparison/data?items=${encodeURIComponent(key)}`);
+    if (state.curveDataKey !== key) return;
+    state.comparison = { ...state.comparison, curve_groups: data.curve_groups || {}, curves: data.curves || [], series: data.series || {}, annual_table: data.annual_table || state.comparison.annual_table || [] };
+    state.selectedCurves = state.selectedCurves.filter((name) => state.comparison.curves.includes(name));
+    if (!state.selectedCurves.length && state.comparison.curves.length) {
+      state.selectedCurves = [state.comparison.curves[0]];
+    }
+    state.comparisonCurveViewer?.setData(state.comparison);
+    if (!state.comparisonCurveViewer) {
+      renderCurveNameList();
+      renderComparisonCurveChart();
+    }
+  } catch (error) {
+    if (state.curveDataKey === key) state.curveDataKey = "";
+    throw error;
   }
 }
 

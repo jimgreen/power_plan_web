@@ -483,9 +483,9 @@ class OptimizationRuntime:
         self._run_token = 0
         self._append_log_unlocked("info", "规划求解待启动")
 
-    def snapshot(self) -> dict:
+    def snapshot(self, include_hourly_curves: bool = True) -> dict:
         with self._lock:
-            return self._payload_unlocked()
+            return self._payload_unlocked(include_hourly_curves=include_hourly_curves)
 
     def apply(self, action: str, scheme: str = "") -> dict:
         target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
@@ -552,9 +552,13 @@ class OptimizationRuntime:
             self._append_log_unlocked("ok", "规划求解完成")
             self._export_results_once_unlocked()
 
-    def _payload_unlocked(self) -> dict:
+    def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
         result_path = optimization_result_workbook_path(self.scheme)
-        workbook_payload = read_result_workbook_display_payload_for_response(result_path) if self.status != "运行中" else None
+        workbook_payload = (
+            read_result_workbook_display_payload_for_response(result_path, include_hourly_curves=include_hourly_curves)
+            if self.status != "运行中"
+            else None
+        )
         if workbook_payload:
             self.result_file = str(result_path)
         return {
@@ -1292,18 +1296,21 @@ def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, di
     if path != "/api/comparison/data":
         return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
     try:
-        items_text = parse_qs(query).get("items", ["[]"])[0]
+        query_params = parse_qs(query)
+        items_text = query_params.get("items", ["[]"])[0]
+        mode = str(query_params.get("mode", ["full"])[0] or "full").strip().lower()
+        include_hourly_curves = mode not in {"summary", "tables", "light"}
         items = json.loads(items_text or "[]")
         if not isinstance(items, list):
             raise ValueError("对比项必须为列表")
-        return _json_response(build_comparison_payload(items[:4]))
+        return _json_response(build_comparison_payload(items[:4], include_hourly_curves=include_hourly_curves))
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
     except (ValueError, json.JSONDecodeError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
 
-def build_comparison_payload(items: list[dict]) -> dict:
+def build_comparison_payload(items: list[dict], include_hourly_curves: bool = True) -> dict:
     selected_items: list[dict] = []
     capacity_tables: list[list[dict]] = []
     energy_tables: list[list[dict]] = []
@@ -1323,7 +1330,7 @@ def build_comparison_payload(items: list[dict]) -> dict:
             raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
         result_display_name = result_display_name_from_filename(filename)
         label = f"{scheme} / {result_display_name}"
-        workbook_data = read_comparison_workbook(result_path)
+        workbook_data = read_comparison_workbook(result_path, include_hourly_curves=include_hourly_curves)
         selected_items.append(
             {
                 "id": f"item-{index + 1}",
@@ -1355,16 +1362,18 @@ def build_comparison_payload(items: list[dict]) -> dict:
     }
 
 
-def read_comparison_workbook(path: Path) -> dict:
+def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> dict:
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
         raise ValueError(f"结果文件无法读取: {path.name}") from exc
     try:
-        curve_groups = {
-            key: read_curve_sheet(workbook, config["sheet"], config["limit"])
-            for key, config in COMPARISON_CURVE_GROUPS.items()
-        }
+        curve_groups = {}
+        for key, config in COMPARISON_CURVE_GROUPS.items():
+            if key == "hourly" and not include_hourly_curves:
+                curve_groups[key] = {}
+            else:
+                curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
         return {
             "capacity": read_named_sheet_rows(workbook, "规划结果"),
             "energy": read_named_sheet_rows(workbook, "供能分析"),
@@ -1377,16 +1386,16 @@ def read_comparison_workbook(path: Path) -> dict:
         workbook.close()
 
 
-def read_result_workbook_display_payload_for_response(path: Path) -> dict | None:
+def read_result_workbook_display_payload_for_response(path: Path, include_hourly_curves: bool = True) -> dict | None:
     try:
         if not path.exists():
             return None
-        return read_result_workbook_display_payload(path)
+        return read_result_workbook_display_payload(path, include_hourly_curves=include_hourly_curves)
     except (ValueError, FileNotFoundError):
         return None
 
 
-def read_result_workbook_display_payload(path: Path) -> dict:
+def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool = True) -> dict:
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -1398,7 +1407,11 @@ def read_result_workbook_display_payload(path: Path) -> dict:
         annual_rows = read_named_sheet_rows(workbook, "规划年指标")
         green_daily = read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365)
         green_monthly = read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12)
-        green_hourly = read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
+        green_hourly = (
+            read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
+            if include_hourly_curves
+            else []
+        )
         safety_daily = read_workbook_rows_with_field_map(workbook, "安全日曲线", limit=365)
         return {
             "metrics": read_result_workbook_metrics(workbook),
@@ -1858,9 +1871,9 @@ class OptimizationRuntimeManager:
         self._runtimes: dict[str, OptimizationRuntime] = {}
         self._lock = threading.Lock()
 
-    def snapshot(self, scheme: str = "") -> dict:
+    def snapshot(self, scheme: str = "", include_hourly_curves: bool = True) -> dict:
         runtime = self._runtime_for_scheme(scheme)
-        payload = runtime.snapshot()
+        payload = runtime.snapshot(include_hourly_curves=include_hourly_curves)
         payload["running_schemes"] = self.running_schemes()
         return payload
 
@@ -1875,7 +1888,7 @@ class OptimizationRuntimeManager:
             runtimes = list(self._runtimes.items())
         running = []
         for scheme, runtime in runtimes:
-            if runtime.snapshot()["status"] == "运行中":
+            if runtime.status == "运行中":
                 running.append(scheme)
         return running
 
@@ -1911,9 +1924,9 @@ class EvaluationRuntime:
         self._run_token = 0
         self._append_log_unlocked("info", "方案评估待启动")
 
-    def snapshot(self) -> dict:
+    def snapshot(self, include_hourly_curves: bool = True) -> dict:
         with self._lock:
-            return self._payload_unlocked()
+            return self._payload_unlocked(include_hourly_curves=include_hourly_curves)
 
     def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
         target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
@@ -2022,11 +2035,14 @@ class EvaluationRuntime:
             if message:
                 self._append_log_unlocked(level, message)
 
-    def _payload_unlocked(self) -> dict:
+    def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
         workbook_payload = None
         if self.status != "运行中" and self.result_filename:
             try:
-                workbook_payload = read_result_workbook_display_payload_for_response(evaluation_result_path(self.scheme, self.result_filename))
+                workbook_payload = read_result_workbook_display_payload_for_response(
+                    evaluation_result_path(self.scheme, self.result_filename),
+                    include_hourly_curves=include_hourly_curves,
+                )
             except ValueError:
                 workbook_payload = None
         return {
@@ -2085,9 +2101,9 @@ class EvaluationRuntimeManager:
         self._runtimes: dict[str, EvaluationRuntime] = {}
         self._lock = threading.Lock()
 
-    def snapshot(self, scheme: str = "", filename: str = "") -> dict:
+    def snapshot(self, scheme: str = "", filename: str = "", include_hourly_curves: bool = True) -> dict:
         runtime = self._runtime_for_result(scheme, filename)
-        payload = runtime.snapshot()
+        payload = runtime.snapshot(include_hourly_curves=include_hourly_curves)
         payload["running_schemes"] = self.running_schemes()
         return payload
 
@@ -2102,7 +2118,7 @@ class EvaluationRuntimeManager:
             runtimes = list(self._runtimes.items())
         running = []
         for key, runtime in runtimes:
-            if runtime.snapshot()["status"] == "运行中":
+            if runtime.status == "运行中":
                 running.append(key.split("\0", 1)[0])
         return sorted(set(running))
 
@@ -3282,12 +3298,16 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
     if path == "/api/evaluation/status":
         scheme = query_params.get("scheme", [""])[0]
         filename = query_params.get("filename", [""])[0]
-        return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename))
+        light = truthy_json_value(query_params.get("light", ["0"])[0])
+        include_hourly_curves = not light
+        return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
     if path.startswith("/api/evaluation/"):
         return handle_evaluation_results_api_path(path, "GET", b"", query)
     if path == "/api/optimization/status":
         scheme = query_params.get("scheme", [""])[0]
-        return _json_response(OPTIMIZATION_RUNTIME.snapshot(scheme=scheme))
+        light = truthy_json_value(query_params.get("light", ["0"])[0])
+        include_hourly_curves = not light
+        return _json_response(OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves))
     snapshot = build_snapshot()
     routes = {
         "/api/health": {"ok": True, "timestamp": snapshot["timestamp"]},

@@ -292,7 +292,7 @@ async function refreshOptimizationStatus(scheme = state.currentScheme) {
 }
 
 function optimizationStatusPath(scheme) {
-  return scheme ? `/api/optimization/status?scheme=${encodeURIComponent(scheme)}` : "/api/optimization/status";
+  return scheme ? `/api/optimization/status?scheme=${encodeURIComponent(scheme)}&light=1` : "/api/optimization/status?light=1";
 }
 
 function scheduleOptimizationPolling() {

@@ -1290,6 +1290,75 @@ class PowerPlanServerTest(unittest.TestCase):
             server.OPTIMIZATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
+    def test_light_optimization_status_skips_hourly_dispatch_sheet(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_optimization_status_light"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.OPTIMIZATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "optimization_results.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "总体指标"
+            workbook.active.append(["指标", "数值", "单位"])
+            planning_sheet = workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["柴发", 1, 100, 100, "kW"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy"])
+            daily_sheet.append([1, 100])
+            monthly_sheet = workbook.create_sheet("供能月曲线")
+            monthly_sheet.append(["month", "load_energy"])
+            monthly_sheet.append([1, 100])
+            safety_daily_sheet = workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_max"])
+            safety_daily_sheet.append([1, 50.1])
+            dispatch_sheet = workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "负荷总功率"])
+            dispatch_sheet.append([1, 100])
+            workbook.save(result_path)
+            workbook.close()
+
+            read_sheets = []
+            original_reader = server.read_workbook_rows_with_field_map
+
+            def tracking_reader(workbook, sheet_name, limit=None):
+                read_sheets.append(sheet_name)
+                return original_reader(workbook, sheet_name, limit)
+
+            with patch.object(server, "read_workbook_rows_with_field_map", side_effect=tracking_reader):
+                status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A&light=1")
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertNotIn("调度结果", read_sheets)
+            self.assertEqual(payload["results"]["curves"]["green_hourly"], [])
+            self.assertEqual(payload["results"]["curves"]["green_daily"][0]["load_energy"], 100)
+        finally:
+            server.PLANNING_STORE = original_store
+            server.OPTIMIZATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_runtime_running_schemes_does_not_parse_finished_workbooks(self):
+        manager = server.OptimizationRuntimeManager()
+        finished = manager._runtime_for_scheme("已完成方案")
+        finished.status = "已完成"
+        running = manager._runtime_for_scheme("运行中方案")
+        running.status = "运行中"
+
+        with patch.object(server, "read_result_workbook_display_payload_for_response") as workbook_reader:
+            self.assertEqual(manager.running_schemes(), ["运行中方案"])
+            workbook_reader.assert_not_called()
+
     def test_evaluation_status_reads_display_results_from_selected_workbook(self):
         planning_root = WEB_ROOT / "tests" / "tmp_evaluation_status_workbook"
         shutil.rmtree(planning_root, ignore_errors=True)
@@ -1339,6 +1408,66 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(payload["results"]["safety_table"][0]["指标"], "评估安全指标")
             self.assertEqual(payload["results"]["curves"]["green_daily"][0]["load_energy"], 56)
             self.assertEqual(payload["results"]["curves"]["safety_daily"][0]["frequency_min"], 49.9)
+        finally:
+            server.PLANNING_STORE = original_store
+            server.EVALUATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_light_evaluation_status_skips_hourly_dispatch_sheet(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_status_light"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.EVALUATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "总体指标"
+            workbook.active.append(["指标", "数值", "单位"])
+            planning_sheet = workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["柴发", 1, 100, 100, "kW"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy"])
+            daily_sheet.append([1, 200])
+            monthly_sheet = workbook.create_sheet("供能月曲线")
+            monthly_sheet.append(["month", "load_energy"])
+            monthly_sheet.append([1, 200])
+            safety_daily_sheet = workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_min"])
+            safety_daily_sheet.append([1, 49.9])
+            dispatch_sheet = workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "负荷总功率"])
+            dispatch_sheet.append([1, 200])
+            workbook.save(result_path)
+            workbook.close()
+
+            read_sheets = []
+            original_reader = server.read_workbook_rows_with_field_map
+
+            def tracking_reader(workbook, sheet_name, limit=None):
+                read_sheets.append(sheet_name)
+                return original_reader(workbook, sheet_name, limit)
+
+            with patch.object(server, "read_workbook_rows_with_field_map", side_effect=tracking_reader):
+                status, headers, body = server.handle_api_path(
+                    "/api/evaluation/status?scheme=方案A&filename=case_results.xlsx&light=1"
+                )
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertNotIn("调度结果", read_sheets)
+            self.assertEqual(payload["results"]["curves"]["green_hourly"], [])
+            self.assertEqual(payload["results"]["curves"]["green_daily"][0]["load_energy"], 200)
         finally:
             server.PLANNING_STORE = original_store
             server.EVALUATION_RUNTIME = original_runtime
@@ -1806,6 +1935,64 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(len(payload["curve_groups"]["monthly"]["series"]["负荷总电量"][0]["points"]), 2)
             self.assertEqual(payload["annual_table"][0]["指标"], "年总成本")
             self.assertEqual(payload["annual_table"][0]["方案A / case"], 123.4)
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_comparison_summary_mode_skips_hourly_dispatch_sheet(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_comparison_summary"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            planning_sheet = workbook.active
+            planning_sheet.title = "规划结果"
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["柴发", 2, 100, 200, "kW"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            green_sheet.append(["柴油消耗", 12.5, "吨"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["年总成本", 123.4, "万元"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy"])
+            daily_sheet.append([1, 1000])
+            monthly_sheet = workbook.create_sheet("供能月曲线")
+            monthly_sheet.append(["month", "load_energy"])
+            monthly_sheet.append([1, 30000])
+            dispatch_sheet = workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "负荷"])
+            dispatch_sheet.append([1, 80])
+            workbook.save(result_path)
+            workbook.close()
+
+            read_sheets = []
+            original_reader = server.read_curve_sheet
+
+            def tracking_reader(workbook, sheet_name, limit=None):
+                read_sheets.append(sheet_name)
+                return original_reader(workbook, sheet_name, limit)
+
+            with patch.object(server, "read_curve_sheet", side_effect=tracking_reader):
+                status, headers, body = server.handle_api_path(
+                    "/api/comparison/data?mode=summary&items="
+                    + quote(json.dumps([{"scheme": "方案A", "filename": "case_results.xlsx"}], ensure_ascii=False))
+                )
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertNotIn("调度结果", read_sheets)
+            self.assertEqual(payload["curve_groups"]["hourly"]["curves"], [])
+            self.assertEqual(payload["curves"], [])
+            self.assertIn("负荷总电量", payload["curve_groups"]["daily"]["curves"])
+            self.assertEqual(payload["tables"]["capacity"][0]["设备类型"], "柴发")
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -2621,6 +2808,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("绿电结果", script)
         self.assertNotIn("安全结果", script)
         self.assertIn("optimizationStatusPath", script)
+        self.assertIn("light=1", script)
         self.assertIn("defaultOptimizationState", script)
         self.assertIn("scheme=", script)
         self.assertIn("encodeURIComponent(scheme)", script)
@@ -2714,6 +2902,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("请求后台失败，请检查 WEB 服务是否正常运行，或查看服务器错误日志。", script)
         self.assertIn("target_name", script)
         self.assertIn("filename=${encodeURIComponent(filename)}", script)
+        self.assertIn("light=1", script)
         self.assertIn("planning_result_rows", script)
         self.assertIn("renderEvaluationPlanningResultTable", script)
         self.assertIn("renderEvaluationCurrentScheme", script)
@@ -2836,6 +3025,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
         self.assertIn("/api/comparison/data", script)
+        self.assertIn("mode=summary", script)
         self.assertIn("MAX_TABS = 4", script)
         self.assertIn("addComparisonTab", script)
         self.assertIn("renderAddComparisonTab", script)

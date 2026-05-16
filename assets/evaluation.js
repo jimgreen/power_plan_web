@@ -624,9 +624,9 @@ async function refreshOptimizationStatus(scheme = state.currentScheme, filename 
 }
 
 function optimizationStatusPath(scheme, filename = state.selectedResultFile) {
-  if (!scheme) return "/api/evaluation/status";
+  if (!scheme) return "/api/evaluation/status?light=1";
   const filenameParam = filename ? `&filename=${encodeURIComponent(filename)}` : "";
-  return `/api/evaluation/status?scheme=${encodeURIComponent(scheme)}${filenameParam}`;
+  return `/api/evaluation/status?scheme=${encodeURIComponent(scheme)}${filenameParam}&light=1`;
 }
 
 function scheduleOptimizationPolling() {
