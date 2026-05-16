@@ -121,14 +121,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("color: #21d5ff", html)
         self.assertIn('class="feature-entry-grid"', html)
         self.assertIn('aria-label="规划功能快捷入口"', html)
-        self.assertEqual(html.count('class="feature-entry"'), 4)
-        self.assertEqual(html.count('class="feature-icon"'), 4)
+        self.assertEqual(html.count('class="feature-entry"'), 5)
+        self.assertEqual(html.count('class="feature-icon"'), 5)
         self.assertIn('class="energy-side energy-left"', html)
         self.assertIn('class="energy-side energy-right"', html)
         self.assertIn('<strong>参数维护</strong>', html)
         self.assertIn('<strong>规划求解</strong>', html)
         self.assertIn('<strong>方案评估</strong>', html)
         self.assertIn('<strong>结果对比</strong>', html)
+        self.assertIn('<strong>任务并发</strong>', html)
         self.assertNotIn("规划参数维护", html)
         self.assertNotIn("规划算法", html)
         self.assertNotIn("规划方案评估", html)
@@ -136,13 +137,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('href="optimize.html"', html)
         self.assertIn('href="evaluation.html"', html)
         self.assertIn('href="comparison.html"', html)
+        self.assertIn('href="tasks.html"', html)
         self.assertIn(".feature-entry-grid", html)
-        self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr))", html)
+        self.assertIn("grid-template-columns: repeat(5, minmax(0, 1fr))", html)
         self.assertIn("top: 50%", html)
         self.assertIn("transform: translate(-50%, -29%)", html)
         feature_text_css = html.split(".feature-entry strong {", 1)[1].split("}", 1)[0]
         self.assertIn("white-space: nowrap", feature_text_css)
-        self.assertIn("font-size: clamp(16px, min(1.55vw, 4.2vh), 30px)", feature_text_css)
+        self.assertIn("font-size: clamp(15px, min(1.32vw, 3.8vh), 28px)", feature_text_css)
         self.assertIn("max-width: 100%", feature_text_css)
         self.assertNotIn("text-overflow: ellipsis", feature_text_css)
         self.assertNotIn("overflow: hidden", feature_text_css)
@@ -179,6 +181,7 @@ class PowerPlanServerTest(unittest.TestCase):
         users_html = (WEB_ROOT / "users.html").read_text(encoding="utf-8")
         planning_html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
         optimize_html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
+        tasks_html = (WEB_ROOT / "tasks.html").read_text(encoding="utf-8")
         index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
         i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
@@ -187,12 +190,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="registerForm"', register_html)
         self.assertIn('body data-admin-page="true"', users_html)
         self.assertIn('id="usersTable"', users_html)
-        for html in (planning_html, optimize_html, index_html, users_html):
+        for html in (planning_html, optimize_html, index_html, users_html, tasks_html):
             self.assertIn("data-auth-user", html)
             self.assertIn("data-auth-username", html)
             self.assertIn("data-logout", html)
             self.assertIn("assets/auth.js", html)
             self.assertIn("assets/i18n.js", html)
+        self.assertIn("assets/tasks.js", tasks_html)
+        self.assertIn('<a class="active" href="tasks.html">任务并发</a>', tasks_html)
+        self.assertIn(">刷新状态</button>", tasks_html)
+        self.assertIn('id="taskTable"', tasks_html)
+        self.assertIn('id="refreshTasks"', tasks_html)
         self.assertIn("assets/i18n.js", login_html)
         self.assertIn("assets/i18n.js", register_html)
         self.assertIn("powerPlanLanguage", i18n_script)
@@ -201,6 +209,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Station Wind-Solar-Hydrogen-Storage-Diesel Planning System", i18n_script)
         self.assertIn("Scenario Evaluation", i18n_script)
         self.assertIn("Result Comparison", i18n_script)
+        self.assertIn("Task Concurrency", i18n_script)
+        self.assertIn("Refresh Status", i18n_script)
+        self.assertIn("Start Now", i18n_script)
+        self.assertIn("Queued", i18n_script)
+        self.assertIn("Calculating", i18n_script)
+        self.assertIn("Completed", i18n_script)
+        self.assertIn("Planning Calculation", i18n_script)
+        self.assertIn("Elapsed Time (s)", i18n_script)
         self.assertIn("Load Up Disturbance Factor", i18n_script)
         self.assertIn("Load Down Disturbance Factor", i18n_script)
         self.assertIn("Renewable Down Disturbance Factor", i18n_script)
@@ -383,10 +399,8 @@ class PowerPlanServerTest(unittest.TestCase):
 
     def test_optimization_api_start_stop_and_logs(self):
         original_runtime = server.OPTIMIZATION_RUNTIME
-        original_run_optimization = server.OptimizationRuntime._run_optimization
         server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
         try:
-            server.OptimizationRuntime._run_optimization = lambda self, token, scheme: None
             status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A")
             initial = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
@@ -477,7 +491,180 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(json.loads(body.decode("utf-8"))["error"], "bad_request")
         finally:
             server.OPTIMIZATION_RUNTIME = original_runtime
-            server.OptimizationRuntime._run_optimization = original_run_optimization
+
+    def test_tasks_api_lists_and_controls_optimization_and_evaluation_jobs(self):
+        original_optimization_runtime = server.OPTIMIZATION_RUNTIME
+        original_evaluation_runtime = server.EVALUATION_RUNTIME
+        planning_root = WEB_ROOT / "tests" / "tmp_tasks_api"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            for row in payload["time_series"]:
+                row["wind_speed"] = 7
+                row["solar_irradiance"] = 500
+                row["load"] = 80
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "规划结果"
+            sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            sheet.append(["柴发", 2, 100, 200, "kW"])
+            workbook.save(planning_root / "方案A" / "case_results.xlsx")
+            workbook.close()
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "start", "task_type": "optimization", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),
+            )
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["task"]["task_type"], "规划计算")
+            self.assertEqual(payload["task"]["scheme"], "方案A")
+            self.assertEqual(payload["task"]["status"], "计算中")
+            self.assertIsInstance(payload["task"]["process_id"], int)
+            self.assertNotEqual(payload["task"]["process_id"], server.os.getpid())
+            self.assertEqual(payload["task"]["result"], "opt_results.xlsx")
+            self.assertTrue(payload["task"]["start_time"])
+            self.assertGreaterEqual(payload["task"]["elapsed_seconds"], 0)
+            self.assertIn("后台规划求解程序已启动", payload["task"]["latest_log"])
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "start", "task_type": "evaluation", "scheme": "方案A", "result": "case_results.xlsx"}, ensure_ascii=False).encode("utf-8"),
+            )
+            evaluation_payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(evaluation_payload["task"]["task_type"], "方案评估")
+            self.assertEqual(evaluation_payload["task"]["result"], "case_results.xlsx")
+            self.assertEqual(evaluation_payload["task"]["status"], "计算中")
+            self.assertIsInstance(evaluation_payload["task"]["process_id"], int)
+            self.assertNotEqual(evaluation_payload["task"]["process_id"], server.os.getpid())
+
+            status, headers, body = server.handle_api_path("/api/tasks")
+            task_list = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertIn("tasks", task_list)
+            self.assertTrue(any(item["task_type"] == "规划计算" and item["scheme"] == "方案A" for item in task_list["tasks"]))
+            self.assertTrue(any(item["task_type"] == "方案评估" and item["result"] == "case_results.xlsx" for item in task_list["tasks"]))
+            for task in task_list["tasks"]:
+                for key in ("id", "task_key", "task_type", "scheme", "result", "status", "process_id", "start_time", "elapsed_seconds", "latest_log", "can_start", "can_stop"):
+                    self.assertIn(key, task)
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "stop", "task_type": "optimization", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),
+            )
+            stopped = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(stopped["task"]["status"], "未计算")
+            self.assertIn("停止规划求解", stopped["task"]["latest_log"])
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "bad", "task_type": "optimization", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),
+            )
+            self.assertEqual(status, 400)
+            self.assertEqual(json.loads(body.decode("utf-8"))["error"], "bad_request")
+        finally:
+            for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme)
+            for runtime in server.EVALUATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme, filename=runtime.result_filename)
+            server.OPTIMIZATION_RUNTIME = original_optimization_runtime
+            server.EVALUATION_RUNTIME = original_evaluation_runtime
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_tasks_api_queues_jobs_and_starts_next_after_current_finishes(self):
+        original_optimization_runtime = server.OPTIMIZATION_RUNTIME
+        original_evaluation_runtime = server.EVALUATION_RUNTIME
+        original_scheduler = server.TASK_SCHEDULER
+        planning_root = WEB_ROOT / "tests" / "tmp_tasks_queue"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        server.TASK_SCHEDULER = server.TaskScheduler()
+        try:
+            for scheme in ("方案A", "方案B"):
+                server.PLANNING_STORE.create_scheme(scheme)
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "start", "task_type": "optimization", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),
+            )
+            first = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(first["task"]["status"], "计算中")
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "queue", "task_type": "optimization", "scheme": "方案B"}, ensure_ascii=False).encode("utf-8"),
+            )
+            queued = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(queued["task"]["status"], "排队中")
+            self.assertEqual(queued["task"]["queue_position"], 1)
+            self.assertFalse(queued["task"]["can_queue"])
+
+            runtime_a = server.OPTIMIZATION_RUNTIME._runtime_for_scheme("方案A")
+            runtime_a.apply("stop", scheme="方案A")
+
+            status, headers, body = server.handle_api_path("/api/tasks")
+            task_list = json.loads(body.decode("utf-8"))["tasks"]
+            task_b = next(item for item in task_list if item["task_type_key"] == "optimization" and item["scheme"] == "方案B")
+            self.assertEqual(task_b["status"], "计算中")
+            self.assertIsInstance(task_b["process_id"], int)
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "stop", "task_type": "optimization", "scheme": "方案B"}, ensure_ascii=False).encode("utf-8"),
+            )
+            stopped = json.loads(body.decode("utf-8"))["task"]
+            self.assertEqual(stopped["status"], "未计算")
+        finally:
+            for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme)
+            server.OPTIMIZATION_RUNTIME = original_optimization_runtime
+            server.EVALUATION_RUNTIME = original_evaluation_runtime
+            server.TASK_SCHEDULER = original_scheduler
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_runtime_starts_child_process_for_optimization_tasks(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_process_runtime"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            runtime = server.OptimizationRuntime()
+            payload = runtime.apply("start", scheme="方案A")
+
+            self.assertEqual(payload["status"], "运行中")
+            self.assertIsNotNone(runtime._process)
+            self.assertFalse(hasattr(runtime, "_thread"))
+            self.assertIsInstance(payload["process_id"], int)
+            self.assertNotEqual(payload["process_id"], server.os.getpid())
+
+            stopped = runtime.apply("stop", scheme="方案A")
+            self.assertEqual(stopped["status"], "已停止")
+            self.assertFalse(runtime._process and runtime._process.is_alive())
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_estimate_dispatch_minimizes_diesel_for_8760_hours(self):
         payload = server.planning_store.default_payload("方案A")

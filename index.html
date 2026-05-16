@@ -143,12 +143,12 @@
       position: absolute;
       left: 50%;
       top: 50%;
-      width: min(1140px, calc(100vw - 260px));
+      width: min(1280px, calc(100vw - 220px));
       min-height: clamp(320px, 41vh, 400px);
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: clamp(24px, 2.2vw, 40px);
-      padding: clamp(40px, 4.2vh, 58px) clamp(42px, 3.8vw, 68px);
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: clamp(18px, 1.6vw, 32px);
+      padding: clamp(34px, 3.8vh, 52px) clamp(34px, 3vw, 58px);
       transform: translate(-50%, -29%);
       isolation: isolate;
       z-index: 3;
@@ -190,7 +190,7 @@
 
     .feature-entry {
       position: relative;
-      min-height: clamp(248px, 32vh, 318px);
+      min-height: clamp(238px, 31vh, 306px);
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -256,8 +256,8 @@
 
     .feature-icon {
       position: relative;
-      width: clamp(132px, 10vw, 176px);
-      height: clamp(132px, 10vw, 176px);
+      width: clamp(112px, 8.4vw, 160px);
+      height: clamp(112px, 8.4vw, 160px);
       display: grid;
       place-items: center;
       color: #21d5ff;
@@ -280,7 +280,7 @@
     .feature-entry strong {
       max-width: 100%;
       color: #eff8ff;
-      font-size: clamp(16px, min(1.55vw, 4.2vh), 30px);
+      font-size: clamp(15px, min(1.32vw, 3.8vh), 28px);
       font-weight: 900;
       letter-spacing: 0;
       line-height: 1;
@@ -380,7 +380,7 @@
         right: 24px;
         top: 50%;
         width: auto;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         transform: translateY(-30%);
       }
 
@@ -577,6 +577,22 @@
           </svg>
         </i>
         <strong>结果对比</strong>
+      </a>
+      <a class="feature-entry" href="tasks.html">
+        <i class="feature-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64">
+            <rect x="11" y="12" width="42" height="40" rx="6"></rect>
+            <path d="M21 24h22"></path>
+            <path d="M21 34h14"></path>
+            <path d="M21 44h18"></path>
+            <circle cx="48" cy="20" r="5"></circle>
+            <path d="M48 15v-5"></path>
+            <path d="M48 30v-5"></path>
+            <path d="M43 20h-5"></path>
+            <path d="M58 20h-5"></path>
+          </svg>
+        </i>
+        <strong>任务并发</strong>
       </a>
     </nav>
 

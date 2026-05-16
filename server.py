@@ -13,7 +13,9 @@ import hmac
 import json
 import math
 import mimetypes
+import multiprocessing
 import os
+import queue
 import re
 import secrets
 import sqlite3
@@ -489,13 +491,17 @@ class OptimizationRuntime:
         self._results_exported = False
         self._logs: list[dict[str, str]] = []
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
+        self._process: multiprocessing.Process | None = None
+        self._event_queue: multiprocessing.Queue | None = None
+        self.process_id: int | None = None
         self._stop_requested = False
         self._run_token = 0
         self._append_log_unlocked("info", "规划求解待启动")
 
     def snapshot(self, include_hourly_curves: bool = True) -> dict:
         with self._lock:
+            self._drain_events_unlocked()
+            self._reap_process_unlocked()
             return self._payload_unlocked(include_hourly_curves=include_hourly_curves)
 
     def apply(self, action: str, scheme: str = "") -> dict:
@@ -524,16 +530,19 @@ class OptimizationRuntime:
                 self._results = {}
                 self._results_exported = False
                 self._stop_requested = False
+                self._terminate_process_unlocked()
                 self._run_token += 1
                 token = self._run_token
                 self._append_log_unlocked("ok", f"启动规划求解，方案：{self.scheme}")
                 self._append_log_unlocked("info", "后台规划求解程序已启动")
-                self._thread = threading.Thread(
-                    target=self._run_optimization,
-                    args=(token, target_scheme),
+                self._event_queue = multiprocessing.Queue()
+                self._process = multiprocessing.Process(
+                    target=optimization_process_worker,
+                    args=(self._event_queue, target_scheme, str(PLANNING_STORE.root)),
                     daemon=True,
                 )
-                self._thread.start()
+                self._process.start()
+                self.process_id = self._process.pid
                 return self._payload_unlocked()
 
         if action == "stop":
@@ -541,6 +550,7 @@ class OptimizationRuntime:
                 if self.status != "运行中" or self.scheme != target_scheme:
                     raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行")
                 self._stop_requested = True
+                self._terminate_process_unlocked()
                 self.status = "已停止"
                 self.end_time = _now_text()
                 self._append_log_unlocked("warn", "停止规划求解")
@@ -548,20 +558,56 @@ class OptimizationRuntime:
 
         raise ValueError(f"unknown optimization action: {action}")
 
-    def _advance_locked(self) -> None:
-        if self.status != "运行中":
+    def _drain_events_unlocked(self) -> None:
+        if not self._event_queue:
             return
-        elapsed = max(0.0, time.monotonic() - self._started_monotonic)
-        self.progress = min(100, int(elapsed * 3))
-        progress_bucket = min(100, (self.progress // 10) * 10)
-        if progress_bucket >= 10 and progress_bucket != self._last_progress_log:
-            self._last_progress_log = progress_bucket
-            self._append_log_unlocked("info", f"优化迭代进度 {progress_bucket}%")
-        if self.progress >= 100:
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if not isinstance(event, dict):
+                continue
+            self._handle_process_event_unlocked(event)
+            if not self._event_queue:
+                break
+        if self.status == "运行中" and self._process and not self._process.is_alive():
+            self._process.join(timeout=0)
+            if self.status == "运行中":
+                exit_code = self._process.exitcode
+                self.status = "失败"
+                self.end_time = _now_text()
+                self._append_log_unlocked("error", f"规划求解进程异常退出，退出码：{exit_code}")
+            self._close_event_queue_unlocked()
+
+    def _handle_process_event_unlocked(self, event: dict) -> None:
+        event_type = str(event.get("type") or "log")
+        if event_type == "log":
+            self._append_optimizer_event_unlocked(event)
+            return
+        if event_type == "done":
+            if self.status != "运行中" or self._stop_requested:
+                return
+            self.progress = 100
+            self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
+            self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
             self.status = "已完成"
             self.end_time = _now_text()
-            self._append_log_unlocked("ok", "规划求解完成")
-            self._export_results_once_unlocked()
+            result_path = export_optimization_results_workbook(self._payload_unlocked())
+            self.result_file = str(result_path)
+            self._results_exported = True
+            self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+            return
+        if event_type == "error":
+            if self.status != "运行中":
+                return
+            self.status = "失败"
+            self.end_time = _now_text()
+            self._append_log_unlocked("error", str(event.get("message") or "规划求解失败"))
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
 
     def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
         result_path = optimization_result_workbook_path(self.scheme)
@@ -579,6 +625,8 @@ class OptimizationRuntime:
             "end_time": self.end_time,
             "progress": self.progress,
             "result_file": self.result_file,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
@@ -621,48 +669,17 @@ class OptimizationRuntime:
             "curves": {"green_daily": [], "green_monthly": [], "green_hourly": [], "safety_daily": []},
         }
 
-    def _run_optimization(self, token: int, scheme: str) -> None:
-        try:
-            self._append_log("info", "读取方案参数和8760时序数据", None, token)
-            scheme_payload = PLANNING_STORE.read_scheme(scheme)
-            result = plan_optimizer.run_optimization(
-                scheme_payload,
-                log=lambda event: self._append_optimizer_event(event, token),
-            )
-            with self._lock:
-                if token != self._run_token or self._stop_requested or self.status != "运行中":
-                    return
-                self.progress = 100
-                self._metrics = result.get("metrics") if isinstance(result.get("metrics"), list) else []
-                self._results = result.get("results") if isinstance(result.get("results"), dict) else {}
-                self.status = "已完成"
-                self.end_time = _now_text()
-                result_path = export_optimization_results_workbook(self._payload_unlocked())
-                self.result_file = str(result_path)
-                self._results_exported = True
-                self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
-        except Exception as exc:
-            with self._lock:
-                if token != self._run_token:
-                    return
-                self.status = "失败"
-                self.end_time = _now_text()
-                self._append_log_unlocked("error", f"规划求解失败：{exc}")
-
-    def _append_optimizer_event(self, event: dict, token: int) -> None:
+    def _append_optimizer_event_unlocked(self, event: dict) -> None:
         level = str(event.get("level") or "info")
         message = str(event.get("message") or "")
         progress = event.get("progress")
-        self._append_log(level, message, progress if isinstance(progress, int) else None, token)
-
-    def _append_log(self, level: str, message: str, progress: int | None, token: int) -> None:
-        with self._lock:
-            if token != self._run_token:
-                return
-            if progress is not None:
+        if progress is not None:
+            try:
                 self.progress = max(self.progress, min(100, max(0, int(progress))))
-            if message:
-                self._append_log_unlocked(level, message)
+            except (TypeError, ValueError):
+                pass
+        if message:
+            self._append_log_unlocked(level, message)
 
     def _results_unlocked(self) -> dict:
         cost = round(max(0.42, 0.78 - self.progress * 0.002), 3)
@@ -985,6 +1002,35 @@ class OptimizationRuntime:
         if len(self._logs) > 2000:
             del self._logs[:-2000]
 
+    def _terminate_process_unlocked(self) -> None:
+        if self._process and self._process.is_alive():
+            self._process.terminate()
+            self._process.join(timeout=2)
+            if self._process.is_alive():
+                self._process.kill()
+                self._process.join(timeout=2)
+        if self._process and not self._process.is_alive():
+            self._process.join(timeout=0)
+        self._close_event_queue_unlocked()
+
+    def _join_finished_process_unlocked(self) -> None:
+        if self._process and not self._process.is_alive():
+            self._process.join(timeout=0)
+
+    def _reap_process_unlocked(self) -> None:
+        if self._process and self.status != "运行中" and not self._process.is_alive():
+            self._process.join(timeout=0)
+
+    def _close_event_queue_unlocked(self) -> None:
+        if not self._event_queue:
+            return
+        try:
+            self._event_queue.close()
+            self._event_queue.join_thread()
+        except Exception:
+            pass
+        self._event_queue = None
+
     def _export_results_once_unlocked(self) -> None:
         if self._results_exported:
             return
@@ -997,12 +1043,70 @@ def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def elapsed_seconds_from_times(start_time: str, end_time: str = "") -> int:
+    if not start_time:
+        return 0
+    try:
+        start = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+        end = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S") if end_time else datetime.now()
+    except ValueError:
+        return 0
+    return max(0, int((end - start).total_seconds()))
+
+
 class OptimizationStateError(RuntimeError):
     """Raised when optimization start/stop violates the current runtime state."""
 
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def optimization_process_worker(event_queue, scheme: str, planning_root: str = "") -> None:
+    """Run planning optimization in a child process and report serializable events."""
+    try:
+        event_queue.put({"type": "log", "level": "info", "message": "读取方案参数和8760时序数据"})
+        store = planning_store.PlanningStore(root=Path(planning_root)) if planning_root else PLANNING_STORE
+        scheme_payload = store.read_scheme(scheme)
+        result = plan_optimizer.run_optimization(
+            scheme_payload,
+            log=lambda event: event_queue.put({"type": "log", **dict(event or {})}),
+        )
+        event_queue.put(
+            {
+                "type": "done",
+                "metrics": result.get("metrics") if isinstance(result.get("metrics"), list) else [],
+                "results": result.get("results") if isinstance(result.get("results"), dict) else {},
+            }
+        )
+    except Exception as exc:
+        event_queue.put({"type": "error", "message": f"规划求解失败：{exc}", "traceback": traceback.format_exc()})
+
+
+def evaluation_process_worker(event_queue, scheme: str, filename: str, planning_root: str = "") -> None:
+    """Run fixed-plan evaluation in a child process and report serializable events."""
+    try:
+        event_queue.put({"type": "log", "level": "info", "message": "读取方案参数和当前规划结果"})
+        store = planning_store.PlanningStore(root=Path(planning_root)) if planning_root else PLANNING_STORE
+        scheme_payload = store.read_scheme(scheme)
+        planning_rows = read_evaluation_planning_result_rows_with_store(store, scheme, filename)
+        if not planning_rows:
+            raise ValueError("当前结果文件缺少规划结果")
+        result = estimate.run_estimation(
+            scheme_payload,
+            planning_rows,
+            log=lambda event: event_queue.put({"type": "log", **dict(event or {})}),
+        )
+        event_queue.put(
+            {
+                "type": "done",
+                "metrics": result.get("metrics") if isinstance(result.get("metrics"), list) else [],
+                "results": result.get("results") if isinstance(result.get("results"), dict) else {},
+                "dispatch_rows": result.get("dispatch_rows") if isinstance(result.get("dispatch_rows"), list) else [],
+            }
+        )
+    except Exception as exc:
+        event_queue.put({"type": "error", "message": f"方案评估失败：{exc}", "traceback": traceback.format_exc()})
 
 
 def export_optimization_results_workbook(payload: dict) -> Path:
@@ -1245,10 +1349,14 @@ def result_workbook_error_message(path: Path) -> str:
 
 
 def evaluation_result_path(scheme: str, filename: str) -> Path:
+    return evaluation_result_path_with_store(PLANNING_STORE, scheme, filename)
+
+
+def evaluation_result_path_with_store(store: planning_store.PlanningStore, scheme: str, filename: str) -> Path:
     name = str(filename or "").strip()
     if not RESULT_WORKBOOK_RE.fullmatch(name):
         raise ValueError("结果文件名必须符合 xxxx_results.xlsx")
-    folder = PLANNING_STORE.scheme_dir(scheme)
+    folder = store.scheme_dir(scheme)
     path = (folder / name).resolve()
     if folder not in path.parents or path.parent != folder:
         raise ValueError("结果文件路径越界")
@@ -1256,9 +1364,17 @@ def evaluation_result_path(scheme: str, filename: str) -> Path:
 
 
 def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dict]:
+    return read_evaluation_planning_result_rows_with_store(PLANNING_STORE, scheme, filename)
+
+
+def read_evaluation_planning_result_rows_with_store(
+    store: planning_store.PlanningStore,
+    scheme: str,
+    filename: str,
+) -> list[dict]:
     if not filename:
         return []
-    result_path = evaluation_result_path(scheme, filename)
+    result_path = evaluation_result_path_with_store(store, scheme, filename)
     if not result_path.exists():
         return []
     try:
@@ -1903,6 +2019,10 @@ class OptimizationRuntimeManager:
                 running.append(scheme)
         return running
 
+    def runtimes(self) -> dict[str, OptimizationRuntime]:
+        with self._lock:
+            return dict(self._runtimes)
+
     def _runtime_for_scheme(self, scheme: str = "") -> OptimizationRuntime:
         name = self._scheme_name(scheme)
         with self._lock:
@@ -1930,13 +2050,17 @@ class EvaluationRuntime:
         self._results: dict = {}
         self._logs: list[dict[str, str]] = []
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
+        self._process: multiprocessing.Process | None = None
+        self._event_queue: multiprocessing.Queue | None = None
+        self.process_id: int | None = None
         self._stop_requested = False
         self._run_token = 0
         self._append_log_unlocked("info", "方案评估待启动")
 
     def snapshot(self, include_hourly_curves: bool = True) -> dict:
         with self._lock:
+            self._drain_events_unlocked()
+            self._reap_process_unlocked()
             return self._payload_unlocked(include_hourly_curves=include_hourly_curves)
 
     def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
@@ -1974,16 +2098,19 @@ class EvaluationRuntime:
                 self._metrics = []
                 self._results = {}
                 self._stop_requested = False
+                self._terminate_process_unlocked()
                 self._run_token += 1
                 token = self._run_token
                 self._append_log_unlocked("ok", f"启动方案评估，方案：{self.scheme}，结果：{self.result_filename}")
                 self._append_log_unlocked("info", "后台评估程序已启动")
-                self._thread = threading.Thread(
-                    target=self._run_estimation,
-                    args=(token, target_scheme, target_filename),
+                self._event_queue = multiprocessing.Queue()
+                self._process = multiprocessing.Process(
+                    target=evaluation_process_worker,
+                    args=(self._event_queue, target_scheme, target_filename, str(PLANNING_STORE.root)),
                     daemon=True,
                 )
-                self._thread.start()
+                self._process.start()
+                self.process_id = self._process.pid
                 return self._payload_unlocked()
 
         if action == "stop":
@@ -1991,6 +2118,7 @@ class EvaluationRuntime:
                 if self.status != "运行中" or self.scheme != target_scheme:
                     raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行")
                 self._stop_requested = True
+                self._terminate_process_unlocked()
                 self.status = "已停止"
                 self.end_time = _now_text()
                 self._append_log_unlocked("warn", "停止方案评估")
@@ -1998,53 +2126,68 @@ class EvaluationRuntime:
 
         raise ValueError(f"unknown evaluation action: {action}")
 
-    def _run_estimation(self, token: int, scheme: str, filename: str) -> None:
-        dispatch_rows: list[dict] = []
-        try:
-            self._append_log("info", "读取方案参数和当前规划结果", None, token)
-            scheme_payload = PLANNING_STORE.read_scheme(scheme)
-            planning_rows = read_evaluation_planning_result_rows(scheme, filename)
-            if not planning_rows:
-                raise ValueError("当前结果文件缺少规划结果")
-            result = estimate.run_estimation(
-                scheme_payload,
-                planning_rows,
-                log=lambda event: self._append_estimate_event(event, token),
-            )
-            dispatch_rows = result.get("dispatch_rows") if isinstance(result.get("dispatch_rows"), list) else []
-            with self._lock:
-                if token != self._run_token or self._stop_requested or self.status != "运行中":
-                    return
-                self.progress = 100
-                self._metrics = result.get("metrics") if isinstance(result.get("metrics"), list) else []
-                self._results = result.get("results") if isinstance(result.get("results"), dict) else {}
-                result_path = export_evaluation_results_workbook(self._payload_unlocked(), dispatch_rows)
-                self.result_file = str(result_path)
-                self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
-                self.status = "已完成"
-                self.end_time = _now_text()
-        except Exception as exc:
-            with self._lock:
-                if token != self._run_token:
-                    return
+    def _drain_events_unlocked(self) -> None:
+        if not self._event_queue:
+            return
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if not isinstance(event, dict):
+                continue
+            self._handle_process_event_unlocked(event)
+            if not self._event_queue:
+                break
+        if self.status == "运行中" and self._process and not self._process.is_alive():
+            self._process.join(timeout=0)
+            if self.status == "运行中":
+                exit_code = self._process.exitcode
                 self.status = "失败"
                 self.end_time = _now_text()
-                self._append_log_unlocked("error", f"方案评估失败：{exc}")
+                self._append_log_unlocked("error", f"方案评估进程异常退出，退出码：{exit_code}")
+            self._close_event_queue_unlocked()
 
-    def _append_estimate_event(self, event: dict, token: int) -> None:
+    def _handle_process_event_unlocked(self, event: dict) -> None:
+        event_type = str(event.get("type") or "log")
+        if event_type == "log":
+            self._append_estimate_event_unlocked(event)
+            return
+        if event_type == "done":
+            if self.status != "运行中" or self._stop_requested:
+                return
+            self.progress = 100
+            self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
+            self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
+            dispatch_rows = event.get("dispatch_rows") if isinstance(event.get("dispatch_rows"), list) else []
+            result_path = export_evaluation_results_workbook(self._payload_unlocked(), dispatch_rows)
+            self.result_file = str(result_path)
+            self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
+            self.status = "已完成"
+            self.end_time = _now_text()
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+            return
+        if event_type == "error":
+            if self.status != "运行中":
+                return
+            self.status = "失败"
+            self.end_time = _now_text()
+            self._append_log_unlocked("error", str(event.get("message") or "方案评估失败"))
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+
+    def _append_estimate_event_unlocked(self, event: dict) -> None:
         level = str(event.get("level") or "info")
         message = str(event.get("message") or "")
         progress = event.get("progress")
-        self._append_log(level, message, progress if isinstance(progress, int) else None, token)
-
-    def _append_log(self, level: str, message: str, progress: int | None, token: int) -> None:
-        with self._lock:
-            if token != self._run_token:
-                return
-            if progress is not None:
+        if progress is not None:
+            try:
                 self.progress = max(self.progress, min(100, max(0, int(progress))))
-            if message:
-                self._append_log_unlocked(level, message)
+            except (TypeError, ValueError):
+                pass
+        if message:
+            self._append_log_unlocked(level, message)
 
     def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
         workbook_payload = None
@@ -2064,6 +2207,8 @@ class EvaluationRuntime:
             "progress": self.progress,
             "result_filename": self.result_filename,
             "result_file": self.result_file,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
@@ -2104,6 +2249,35 @@ class EvaluationRuntime:
         if len(self._logs) > 2000:
             del self._logs[:-2000]
 
+    def _terminate_process_unlocked(self) -> None:
+        if self._process and self._process.is_alive():
+            self._process.terminate()
+            self._process.join(timeout=2)
+            if self._process.is_alive():
+                self._process.kill()
+                self._process.join(timeout=2)
+        if self._process and not self._process.is_alive():
+            self._process.join(timeout=0)
+        self._close_event_queue_unlocked()
+
+    def _join_finished_process_unlocked(self) -> None:
+        if self._process and not self._process.is_alive():
+            self._process.join(timeout=0)
+
+    def _reap_process_unlocked(self) -> None:
+        if self._process and self.status != "运行中" and not self._process.is_alive():
+            self._process.join(timeout=0)
+
+    def _close_event_queue_unlocked(self) -> None:
+        if not self._event_queue:
+            return
+        try:
+            self._event_queue.close()
+            self._event_queue.join_thread()
+        except Exception:
+            pass
+        self._event_queue = None
+
 
 class EvaluationRuntimeManager:
     """Holds independent evaluation runtimes for multiple schemes."""
@@ -2132,6 +2306,10 @@ class EvaluationRuntimeManager:
             if runtime.status == "运行中":
                 running.append(key.split("\0", 1)[0])
         return sorted(set(running))
+
+    def runtimes(self) -> dict[str, EvaluationRuntime]:
+        with self._lock:
+            return dict(self._runtimes)
 
     def _runtime_for_result(self, scheme: str = "", filename: str = "") -> EvaluationRuntime:
         scheme_name = self._scheme_name(scheme)
@@ -2166,6 +2344,345 @@ class EvaluationRuntimeManager:
     @staticmethod
     def _scheme_name(scheme: str = "") -> str:
         return str(scheme or "未选择方案").strip() or "未选择方案"
+
+
+class TaskScheduler:
+    """Serial queue for calculation tasks that should wait for existing jobs."""
+
+    def __init__(self) -> None:
+        self._queue: list[dict[str, str]] = []
+        self._lock = threading.Lock()
+
+    def enqueue(self, task_type_key: str, scheme: str, result: str = "") -> dict:
+        item = normalized_task_item(task_type_key, scheme, result)
+        with self._lock:
+            if not any(same_task_item(item, existing) for existing in self._queue):
+                self._queue.append(item)
+            return dict(item)
+
+    def remove(self, task_type_key: str, scheme: str, result: str = "") -> None:
+        item = normalized_task_item(task_type_key, scheme, result)
+        with self._lock:
+            self._queue = [existing for existing in self._queue if not same_task_item(item, existing)]
+
+    def remove_running_or_finished(self) -> None:
+        with self._lock:
+            self._queue = [item for item in self._queue if not is_task_running_or_finished(item)]
+
+    def queued_items(self) -> list[dict[str, str]]:
+        with self._lock:
+            return [dict(item) for item in self._queue]
+
+    def is_queued(self, task_type_key: str, scheme: str, result: str = "") -> bool:
+        item = normalized_task_item(task_type_key, scheme, result)
+        with self._lock:
+            return any(same_task_item(item, existing) for existing in self._queue)
+
+    def queue_position(self, task_type_key: str, scheme: str, result: str = "") -> int:
+        item = normalized_task_item(task_type_key, scheme, result)
+        with self._lock:
+            for index, existing in enumerate(self._queue, start=1):
+                if same_task_item(item, existing):
+                    return index
+        return 0
+
+    def schedule_next_if_idle(self) -> None:
+        with self._lock:
+            if any_calculation_running_unlocked():
+                return
+            while self._queue:
+                item = self._queue.pop(0)
+                try:
+                    start_task_item_unlocked(item)
+                    return
+                except Exception:
+                    continue
+
+
+def normalized_task_item(task_type_key: str, scheme: str, result: str = "") -> dict[str, str]:
+    normalized_type = normalize_task_type_key(task_type_key)
+    normalized_result = str(result or "").strip()
+    if normalized_type == "optimization":
+        normalized_result = OPTIMIZATION_RESULT_WORKBOOK_NAME
+    return {
+        "task_type_key": normalized_type,
+        "scheme": str(scheme or "未选择方案").strip() or "未选择方案",
+        "result": normalized_result,
+    }
+
+
+def same_task_item(left: dict, right: dict) -> bool:
+    return (
+        left.get("task_type_key") == right.get("task_type_key")
+        and left.get("scheme") == right.get("scheme")
+        and (left.get("result") or "") == (right.get("result") or "")
+    )
+
+
+def is_task_running_or_finished(item: dict) -> bool:
+    runtime = runtime_for_task_item(item)
+    return bool(runtime and runtime.status in {"运行中", "已完成"})
+
+
+def runtime_for_task_item(item: dict):
+    task_type_key = item.get("task_type_key")
+    scheme = item.get("scheme", "")
+    result = item.get("result", "")
+    if task_type_key == "optimization":
+        return OPTIMIZATION_RUNTIME.runtimes().get(scheme)
+    if task_type_key == "evaluation":
+        return EVALUATION_RUNTIME.runtimes().get(f"{scheme}\0{result}")
+    return None
+
+
+def any_calculation_running_unlocked() -> bool:
+    return any(runtime.status == "运行中" for runtime in OPTIMIZATION_RUNTIME.runtimes().values()) or any(
+        runtime.status == "运行中" for runtime in EVALUATION_RUNTIME.runtimes().values()
+    )
+
+
+def start_task_item_unlocked(item: dict) -> dict:
+    task_type_key = item.get("task_type_key")
+    if task_type_key == "optimization":
+        return OPTIMIZATION_RUNTIME.apply("start", scheme=item.get("scheme", ""))
+    if task_type_key == "evaluation":
+        return EVALUATION_RUNTIME.apply("start", scheme=item.get("scheme", ""), filename=item.get("result", ""))
+    raise ValueError("任务类型必须为规划计算或方案评估")
+
+
+def build_task_list() -> list[dict]:
+    TASK_SCHEDULER.remove_running_or_finished()
+    TASK_SCHEDULER.schedule_next_if_idle()
+    tasks: dict[str, dict] = {}
+    for scheme_item in safe_list_schemes_for_tasks():
+        scheme = str(scheme_item.get("name") or "").strip()
+        if not scheme:
+            continue
+        runtime = OPTIMIZATION_RUNTIME.runtimes().get(scheme)
+        state = runtime.snapshot(include_hourly_curves=False) if runtime else default_task_runtime_state(scheme)
+        task = task_from_runtime_state(
+            "optimization",
+            state,
+            scheme=scheme,
+            result=OPTIMIZATION_RESULT_WORKBOOK_NAME,
+            queued=TASK_SCHEDULER.is_queued("optimization", scheme, OPTIMIZATION_RESULT_WORKBOOK_NAME),
+            queue_position=TASK_SCHEDULER.queue_position("optimization", scheme, OPTIMIZATION_RESULT_WORKBOOK_NAME),
+        )
+        tasks[task["id"]] = task
+        for result_item in safe_list_results_for_tasks(scheme):
+            result_name = str(result_item.get("name") or "").strip()
+            if not result_name:
+                continue
+            key = f"{scheme}\0{result_name}"
+            eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
+            eval_state = (
+                eval_runtime.snapshot(include_hourly_curves=False)
+                if eval_runtime
+                else default_task_runtime_state(scheme, result_filename=result_name)
+            )
+            eval_task = task_from_runtime_state(
+                "evaluation",
+                eval_state,
+                scheme=scheme,
+                result=result_name,
+                queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
+                queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
+            )
+            eval_task["can_start"] = bool(result_item.get("readable", True)) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME
+            eval_task["can_queue"] = eval_task["can_start"] and not eval_task["queued"]
+            tasks[eval_task["id"]] = eval_task
+
+    for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
+        state = runtime.snapshot(include_hourly_curves=False)
+        task = task_from_runtime_state(
+            "optimization",
+            state,
+            scheme=scheme,
+            result=OPTIMIZATION_RESULT_WORKBOOK_NAME,
+            queued=TASK_SCHEDULER.is_queued("optimization", scheme, OPTIMIZATION_RESULT_WORKBOOK_NAME),
+            queue_position=TASK_SCHEDULER.queue_position("optimization", scheme, OPTIMIZATION_RESULT_WORKBOOK_NAME),
+        )
+        tasks[task["id"]] = task
+
+    for key, runtime in EVALUATION_RUNTIME.runtimes().items():
+        scheme, result = split_evaluation_runtime_key(key)
+        state = runtime.snapshot(include_hourly_curves=False)
+        task = task_from_runtime_state(
+            "evaluation",
+            state,
+            scheme=scheme,
+            result=result,
+            queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result),
+            queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result),
+        )
+        tasks[task["id"]] = task
+
+    return sorted(tasks.values(), key=lambda item: (item["task_type_key"], item["scheme"], item["result"]))
+
+
+def safe_list_schemes_for_tasks() -> list[dict]:
+    try:
+        return PLANNING_STORE.list_schemes()
+    except Exception:
+        return []
+
+
+def safe_list_results_for_tasks(scheme: str) -> list[dict]:
+    try:
+        return list_evaluation_result_files(scheme)
+    except Exception:
+        return []
+
+
+def split_evaluation_runtime_key(key: str) -> tuple[str, str]:
+    if "\0" in key:
+        scheme, result = key.split("\0", 1)
+        return scheme, result
+    return key, ""
+
+
+def default_task_runtime_state(scheme: str, result_filename: str = "") -> dict:
+    return {
+        "status": "待启动",
+        "scheme": scheme,
+        "result_filename": result_filename,
+        "start_time": "",
+        "end_time": "",
+        "process_id": "",
+        "elapsed_seconds": 0,
+        "logs": [],
+    }
+
+
+def task_from_runtime_state(
+    task_type_key: str,
+    state: dict,
+    scheme: str,
+    result: str = "",
+    queued: bool = False,
+    queue_position: int = 0,
+) -> dict:
+    runtime_status = str(state.get("status") or "待启动")
+    normalized_result = result or str(state.get("result_filename") or "") or OPTIMIZATION_RESULT_WORKBOOK_NAME
+    latest_log = latest_log_message(state.get("logs"))
+    display_status = task_display_status(runtime_status, queued)
+    process_id = state.get("process_id") or ""
+    if isinstance(process_id, str) and process_id.isdigit():
+        process_id = int(process_id)
+    task_type = "规划计算" if task_type_key == "optimization" else "方案评估"
+    task_id = f"{task_type_key}::{scheme}::{normalized_result}"
+    return {
+        "id": task_id,
+        "task_key": task_id,
+        "task_type": task_type,
+        "task_type_key": task_type_key,
+        "scheme": scheme,
+        "result": normalized_result,
+        "status": display_status,
+        "runtime_status": runtime_status,
+        "queued": bool(queued),
+        "queue_position": int(queue_position or 0),
+        "process_id": process_id,
+        "start_time": state.get("start_time") or "",
+        "elapsed_seconds": int(state.get("elapsed_seconds") or elapsed_seconds_from_times(state.get("start_time", ""), state.get("end_time", ""))),
+        "latest_log": latest_log,
+        "can_start": runtime_status != "运行中",
+        "can_queue": runtime_status != "运行中" and not queued,
+        "can_stop": runtime_status == "运行中",
+    }
+
+
+def task_display_status(runtime_status: str, queued: bool = False) -> str:
+    if runtime_status == "运行中":
+        return "计算中"
+    if queued:
+        return "排队中"
+    if runtime_status == "已完成":
+        return "完成计算"
+    return "未计算"
+
+
+def latest_log_message(logs: object) -> str:
+    if not isinstance(logs, list) or not logs:
+        return ""
+    for item in reversed(logs):
+        if isinstance(item, dict) and item.get("message"):
+            return str(item.get("message"))
+    return ""
+
+
+def build_task_control_response(action: str, task_type: str, scheme: str, result: str = "") -> dict:
+    task_type_key = normalize_task_type_key(task_type)
+    normalized_action = normalize_task_action(action)
+    if normalized_action == "queue":
+        item = TASK_SCHEDULER.enqueue(task_type_key, scheme, result)
+        tasks = build_task_list()
+        task = find_task_in_list(tasks, item)
+        return {"ok": True, "task": task, "tasks": tasks}
+    if task_type_key == "optimization":
+        TASK_SCHEDULER.remove(task_type_key, scheme, result)
+        state = OPTIMIZATION_RUNTIME.apply(normalized_action, scheme=scheme)
+        task = task_from_runtime_state("optimization", state, scheme=state.get("scheme") or scheme, result=OPTIMIZATION_RESULT_WORKBOOK_NAME)
+        tasks = build_task_list()
+        return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
+    if task_type_key == "evaluation":
+        TASK_SCHEDULER.remove(task_type_key, scheme, result)
+        state = EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
+        task = task_from_runtime_state(
+            "evaluation",
+            state,
+            scheme=state.get("scheme") or scheme,
+            result=state.get("result_filename") or result,
+        )
+        tasks = build_task_list()
+        return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
+    raise ValueError("任务类型必须为规划计算或方案评估")
+
+
+def normalize_task_action(action: str) -> str:
+    text = str(action or "").strip().lower()
+    if text in {"start", "start_now", "immediate", "run", "立刻启动"}:
+        return "start"
+    if text in {"queue", "enqueue", "排队", "加入排队"}:
+        return "queue"
+    if text in {"stop", "停止"}:
+        return "stop"
+    return text
+
+
+def find_task_in_list(tasks: list[dict], item: dict) -> dict:
+    for task in tasks:
+        if (
+            task.get("task_type_key") == item.get("task_type_key")
+            and task.get("scheme") == item.get("scheme")
+            and (task.get("result") or "") == (item.get("result") or "")
+        ):
+            return task
+    return task_from_runtime_state(
+        item.get("task_type_key", ""),
+        default_task_runtime_state(item.get("scheme", ""), item.get("result", "")),
+        scheme=item.get("scheme", ""),
+        result=item.get("result", ""),
+        queued=True,
+        queue_position=TASK_SCHEDULER.queue_position(item.get("task_type_key", ""), item.get("scheme", ""), item.get("result", "")),
+    )
+
+
+def task_from_list_or_default(tasks: list[dict], fallback: dict) -> dict:
+    item = {"task_type_key": fallback.get("task_type_key"), "scheme": fallback.get("scheme"), "result": fallback.get("result")}
+    for task in tasks:
+        if same_task_item(item, task):
+            return task
+    return fallback
+
+
+def normalize_task_type_key(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"optimization", "opt", "规划计算", "规划求解"}:
+        return "optimization"
+    if text in {"evaluation", "eval", "方案评估"}:
+        return "evaluation"
+    return ""
 
 
 class CsvDataSource:
@@ -2489,6 +3006,7 @@ def _load_initial_simu_runtime() -> SimuRuntime:
 SIMU_RUNTIME = _load_initial_simu_runtime()
 OPTIMIZATION_RUNTIME = OptimizationRuntimeManager()
 EVALUATION_RUNTIME = EvaluationRuntimeManager()
+TASK_SCHEDULER = TaskScheduler()
 DATA_SOURCE = CsvDataSource()
 PLANNING_STORE = planning_store.PlanningStore()
 USER_STORE = UserStore()
@@ -3766,6 +4284,8 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
         query = parsed_api_path.query
         path = parsed_api_path.path
     query_params = parse_qs(query)
+    if path == "/api/tasks":
+        return _json_response({"tasks": build_task_list()})
     if path.startswith("/api/planning/"):
         return handle_planning_api_path(path, "GET", b"")
     if path.startswith("/api/comparison/"):
@@ -3819,6 +4339,21 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
         return _json_response({"ok": True, "state": state})
+    if path == "/api/tasks/control":
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            action = str(payload.get("action", ""))
+            task_type = str(payload.get("task_type") or payload.get("task_type_key") or "")
+            scheme = str(payload.get("scheme", ""))
+            result = str(payload.get("result") or payload.get("filename") or "")
+            response = build_task_control_response(action, task_type, scheme, result)
+        except OptimizationStateError as exc:
+            return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return _json_response(response)
     return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
 
 

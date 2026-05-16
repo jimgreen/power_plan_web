@@ -381,6 +381,114 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.tasks-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tasks-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.tasks-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+
+.tasks-toolbar h1 {
+  margin: 0 0 6px;
+  font-size: 22px;
+}
+
+.tasks-toolbar p {
+  margin: 0;
+  color: #6c817d;
+  font-weight: 700;
+}
+
+.task-table {
+  max-height: none;
+}
+
+.task-table table {
+  width: 100%;
+  min-width: 1120px;
+}
+
+.task-log-cell {
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-actions {
+  display: inline-flex;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.task-actions button {
+  padding: 8px 10px;
+}
+
+.task-actions button:not(.primary):not(.danger) {
+  border: 1px solid rgba(21, 211, 255, 0.48);
+  border-radius: 8px;
+  background: #edf4f2;
+  color: #24413d;
+  font-weight: 800;
+}
+
+.task-status-pill {
+  display: inline-flex;
+  min-width: 54px;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-weight: 900;
+}
+
+.task-status-pill.running {
+  background: rgba(13, 92, 89, 0.14);
+  color: #0d5c59;
+}
+
+.task-status-pill.queued {
+  background: rgba(216, 163, 26, 0.16);
+  color: #8a650d;
+}
+
+.task-status-pill.completed {
+  background: rgba(42, 157, 143, 0.16);
+  color: #17786d;
+}
+
+.task-status-pill.idle {
+  background: rgba(108, 129, 125, 0.16);
+  color: #536763;
+}
+
+.task-status-pill em {
+  margin-left: 4px;
+  font-style: normal;
+  opacity: 0.78;
+}
+
+.task-empty {
+  padding: 28px;
+  color: #6c817d;
+  font-weight: 800;
+}
+
 .comparison-panel {
   min-width: 0;
   min-height: 0;
@@ -3361,7 +3469,8 @@ body {
 .time-series-import-toolbar button,
 .map-picker-head button,
 .coordinate-search-row button,
-.map-picker-foot button {
+.map-picker-foot button,
+.task-actions button:not(.primary):not(.danger) {
   border: 1px solid rgba(21, 211, 255, 0.48);
   border-radius: 8px;
   background: linear-gradient(180deg, rgba(5, 34, 70, 0.72), rgba(4, 19, 42, 0.62));
@@ -3442,6 +3551,7 @@ body {
 .comparison-table-card,
 .comparison-curve-board,
 .comparison-curve-stats section,
+.tasks-panel,
 .chart-card,
 .table-card,
 .device-card,
@@ -3504,6 +3614,8 @@ h2,
 .overview-item span,
 .histogram-head span,
 .histogram-meta,
+.tasks-toolbar p,
+.task-empty,
 .composition-bar-summary,
 .composition-bar-legend,
 .status-tile span,
@@ -3518,10 +3630,34 @@ h2,
 .weather-import-status.ok,
 .status-ok,
 .status-tile strong,
+.task-status-pill.running,
 .overview-item strong,
 .composition-bar-summary strong,
 .composition-bar-legend strong {
   color: var(--hud-cyan);
+}
+
+.task-status-pill.running {
+  border: 1px solid rgba(96, 255, 185, 0.42);
+  background: rgba(21, 144, 109, 0.24);
+}
+
+.task-status-pill.queued {
+  border: 1px solid rgba(255, 210, 95, 0.44);
+  background: rgba(150, 102, 20, 0.22);
+  color: #ffe3a3;
+}
+
+.task-status-pill.completed {
+  border: 1px solid rgba(96, 255, 185, 0.42);
+  background: rgba(21, 144, 109, 0.2);
+  color: #a5ffd3;
+}
+
+.task-status-pill.idle {
+  border: 1px solid rgba(189, 234, 255, 0.24);
+  background: rgba(104, 128, 152, 0.18);
+  color: rgba(189, 234, 255, 0.76);
 }
 
 .scheme-item,
@@ -3603,6 +3739,7 @@ h2,
 }
 
 .data-table,
+.task-table,
 .comparison-table,
 .annual-stat-table,
 .optimization-overview-table,
