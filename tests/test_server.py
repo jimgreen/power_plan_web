@@ -521,6 +521,80 @@ class PowerPlanServerTest(unittest.TestCase):
         finally:
             server.OPTIMIZATION_RUNTIME = original_runtime
 
+    def test_optimization_start_rejects_fast_infeasible_planning_bounds_before_solving(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_optimization_fast_infeasible"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.OPTIMIZATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+
+        def write_and_start(payload: dict) -> tuple[int, dict]:
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            status, headers, body = server.handle_control_path(
+                "/api/optimization/control",
+                json.dumps({"action": "start", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),
+            )
+            return status, json.loads(body.decode("utf-8"))
+
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0.2
+            payload["wind_turbines"][0]["quantity_upper"] = 0
+            payload["photovoltaics"][0]["quantity_upper"] = 0
+            status, data = write_and_start(payload)
+            self.assertEqual(status, 400)
+            self.assertIn("风机数量上限和光伏数量上限均为0", data["message"])
+            self.assertIn("绿色电量占比下限大于0", data["message"])
+
+            for row in payload["time_series"]:
+                row["wind_speed"] = 0
+                row["solar_irradiance"] = 0
+                row["load"] = 100
+            payload["wind_turbines"][0]["quantity_upper"] = 1
+            payload["photovoltaics"][0]["quantity_upper"] = 1
+            status, data = write_and_start(payload)
+            self.assertEqual(status, 400)
+            self.assertIn("风机和光伏最大可发电量", data["message"])
+            self.assertIn("低于绿色电量占比要求", data["message"])
+
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
+            payload["diesel_generators"][0].update({"quantity_upper": 1, "power_upper": 20})
+            payload["wind_turbines"][0]["quantity_upper"] = 0
+            payload["photovoltaics"][0]["quantity_upper"] = 0
+            payload["time_series"][0]["load"] = 100
+            status, data = write_and_start(payload)
+            self.assertEqual(status, 400)
+            self.assertIn("第1小时", data["message"])
+            self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
+
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
+            payload["diesel_generators"][0]["power_upper"] = 100
+            payload["hydrogen_tanks"][0].update({"quantity_lower": 1, "quantity_upper": 1, "self_discharge_rate": 0.001})
+            payload["hydrogen_electrolyzers"][0]["quantity_upper"] = 0
+            status, data = write_and_start(payload)
+            self.assertEqual(status, 400)
+            self.assertIn("储氢罐数量下限大于0", data["message"])
+            self.assertIn("电制氢数量上限为0", data["message"])
+            self.assertIn("自损耗无法补偿", data["message"])
+
+            payload["hydrogen_tanks"][0]["self_discharge_rate"] = 0
+            payload["storage_battery_packs"][0].update({"quantity_lower": 1, "quantity_upper": 1, "self_discharge_rate": 0.01})
+            payload["storage_pcs"][0]["quantity_upper"] = 0
+            status, data = write_and_start(payload)
+            self.assertEqual(status, 400)
+            self.assertIn("储能电池数量下限大于0", data["message"])
+            self.assertIn("储能PCS数量上限为0", data["message"])
+            self.assertIn("自损耗无法补偿", data["message"])
+        finally:
+            for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme)
+            server.PLANNING_STORE = original_store
+            server.OPTIMIZATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
     def test_tasks_api_lists_and_controls_optimization_and_evaluation_jobs(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
         original_evaluation_runtime = server.EVALUATION_RUNTIME
@@ -537,6 +611,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 row["wind_speed"] = 7
                 row["solar_irradiance"] = 500
                 row["load"] = 80
+            payload["diesel_generators"][0]["quantity_upper"] = 2
             server.PLANNING_STORE.write_scheme("方案A", payload)
             workbook = Workbook()
             sheet = workbook.active
@@ -1337,6 +1412,146 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(stopped["state"]["status"], "已停止")
         finally:
+            server.PLANNING_STORE = original_store
+            server.EVALUATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_evaluation_start_rejects_fast_infeasible_fixed_results_before_solving(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_fast_infeasible"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.EVALUATION_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+
+        def write_result(filename: str, rows: list[list[object]]) -> None:
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "规划结果"
+            sheet.append(["设备类型", "名称", "设计台数", "单台容量", "总容量", "单位"])
+            for row in rows:
+                sheet.append(row)
+            workbook.save(planning_root / "方案A" / filename)
+            workbook.close()
+
+        def start_result(filename: str) -> tuple[int, dict]:
+            status, headers, body = server.handle_control_path(
+                "/api/evaluation/control",
+                json.dumps(
+                    {"action": "start", "scheme": "方案A", "filename": filename},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            return status, json.loads(body.decode("utf-8"))
+
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            for row in payload["time_series"]:
+                row["wind_speed"] = 7
+                row["solar_irradiance"] = 500
+                row["load"] = 80
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
+            payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
+            payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.5
+            payload["storage_battery_packs"][0]["battery_capacity"] = 200
+            payload["storage_battery_packs"][0]["self_discharge_rate"] = 0.01
+            payload["storage_pcs"][0]["power_capacity"] = 50
+            payload["hydrogen_tanks"][0]["hydrogen_tank_capacity"] = 1000
+            payload["hydrogen_tanks"][0]["self_discharge_rate"] = 0.001
+            payload["hydrogen_electrolyzers"][0]["power_capacity"] = 80
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+
+            write_result(
+                "hydrogen_no_makeup_results.xlsx",
+                [
+                    ["柴发", "柴发1", 2, 100, 200, "kW"],
+                    ["风机", "风机1", 1, 100, 100, "kW"],
+                    ["光伏", "光伏1", 1, 100, 100, "kW"],
+                    ["电制氢", "电制氢1", 0, 80, 0, "kW"],
+                    ["储氢罐", "储氢罐1", 1, 1000, 1000, "Nm3"],
+                    ["燃料电池", "燃料电池1", 0, 50, 0, "kW"],
+                ],
+            )
+            status, data = start_result("hydrogen_no_makeup_results.xlsx")
+            self.assertEqual(status, 400)
+            self.assertEqual(data["error"], "bad_request")
+            self.assertIn("储氢罐", data["message"])
+            self.assertIn("电制氢", data["message"])
+            self.assertIn("自损耗无法补偿", data["message"])
+
+            write_result(
+                "green_ratio_without_renewables_results.xlsx",
+                [
+                    ["柴发", "柴发1", 2, 100, 200, "kW"],
+                    ["风机", "风机1", 0, 100, 0, "kW"],
+                    ["光伏", "光伏1", 0, 100, 0, "kW"],
+                ],
+            )
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0.2
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            status, data = start_result("green_ratio_without_renewables_results.xlsx")
+            self.assertEqual(status, 400)
+            self.assertIn("风机和光伏设计台数均为0", data["message"])
+            self.assertIn("绿色电量占比下限大于0", data["message"])
+
+            for row in payload["time_series"]:
+                row["wind_speed"] = 0
+                row["solar_irradiance"] = 0
+                row["load"] = 80
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            write_result(
+                "green_ratio_insufficient_renewables_results.xlsx",
+                [
+                    ["柴发", "柴发1", 2, 100, 200, "kW"],
+                    ["风机", "风机1", 1, 100, 100, "kW"],
+                    ["光伏", "光伏1", 1, 100, 100, "kW"],
+                ],
+            )
+            status, data = start_result("green_ratio_insufficient_renewables_results.xlsx")
+            self.assertEqual(status, 400)
+            self.assertIn("风机和光伏最大可发电量", data["message"])
+            self.assertIn("低于绿色电量占比要求", data["message"])
+
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
+            payload["diesel_generators"][0]["power_upper"] = 20
+            payload["time_series"][0]["load"] = 100
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            write_result(
+                "supply_shortage_results.xlsx",
+                [
+                    ["柴发", "柴发1", 1, 100, 100, "kW"],
+                    ["风机", "风机1", 0, 100, 0, "kW"],
+                    ["光伏", "光伏1", 0, 100, 0, "kW"],
+                ],
+            )
+            status, data = start_result("supply_shortage_results.xlsx")
+            self.assertEqual(status, 400)
+            self.assertIn("第1小时", data["message"])
+            self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
+
+            write_result(
+                "battery_no_pcs_results.xlsx",
+                [
+                    ["柴发", "柴发1", 2, 100, 200, "kW"],
+                    ["风机", "风机1", 1, 100, 100, "kW"],
+                    ["光伏", "光伏1", 1, 100, 100, "kW"],
+                    ["储能PCS", "储能PCS1", 0, 50, 0, "kW"],
+                    ["储能电池组", "储能电池组1", 1, 200, 200, "kWh"],
+                ],
+            )
+            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
+            payload["diesel_generators"][0]["power_upper"] = 100
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+            status, data = start_result("battery_no_pcs_results.xlsx")
+            self.assertEqual(status, 400)
+            self.assertIn("储能电池", data["message"])
+            self.assertIn("储能PCS", data["message"])
+            self.assertIn("自损耗无法补偿", data["message"])
+        finally:
+            for runtime in server.EVALUATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme, filename=runtime.result_filename)
             server.PLANNING_STORE = original_store
             server.EVALUATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
