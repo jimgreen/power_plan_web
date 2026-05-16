@@ -595,6 +595,16 @@ class PowerPlanServerTest(unittest.TestCase):
             server.OPTIMIZATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
+    def test_fast_feasibility_prechecks_are_shared_outside_server(self):
+        server_source = (WEB_ROOT / "server.py").read_text(encoding="utf-8")
+        precheck_source = (WEB_ROOT / "calculation_precheck.py").read_text(encoding="utf-8")
+
+        self.assertIn("import calculation_precheck", server_source)
+        self.assertNotIn("def validate_optimization_fast_feasibility", server_source)
+        self.assertNotIn("def validate_evaluation_fast_feasibility", server_source)
+        self.assertIn("def validate_optimization_fast_feasibility", precheck_source)
+        self.assertIn("def validate_evaluation_fast_feasibility", precheck_source)
+
     def test_tasks_api_lists_and_controls_optimization_and_evaluation_jobs(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
         original_evaluation_runtime = server.EVALUATION_RUNTIME
