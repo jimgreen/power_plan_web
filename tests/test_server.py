@@ -2828,7 +2828,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("年度统计", html)
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
-        self.assertIn("assets/comparison.js", html)
+        self.assertIn("assets/comparison.js?v=20260516-tabs4", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
