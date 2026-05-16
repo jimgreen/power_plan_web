@@ -141,6 +141,8 @@ RESULT_WORKBOOK_HEADER_TO_FIELD.update(
         "月份": "month",
     }
 )
+STATIC_NO_STORE_SUFFIXES = {".html", ".css", ".js", ".png", ".svg", ".ico", ".map"}
+NO_STORE_CACHE_CONTROL = "no-store, no-cache, max-age=0, must-revalidate"
 RESULT_WORKBOOK_READ_ERRORS = (BadZipFile, zlib.error, OSError, EOFError, KeyError, InvalidFileException)
 TIME_SERIES_IMPORT_ROW_COUNT = 8760
 TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
@@ -2002,6 +2004,7 @@ class OptimizationRuntimeManager:
         runtime = self._runtime_for_scheme(scheme)
         payload = runtime.snapshot(include_hourly_curves=include_hourly_curves)
         payload["running_schemes"] = self.running_schemes()
+        append_task_control_state(payload, "optimization", self._scheme_name(scheme), OPTIMIZATION_RESULT_WORKBOOK_NAME)
         return payload
 
     def apply(self, action: str, scheme: str = "") -> dict:
@@ -2290,6 +2293,12 @@ class EvaluationRuntimeManager:
         runtime = self._runtime_for_result(scheme, filename)
         payload = runtime.snapshot(include_hourly_curves=include_hourly_curves)
         payload["running_schemes"] = self.running_schemes()
+        append_task_control_state(
+            payload,
+            "evaluation",
+            self._scheme_name(scheme),
+            payload.get("result_filename") or self._result_filename(self._scheme_name(scheme), filename),
+        )
         return payload
 
     def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
@@ -2488,8 +2497,9 @@ def build_task_list() -> list[dict]:
                 queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
                 queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
             )
-            eval_task["can_start"] = bool(result_item.get("readable", True)) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME
-            eval_task["can_queue"] = eval_task["can_start"] and not eval_task["queued"]
+            can_use_result = bool(result_item.get("readable", True)) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME
+            eval_task["can_start"] = eval_task["can_start"] and can_use_result
+            eval_task["can_queue"] = eval_task["can_queue"] and can_use_result
             tasks[eval_task["id"]] = eval_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
@@ -2517,7 +2527,12 @@ def build_task_list() -> list[dict]:
         )
         tasks[task["id"]] = task
 
-    return sorted(tasks.values(), key=lambda item: (item["task_type_key"], item["scheme"], item["result"]))
+    return sorted(tasks.values(), key=task_sort_key)
+
+
+def task_sort_key(item: dict) -> tuple[int, str, str]:
+    type_rank = 0 if item.get("task_type_key") == "optimization" else 1
+    return type_rank, str(item.get("scheme") or ""), str(item.get("result") or "")
 
 
 def safe_list_schemes_for_tasks() -> list[dict]:
@@ -2584,6 +2599,7 @@ def task_from_runtime_state(
         "queue_position": int(queue_position or 0),
         "process_id": process_id,
         "start_time": state.get("start_time") or "",
+        "end_time": state.get("end_time") or "",
         "elapsed_seconds": int(state.get("elapsed_seconds") or elapsed_seconds_from_times(state.get("start_time", ""), state.get("end_time", ""))),
         "latest_log": latest_log,
         "can_start": runtime_status != "运行中",
@@ -2614,6 +2630,12 @@ def latest_log_message(logs: object) -> str:
 def build_task_control_response(action: str, task_type: str, scheme: str, result: str = "") -> dict:
     task_type_key = normalize_task_type_key(task_type)
     normalized_action = normalize_task_action(action)
+    if normalized_action == "cancel_queue":
+        item = normalized_task_item(task_type_key, scheme, result)
+        TASK_SCHEDULER.remove(task_type_key, scheme, result)
+        tasks = build_task_list()
+        task = find_task_in_list(tasks, item, queued=False)
+        return {"ok": True, "task": task, "tasks": tasks}
     if normalized_action == "queue":
         item = TASK_SCHEDULER.enqueue(task_type_key, scheme, result)
         tasks = build_task_list()
@@ -2645,12 +2667,14 @@ def normalize_task_action(action: str) -> str:
         return "start"
     if text in {"queue", "enqueue", "排队", "加入排队"}:
         return "queue"
-    if text in {"stop", "停止"}:
+    if text in {"cancel_queue", "dequeue", "remove_queue", "取消排队", "移出队列", "退出队列"}:
+        return "cancel_queue"
+    if text in {"stop", "停止", "停止计算"}:
         return "stop"
     return text
 
 
-def find_task_in_list(tasks: list[dict], item: dict) -> dict:
+def find_task_in_list(tasks: list[dict], item: dict, queued: bool = True) -> dict:
     for task in tasks:
         if (
             task.get("task_type_key") == item.get("task_type_key")
@@ -2663,7 +2687,7 @@ def find_task_in_list(tasks: list[dict], item: dict) -> dict:
         default_task_runtime_state(item.get("scheme", ""), item.get("result", "")),
         scheme=item.get("scheme", ""),
         result=item.get("result", ""),
-        queued=True,
+        queued=queued,
         queue_position=TASK_SCHEDULER.queue_position(item.get("task_type_key", ""), item.get("scheme", ""), item.get("result", "")),
     )
 
@@ -2674,6 +2698,60 @@ def task_from_list_or_default(tasks: list[dict], fallback: dict) -> dict:
         if same_task_item(item, task):
             return task
     return fallback
+
+
+def task_control_state_for_item(task_type_key: str, scheme: str, result: str = "", state: dict | None = None) -> dict:
+    """Return the task scheduler view used by business pages and the task page."""
+    item = normalized_task_item(task_type_key, scheme, result)
+    queued = TASK_SCHEDULER.is_queued(item["task_type_key"], item["scheme"], item["result"])
+    queue_position = TASK_SCHEDULER.queue_position(item["task_type_key"], item["scheme"], item["result"])
+    task = task_from_runtime_state(
+        item["task_type_key"],
+        state or default_task_runtime_state(item["scheme"], item["result"]),
+        scheme=item["scheme"],
+        result=item["result"],
+        queued=queued,
+        queue_position=queue_position,
+    )
+    if queued:
+        task["can_queue"] = False
+    if item["task_type_key"] == "evaluation":
+        task["can_start"] = task["can_start"] and bool(item["result"]) and item["result"] != OPTIMIZATION_RESULT_WORKBOOK_NAME
+        task["can_queue"] = task["can_queue"] and bool(item["result"]) and item["result"] != OPTIMIZATION_RESULT_WORKBOOK_NAME
+    return task
+
+
+def append_task_control_state(payload: dict, task_type_key: str, scheme: str, result: str = "") -> dict:
+    task = task_control_state_for_item(task_type_key, scheme, result, payload)
+    payload.update(
+        {
+            "task_status": task["status"],
+            "task_runtime_status": task["runtime_status"],
+            "task_type_key": task["task_type_key"],
+            "task_key": task["task_key"],
+            "task_result": task["result"],
+            "queued": task["queued"],
+            "queue_position": task["queue_position"],
+            "can_start_task": task["can_start"],
+            "can_queue_task": task["can_queue"],
+            "can_stop_task": task["can_stop"],
+            "can_cancel_queue_task": bool(task["queued"]),
+        }
+    )
+    replace_metric_value(payload, "当前状态", task["status"])
+    return payload
+
+
+def replace_metric_value(payload: dict, label: str, value: object, unit: str = "") -> None:
+    metrics = payload.get("metrics")
+    if not isinstance(metrics, list):
+        return
+    for metric in metrics:
+        if isinstance(metric, dict) and metric.get("label") == label:
+            metric["value"] = value
+            metric["unit"] = unit
+            return
+    metrics.insert(0, {"label": label, "value": value, "unit": unit})
 
 
 def normalize_task_type_key(value: str) -> str:
@@ -3026,6 +3104,29 @@ def _json_response(payload: dict, status: int = 200, extra_headers: dict[str, st
     if extra_headers:
         headers.update(extra_headers)
     return status, headers, body
+
+
+def _no_store_headers(*, vary_cookie: bool = False) -> dict[str, str]:
+    headers = {
+        "Cache-Control": NO_STORE_CACHE_CONTROL,
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+    if vary_cookie:
+        headers["Vary"] = "Cookie"
+    return headers
+
+
+def _static_headers(path: Path, *, authenticated_html: bool = False) -> dict[str, str]:
+    content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+    if path.suffix.lower() in STATIC_NO_STORE_SUFFIXES:
+        headers = {"Content-Type": content_type}
+        headers.update(_no_store_headers(vary_cookie=authenticated_html or path.suffix.lower() == ".html"))
+        return headers
+    return {
+        "Content-Type": content_type,
+        "Cache-Control": "public, max-age=3600",
+    }
 
 
 def _read_json_body(body: bytes) -> dict:
@@ -4362,7 +4463,12 @@ def _unauthorized_response() -> tuple[int, dict[str, str], bytes]:
 
 
 def _redirect_response(location: str) -> tuple[int, dict[str, str], bytes]:
-    return HTTPStatus.FOUND, {"Location": location, "Content-Type": "text/plain; charset=utf-8"}, b""
+    headers = {
+        "Location": location,
+        "Content-Type": "text/plain; charset=utf-8",
+    }
+    headers.update(_no_store_headers(vary_cookie=True))
+    return HTTPStatus.FOUND, headers, b""
 
 
 def safe_api_call(handler) -> tuple[int, dict[str, str], bytes]:
@@ -4442,12 +4548,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 self._send(*_redirect_response("/index.html"))
                 return
 
-        content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-        no_cache_suffixes = {".html", ".css", ".js", ".png"}
-        headers = {
-            "Content-Type": content_type,
-            "Cache-Control": "no-cache" if path.suffix in no_cache_suffixes else "public, max-age=3600",
-        }
+        headers = _static_headers(path, authenticated_html=path.suffix == ".html")
         self._send(HTTPStatus.OK, headers, path.read_bytes())
 
     def do_POST(self) -> None:

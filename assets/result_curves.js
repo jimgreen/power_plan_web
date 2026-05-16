@@ -70,11 +70,11 @@
         .join("")}</ul>`;
       bindGroupTabs(target);
       target.querySelectorAll("[data-result-curve-name]").forEach((item) => {
-        item.addEventListener("click", () => toggleCurve(item.dataset.resultCurveName || ""));
+        item.addEventListener("click", (event) => toggleCurve(item.dataset.resultCurveName || "", { multi: event.shiftKey }));
         item.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            toggleCurve(item.dataset.resultCurveName || "");
+            toggleCurve(item.dataset.resultCurveName || "", { multi: event.shiftKey });
           }
         });
       });
@@ -97,12 +97,17 @@
       });
     }
 
-    function toggleCurve(name) {
+    function toggleCurve(name, options = {}) {
       if (!name || state.activeGroup === "annual") return;
+      const multi = Boolean(options.multi);
       const selected = selectedCurveNames();
-      state.selectedCurvesByGroup[state.activeGroup] = selected.includes(name)
-        ? selected.filter((item) => item !== name)
-        : [...selected, name];
+      if (!multi) {
+        state.selectedCurvesByGroup[state.activeGroup] = selected.length === 1 && selected[0] === name ? [name] : [name];
+      } else {
+        state.selectedCurvesByGroup[state.activeGroup] = selected.includes(name)
+          ? selected.filter((item) => item !== name)
+          : [...selected, name];
+      }
       render();
     }
 

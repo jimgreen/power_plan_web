@@ -199,7 +199,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("assets/tasks.js", tasks_html)
         self.assertIn('<a class="active" href="tasks.html">任务并发</a>', tasks_html)
         self.assertIn(">刷新状态</button>", tasks_html)
-        self.assertIn('id="taskTable"', tasks_html)
+        self.assertIn('id="optimizationTaskTable"', tasks_html)
+        self.assertIn('id="evaluationTaskTable"', tasks_html)
+        self.assertIn('id="taskTableResizeHandle"', tasks_html)
         self.assertIn('id="refreshTasks"', tasks_html)
         self.assertIn("assets/i18n.js", login_html)
         self.assertIn("assets/i18n.js", register_html)
@@ -211,6 +213,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Result Comparison", i18n_script)
         self.assertIn("Task Concurrency", i18n_script)
         self.assertIn("Refresh Status", i18n_script)
+        self.assertIn("Calculation End Time", i18n_script)
         self.assertIn("Start Now", i18n_script)
         self.assertIn("Queued", i18n_script)
         self.assertIn("Calculating", i18n_script)
@@ -321,7 +324,8 @@ class PowerPlanServerTest(unittest.TestCase):
         original_store = server.USER_STORE
         db_path = WEB_ROOT / "tests" / "tmp_auth_api.sqlite3"
         db_path.unlink(missing_ok=True)
-        server.USER_STORE = server.UserStore(db_path)
+        temp_store = server.UserStore(db_path)
+        server.USER_STORE = temp_store
         try:
             status, headers, body = server.handle_auth_api_path(
                 "/api/auth/register",
@@ -346,6 +350,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 403)
         finally:
             server.USER_STORE = original_store
+            del temp_store
             db_path.unlink(missing_ok=True)
 
     def test_optimization_runtime_can_clear_logs(self):
@@ -552,8 +557,10 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("tasks", task_list)
             self.assertTrue(any(item["task_type"] == "规划计算" and item["scheme"] == "方案A" for item in task_list["tasks"]))
             self.assertTrue(any(item["task_type"] == "方案评估" and item["result"] == "case_results.xlsx" for item in task_list["tasks"]))
+            type_order = [item["task_type_key"] for item in task_list["tasks"]]
+            self.assertEqual(type_order, sorted(type_order, key=lambda value: 0 if value == "optimization" else 1))
             for task in task_list["tasks"]:
-                for key in ("id", "task_key", "task_type", "scheme", "result", "status", "process_id", "start_time", "elapsed_seconds", "latest_log", "can_start", "can_stop"):
+                for key in ("id", "task_key", "task_type", "scheme", "result", "status", "process_id", "start_time", "end_time", "elapsed_seconds", "latest_log", "can_start", "can_stop"):
                     self.assertIn(key, task)
 
             status, headers, body = server.handle_control_path(
@@ -582,6 +589,102 @@ class PowerPlanServerTest(unittest.TestCase):
             server.EVALUATION_RUNTIME = original_evaluation_runtime
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_status_apis_include_task_control_state_for_page_sync(self):
+        original_optimization_runtime = server.OPTIMIZATION_RUNTIME
+        original_evaluation_runtime = server.EVALUATION_RUNTIME
+        original_scheduler = server.TASK_SCHEDULER
+        planning_root = WEB_ROOT / "tests" / "tmp_task_status_sync"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+        server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        server.TASK_SCHEDULER = server.TaskScheduler()
+        try:
+            for scheme in ("方案A", "方案B"):
+                server.PLANNING_STORE.create_scheme(scheme)
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "规划结果"
+            sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            sheet.append(["柴发", 1, 100, 100, "kW"])
+            workbook.save(planning_root / "方案A" / "case_results.xlsx")
+            workbook.close()
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "start", "task_type": "optimization", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "queue", "task_type": "optimization", "scheme": "方案B"}, ensure_ascii=False).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+
+            status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A&light=1")
+            running = json.loads(body.decode("utf-8"))
+            self.assertEqual(running["task_status"], "计算中")
+            self.assertTrue(running["can_stop_task"])
+            self.assertFalse(running["can_queue_task"])
+
+            status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案B&light=1")
+            queued = json.loads(body.decode("utf-8"))
+            self.assertEqual(queued["task_status"], "排队中")
+            self.assertEqual(queued["queue_position"], 1)
+            self.assertTrue(queued["can_start_task"])
+            self.assertFalse(queued["can_queue_task"])
+            self.assertTrue(queued["can_cancel_queue_task"])
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps({"action": "cancel_queue", "task_type": "optimization", "scheme": "方案B"}, ensure_ascii=False).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+            cancelled = json.loads(body.decode("utf-8"))["task"]
+            self.assertEqual(cancelled["status"], "未计算")
+            self.assertFalse(cancelled["queued"])
+            self.assertTrue(cancelled["can_queue"])
+
+            status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A&filename=case_results.xlsx&light=1")
+            evaluation = json.loads(body.decode("utf-8"))
+            self.assertEqual(evaluation["task_status"], "未计算")
+            self.assertTrue(evaluation["can_start_task"])
+            self.assertTrue(evaluation["can_queue_task"])
+        finally:
+            for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme)
+            server.OPTIMIZATION_RUNTIME = original_optimization_runtime
+            server.EVALUATION_RUNTIME = original_evaluation_runtime
+            server.TASK_SCHEDULER = original_scheduler
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_task_page_splits_task_types_and_supports_resizing(self):
+        html = (WEB_ROOT / "tasks.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "assets" / "tasks.js").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="optimizationTaskTable"', html)
+        self.assertIn('id="evaluationTaskTable"', html)
+        self.assertIn('id="taskTableResizeHandle"', html)
+        self.assertIn('aria-label="调整规划计算和方案评估任务表高度"', html)
+        self.assertIn("renderTaskSection(\"optimization\"", script)
+        self.assertIn("renderTaskSection(\"evaluation\"", script)
+        self.assertIn("bindTaskTableResizeHandle", script)
+        self.assertIn("--optimization-task-table-height", script)
+        self.assertIn("taskTableHeightBounds", script)
+        self.assertIn("const min = 120", script)
+        self.assertIn("\n    300;", script)
+        self.assertIn(".task-table-resize-handle", css)
+        self.assertIn(".task-table-resize-handle::before", css)
+        self.assertIn("grid-template-rows: auto auto minmax(120px, var(--optimization-task-table-height, 300px)) 8px minmax(0, 1fr)", css)
+        self.assertIn(".tasks-panel .task-table", css)
+        self.assertIn("cursor: row-resize", css)
+        self.assertNotIn("<th>任务类型</th>", script)
 
     def test_tasks_api_queues_jobs_and_starts_next_after_current_finishes(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
@@ -3310,6 +3413,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="optimizationLogs"', html)
         self.assertIn('id="optimizationCurveNameList"', html)
         self.assertIn('id="optimizationCurveChart"', html)
+        self.assertIn('id="queueOptimization" class="queue-action"', html)
         self.assertIn(">运行日志<", html)
         self.assertIn(">曲线展示<", html)
         self.assertIn("assets/result_curves.js", html)
@@ -3323,6 +3427,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".optimization-curve-panel", css)
         self.assertIn(".optimization-curve-name-list", css)
         self.assertIn(".optimization-curve-chart", css)
+        self.assertIn(".optimization-actions .queue-action", css)
+        self.assertIn(".optimization-actions .queue-action.is-active", css)
 
     def test_optimization_frontend_polls_status_and_binds_controls(self):
         script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
@@ -3330,13 +3436,20 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/optimization/status", script)
         self.assertIn("/api/optimization/control", script)
+        self.assertIn("/api/tasks/control", script)
         self.assertNotIn("/api/evaluation/status", script)
         self.assertNotIn("/api/evaluation/control", script)
         self.assertIn("startOptimization", script)
+        self.assertIn("queueOptimization", script)
         self.assertIn("stopOptimization", script)
         self.assertIn("updateOptimizationActions", script)
-        self.assertIn("startButton.disabled = !hasScheme || isRunning", script)
-        self.assertIn("stopButton.disabled = !hasScheme || !isRunning", script)
+        self.assertIn("data.can_start_task", script)
+        self.assertIn("data.can_queue_task", script)
+        self.assertIn("data.can_stop_task", script)
+        self.assertIn("data.can_cancel_queue_task", script)
+        self.assertIn("terminalOptimizationAction", script)
+        self.assertIn("退出队列", script)
+        self.assertIn("停止计算", script)
         self.assertIn("classList.toggle(\"is-disabled\"", script)
         self.assertIn("classList.toggle(\"is-active\"", script)
         self.assertIn("正在运行，无法再次启动", script)
@@ -3344,7 +3457,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("alert(data.message", script)
         self.assertIn("setInterval", script)
         self.assertIn("scheduleOptimizationPolling", script)
-        self.assertIn("state.pollDelay = data.status === \"运行中\" ? 1000 : 4000", script)
+        self.assertIn('state.pollDelay = data.status === "运行中" || data.task_status === "排队中" ? 1000 : 4000', script)
         self.assertIn("renderOptimizationLogs", script)
         self.assertIn("bindLogContextMenu", script)
         self.assertIn("clearOptimizationLogs", script)
@@ -3397,7 +3510,7 @@ class PowerPlanServerTest(unittest.TestCase):
         index_html = (WEB_ROOT / "index.html").read_text(encoding="utf-8")
         script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
 
-        self.assertIn("assets/planning.css?v=20260514-i18n", html)
+        self.assertIn("assets/planning.css?v=", html)
         self.assertIn('<a class="active" href="evaluation.html">方案评估</a>', html)
         self.assertIn('href="evaluation.html">方案评估</a>', planning_html)
         self.assertIn('href="evaluation.html">方案评估</a>', optimize_html)
@@ -3436,6 +3549,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="evaluationLogs"', html)
         self.assertIn('id="evaluationCurveNameList"', html)
         self.assertIn('id="evaluationCurveChart"', html)
+        self.assertIn('id="queueEvaluation" class="queue-action"', html)
         self.assertIn('class="evaluation-log-region optimization-log-card"', html)
         self.assertIn(">评估日志<", html)
         self.assertIn(">曲线展示<", html)
@@ -3443,8 +3557,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("assets/evaluation.js", html)
         self.assertIn("/api/evaluation/status", script)
         self.assertIn("/api/evaluation/control", script)
+        self.assertIn("/api/tasks/control", script)
         self.assertNotIn("/api/optimization/status", script)
         self.assertNotIn("/api/optimization/control", script)
+        self.assertIn("queueEvaluation", script)
+        self.assertIn("terminalEvaluationAction", script)
+        self.assertIn("data.can_start_task", script)
+        self.assertIn("data.can_queue_task", script)
+        self.assertIn("data.can_stop_task", script)
+        self.assertIn("data.can_cancel_queue_task", script)
+        self.assertIn("退出队列", script)
+        self.assertIn("停止计算", script)
         self.assertIn("/api/evaluation/results", script)
         self.assertIn("loadEvaluationResults", script)
         self.assertIn("refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError)", script)
@@ -3526,8 +3649,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
         self.assertIn("saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
         self.assertIn("copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection", script)
-        self.assertIn("启动评估", html)
-        self.assertIn("停止评估", html)
+        self.assertIn("立刻启动", html)
+        self.assertIn("加入排队", html)
+        self.assertIn("停止计算", html)
 
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
         self.assertIn(".evaluation-main-resize-handle", css)
@@ -3549,7 +3673,7 @@ class PowerPlanServerTest(unittest.TestCase):
         script = (WEB_ROOT / "assets" / "comparison.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
-        self.assertIn("assets/planning.css?v=20260514-i18n", html)
+        self.assertIn("assets/planning.css?v=", html)
         self.assertIn('<a class="active" href="comparison.html">结果对比</a>', html)
         self.assertIn('href="comparison.html">结果对比</a>', planning_html)
         self.assertIn('href="comparison.html">结果对比</a>', optimize_html)
@@ -4841,6 +4965,37 @@ class PowerPlanServerTest(unittest.TestCase):
         server_text = (WEB_ROOT / "server.py").read_text(encoding="utf-8")
         self.assertIn('".css", ".js"', server_text)
         self.assertIn('".png"', server_text)
+
+    def test_redirect_response_disables_cache_and_varies_on_cookie(self):
+        status, headers, body = server._redirect_response("/login.html?next=%2Ftasks.html")
+
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "/login.html?next=%2Ftasks.html")
+        self.assertEqual(headers["Content-Type"], "text/plain; charset=utf-8")
+        self.assertEqual(headers["Cache-Control"], "no-store, no-cache, max-age=0, must-revalidate")
+        self.assertEqual(headers["Pragma"], "no-cache")
+        self.assertEqual(headers["Expires"], "0")
+        self.assertEqual(headers["Vary"], "Cookie")
+        self.assertEqual(body, b"")
+
+    def test_static_headers_disable_cache_for_html_and_task_assets(self):
+        html_headers = server._static_headers(WEB_ROOT / "tasks.html", authenticated_html=True)
+        js_headers = server._static_headers(WEB_ROOT / "assets" / "tasks.js")
+
+        for headers in (html_headers, js_headers):
+            self.assertEqual(headers["Cache-Control"], "no-store, no-cache, max-age=0, must-revalidate")
+            self.assertEqual(headers["Pragma"], "no-cache")
+            self.assertEqual(headers["Expires"], "0")
+        self.assertEqual(html_headers["Vary"], "Cookie")
+        self.assertTrue(html_headers["Content-Type"].startswith("text/html"))
+        self.assertIn("javascript", js_headers["Content-Type"])
+
+    def test_static_headers_keep_regular_data_files_publicly_cacheable(self):
+        headers = server._static_headers(WEB_ROOT / "data" / "load_curve_templates.csv")
+
+        self.assertEqual(headers["Cache-Control"], "public, max-age=3600")
+        self.assertTrue(headers["Content-Type"])
+        self.assertNotIn("Vary", headers)
 
     def test_static_path_rejects_directory_traversal(self):
         with self.assertRaises(ValueError):

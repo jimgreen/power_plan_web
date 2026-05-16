@@ -234,7 +234,8 @@ function renderEvaluationCurrentScheme() {
 
 function bindOptimizationActions() {
   document.getElementById("startEvaluation").addEventListener("click", () => controlOptimization("start"));
-  document.getElementById("stopEvaluation").addEventListener("click", () => controlOptimization("stop"));
+  document.getElementById("queueEvaluation")?.addEventListener("click", () => controlOptimization("queue"));
+  document.getElementById("stopEvaluation").addEventListener("click", () => controlOptimization(terminalEvaluationAction()));
 }
 
 function bindEvaluationResultActions() {
@@ -577,12 +578,16 @@ async function controlOptimization(action) {
     return;
   }
   try {
-    const data = await api("/api/evaluation/control", {
+    const data = await api("/api/tasks/control", {
       method: "POST",
-      body: JSON.stringify({ action, scheme: state.currentScheme, filename: state.selectedResultFile }),
+      body: JSON.stringify({
+        action,
+        task_type: "evaluation",
+        scheme: state.currentScheme,
+        result: state.selectedResultFile,
+      }),
     });
-    state.optimization = data.state;
-    renderOptimization(data.state);
+    await refreshOptimizationStatus(state.currentScheme, state.selectedResultFile);
     scheduleOptimizationPolling();
   } catch (error) {
     const data = error.payload || {};
@@ -632,7 +637,7 @@ function optimizationStatusPath(scheme, filename = state.selectedResultFile) {
 function scheduleOptimizationPolling() {
   if (state.pollTimer) window.clearInterval(state.pollTimer);
   const data = state.optimization || {};
-  state.pollDelay = data.status === "运行中" ? 1000 : 4000;
+  state.pollDelay = data.status === "运行中" || data.task_status === "排队中" ? 1000 : 4000;
   state.pollTimer = window.setInterval(() => {
     refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError);
   }, state.pollDelay);
@@ -697,20 +702,29 @@ async function loadEvaluationCurveData() {
 
 function updateOptimizationActions(data = state.optimization || {}) {
   const startButton = document.getElementById("startEvaluation");
+  const queueButton = document.getElementById("queueEvaluation");
   const stopButton = document.getElementById("stopEvaluation");
   if (!startButton || !stopButton) return;
   const hasScheme = Boolean(state.currentScheme);
+  const hasResult = Boolean(state.selectedResultFile);
   const isRunning = data.status === "运行中";
-  startButton.disabled = !hasScheme || isRunning;
-  stopButton.disabled = !hasScheme || !isRunning;
-  startButton.classList.toggle("is-disabled", startButton.disabled);
-  stopButton.classList.toggle("is-disabled", stopButton.disabled);
-  startButton.classList.toggle("is-active", !startButton.disabled);
-  stopButton.classList.toggle("is-active", !stopButton.disabled);
-  startButton.setAttribute("aria-disabled", String(startButton.disabled));
-  stopButton.setAttribute("aria-disabled", String(stopButton.disabled));
-  startButton.title = !hasScheme ? "请先选择方案" : isRunning ? "当前方案正在评估" : "启动当前方案评估";
-  stopButton.title = !hasScheme ? "请先选择方案" : isRunning ? "停止当前方案评估" : "当前方案没有运行";
+  startButton.disabled = !hasScheme || !hasResult || (typeof data.can_start_task === "boolean" ? !data.can_start_task : isRunning);
+  if (queueButton) queueButton.disabled = !hasScheme || !hasResult || (typeof data.can_queue_task === "boolean" ? !data.can_queue_task : isRunning);
+  const canExitOrStop = Boolean(data.can_cancel_queue_task || data.can_stop_task);
+  stopButton.disabled = !hasScheme || !hasResult || !canExitOrStop;
+  stopButton.textContent = data.can_cancel_queue_task ? "退出队列" : "停止计算";
+  [startButton, queueButton, stopButton].filter(Boolean).forEach((button) => {
+    button.classList.toggle("is-disabled", button.disabled);
+    button.classList.toggle("is-active", !button.disabled);
+    button.setAttribute("aria-disabled", String(button.disabled));
+  });
+  startButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : isRunning ? "当前方案正在评估" : "立刻启动当前方案评估";
+  if (queueButton) queueButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : data.queued ? "当前评估任务已加入队列" : "将当前评估任务加入排队";
+  stopButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : data.can_cancel_queue_task ? "从等待队列中删除当前评估任务" : isRunning ? "停止当前方案评估" : "当前方案没有运行";
+}
+
+function terminalEvaluationAction() {
+  return state.optimization?.can_cancel_queue_task ? "cancel_queue" : "stop";
 }
 
 function defaultOptimizationState(scheme = "") {

@@ -100,6 +100,13 @@ button:disabled {
   box-shadow: none !important;
 }
 
+.secondary {
+  background: linear-gradient(180deg, #dff1ee, #cfe7e2) !important;
+  color: #185652 !important;
+  border: 1px solid rgba(13, 92, 89, 0.22) !important;
+  box-shadow: 0 10px 24px rgba(13, 92, 89, 0.14) !important;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr) 280px;
@@ -389,8 +396,8 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 14px;
+  grid-template-rows: auto auto minmax(120px, var(--optimization-task-table-height, 300px)) 8px minmax(0, 1fr);
+  gap: 12px;
   padding: 18px;
   overflow: hidden;
 }
@@ -414,13 +421,78 @@ button:disabled {
   font-weight: 700;
 }
 
-.task-table {
+.tasks-panel .task-table {
   max-height: none;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
 }
 
 .task-table table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1040px;
+}
+
+.task-section {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.task-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.task-section-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.task-table-resize-handle {
+  position: relative;
+  min-height: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: row-resize;
+  touch-action: none;
+  transition: opacity 0.16s ease;
+}
+
+.task-table-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 3px 0;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent, rgba(21, 211, 255, 0.44), transparent),
+    rgba(5, 34, 70, 0.3);
+  box-shadow:
+    inset 0 0 0 1px rgba(21, 211, 255, 0.18),
+    0 0 8px rgba(21, 211, 255, 0.12);
+  transition: background 0.16s ease, box-shadow 0.16s ease;
+}
+
+.task-table-resize-handle:hover,
+.task-table-resize-handle:focus-visible,
+.task-table-resize-handle.dragging {
+  outline: none;
+}
+
+.task-table-resize-handle:hover::before,
+.task-table-resize-handle:focus-visible::before,
+.task-table-resize-handle.dragging::before {
+  background:
+    linear-gradient(90deg, transparent, rgba(108, 238, 255, 0.62), transparent),
+    rgba(13, 92, 89, 0.26);
+  box-shadow:
+    inset 0 0 0 1px rgba(108, 238, 255, 0.34),
+    0 0 12px rgba(21, 211, 255, 0.18);
 }
 
 .task-log-cell {
@@ -1092,9 +1164,32 @@ button:disabled {
   transition: background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
 
+.optimization-actions .queue-action {
+  background: rgba(5, 34, 70, 0.56) !important;
+  color: #b7d8d6 !important;
+  border: 1px solid rgba(108, 147, 160, 0.28) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 2px 8px rgba(4, 18, 42, 0.12) !important;
+}
+
+.optimization-actions .queue-action:hover,
+.optimization-actions .queue-action:focus-visible {
+  background: rgba(8, 47, 76, 0.72) !important;
+  color: #e0f4f2 !important;
+  border-color: rgba(108, 238, 255, 0.34) !important;
+  outline: none;
+}
+
 .optimization-actions button.is-active {
   opacity: 1;
   box-shadow: 0 10px 22px rgba(13, 92, 89, 0.18);
+}
+
+.optimization-actions .queue-action.is-active {
+  box-shadow:
+    inset 0 0 0 1px rgba(108, 238, 255, 0.18),
+    0 4px 10px rgba(4, 18, 42, 0.14) !important;
 }
 
 .optimization-actions button.is-disabled {

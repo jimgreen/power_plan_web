@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260514-i18n">
+  <link rel="stylesheet" href="assets/planning.css?v=20260516-task-ui-fix">
 </head>
 <body>
   <main class="planning-shell">
@@ -36,8 +36,9 @@
         <section class="optimization-command-card">
           <div class="optimization-command-row">
             <div class="optimization-actions" aria-label="规划求解操作">
-              <button id="startOptimization" class="primary" type="button">规划求解</button>
-              <button id="stopOptimization" class="danger" type="button">停止求解</button>
+              <button id="startOptimization" class="primary" type="button">立刻启动</button>
+              <button id="queueOptimization" class="queue-action" type="button">加入排队</button>
+              <button id="stopOptimization" class="danger" type="button">停止计算</button>
             </div>
             <div id="optimizationCurrentScheme" class="optimization-current-scheme">当前方案: 未选择方案</div>
           </div>

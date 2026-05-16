@@ -322,21 +322,24 @@ function renderCurveNameList() {
     .join("");
   target.innerHTML = `<ul aria-multiselectable="true">${target.innerHTML}</ul>`;
   target.querySelectorAll("[data-curve-name]").forEach((button) => {
-    button.addEventListener("click", () => {
-      toggleSelectedCurve(button.dataset.curveName || "");
+    button.addEventListener("click", (event) => {
+      toggleSelectedCurve(button.dataset.curveName || "", { multi: event.shiftKey });
     });
     button.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        toggleSelectedCurve(button.dataset.curveName || "");
+        toggleSelectedCurve(button.dataset.curveName || "", { multi: event.shiftKey });
       }
     });
   });
 }
 
-function toggleSelectedCurve(name) {
+function toggleSelectedCurve(name, options = {}) {
   if (!name) return;
-  if (state.selectedCurves.includes(name)) {
+  const multi = Boolean(options.multi);
+  if (!multi) {
+    state.selectedCurves = [name];
+  } else if (state.selectedCurves.includes(name)) {
     state.selectedCurves = state.selectedCurves.filter((item) => item !== name);
   } else {
     state.selectedCurves = [...state.selectedCurves, name];
