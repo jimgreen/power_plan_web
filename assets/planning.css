@@ -176,6 +176,8 @@ button:disabled {
 
 .scheme-list-items {
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 4px;
   margin: 0;
   padding: 0;

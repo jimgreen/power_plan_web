@@ -190,7 +190,6 @@ function renderSchemes() {
     bindSchemeListItem(item, () => {
       state.currentScheme = item.dataset.name || "";
       renderSchemes();
-      renderCurrentScheme();
       renderEvaluationCurrentScheme();
       clearEvaluationDisplayForSchemeSwitch(state.currentScheme);
       loadEvaluationResults()
@@ -215,7 +214,8 @@ function bindSchemeListItem(item, onSelect) {
 
 function renderCurrentScheme() {
   const current = document.getElementById("optimizationCurrentScheme");
-  current.textContent = `当前: ${state.currentScheme || "未选择方案"}`;
+  if (!current) return;
+  current.textContent = currentEvaluationResultLabel();
 }
 
 function renderEvaluationCurrentScheme() {
@@ -254,6 +254,7 @@ function clearEvaluationDisplayForSchemeSwitch(scheme = state.currentScheme) {
   state.isSwitchingResult = true;
   state.resultFiles = [];
   state.selectedResultFile = "";
+  renderCurrentScheme();
   state.planningResultRows = [];
   state.curveDataKey = "";
   state.greenDailyPoints = [];
@@ -300,6 +301,7 @@ function clearEvaluationResultDisplayForSwitch(filename = state.selectedResultFi
   }
   state.isSwitchingResult = true;
   state.curveDataKey = "";
+  renderCurrentScheme();
   state.planningResultRows = [];
   state.greenDailyPoints = [];
   state.safetyDailyPoints = [];
@@ -355,6 +357,7 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
   state.resultFiles = data.results || [];
   const readableNames = state.resultFiles.filter((item) => item.readable !== false).map((item) => item.name);
   state.selectedResultFile = data.selected || (readableNames.includes(selected) ? selected : readableNames[0] || "");
+  renderCurrentScheme();
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
   renderEvaluationPlanningResultTable();
@@ -392,6 +395,12 @@ function renderEvaluationResultWarnings() {
 
 function resultDisplayName(filename) {
   return String(filename || "").replace(/_results\.xlsx$/, "");
+}
+
+function currentEvaluationResultLabel() {
+  const schemeName = state.currentScheme || "未选择方案";
+  const resultName = resultDisplayName(state.selectedResultFile) || "未选择结果";
+  return `当前: ${schemeName}/${resultName}`;
 }
 
 function renderEvaluationPlanningResultTable() {
@@ -512,6 +521,7 @@ async function manageEvaluationResult(action, extra = {}) {
     });
     state.resultFiles = data.results || [];
     state.selectedResultFile = data.selected || state.selectedResultFile;
+    renderCurrentScheme();
     state.planningResultRows = data.planning_result_rows || state.planningResultRows || [];
     state.curveDataKey = "";
     renderEvaluationResults();

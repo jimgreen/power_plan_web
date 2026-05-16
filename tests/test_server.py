@@ -3500,6 +3500,9 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertNotIn("<button class=\"scheme-item", script)
 
         self.assertIn(".scheme-list-items", css)
+        scheme_list_items_css = css.split(".scheme-list-items {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-auto-rows: max-content", scheme_list_items_css)
+        self.assertIn("align-content: start", scheme_list_items_css)
         self.assertIn(".scheme-item:hover", css)
         self.assertIn(".scheme-item:focus-visible", css)
         scheme_item_css = css.split(".scheme-item {", 1)[1].split("}", 1)[0]
@@ -3684,6 +3687,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="evaluationPlanningResultTable"', html)
         self.assertIn('id="evaluationMainResizeHandle"', html)
         self.assertIn("当前: 未选择方案", html)
+        self.assertIn("当前: 未选择方案/未选择结果", html)
         self.assertNotIn("当前: 未选择方案，结果显示", html)
         self.assertIn("当前规划结果", html)
         self.assertNotIn(">结果文件<", html)
@@ -3800,7 +3804,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("ArrowLeft", script)
         self.assertIn("ArrowRight", script)
         self.assertIn('document.getElementById("evaluationCurrentScheme")', script)
-        self.assertIn('`当前: ${state.currentScheme || "未选择方案"}`', script)
+        self.assertIn("currentEvaluationResultLabel", script)
+        self.assertIn('const schemeName = state.currentScheme || "未选择方案"', script)
+        self.assertIn('const resultName = resultDisplayName(state.selectedResultFile) || "未选择结果"', script)
+        self.assertIn("return `当前: ${schemeName}/${resultName}`", script)
         self.assertNotIn('`当前: ${state.currentScheme || "未选择方案"}，结果显示`', script)
         self.assertIn('data-planning-count-index="${index}"', script)
         self.assertIn('pattern="[0-9]*"', script)
