@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>方案评估 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260516-control-unify">
+  <link rel="stylesheet" href="assets/planning.css?v=20260516-layout-fill">
 </head>
 <body>
   <main class="planning-shell">
@@ -33,7 +33,7 @@
       </aside>
 
       <aside class="evaluation-result-rail">
-        <div id="evaluationCurrentScheme" class="scheme-list-title">当前方案: 未选择方案</div>
+        <div id="evaluationCurrentScheme" class="scheme-list-title">当前: 未选择方案</div>
         <div class="evaluation-result-actions" aria-label="结果文件管理">
           <select id="evaluationResultSelect" aria-label="结果文件列表"></select>
           <div id="evaluationResultWarnings" class="result-file-warnings" hidden></div>
@@ -54,55 +54,48 @@
       <section class="optimization-panel">
         <section class="optimization-command-card">
           <div class="optimization-command-row">
+            <div id="optimizationCurrentScheme" class="optimization-current-scheme">当前: 未选择方案</div>
             <div class="optimization-actions" aria-label="方案评估操作">
               <button id="startEvaluation" class="primary" type="button">立刻启动</button>
               <button id="queueEvaluation" class="queue-action" type="button">加入排队</button>
               <button id="stopEvaluation" class="danger" type="button">停止计算</button>
             </div>
-            <div id="optimizationCurrentScheme" class="optimization-current-scheme">当前方案: 未选择方案</div>
-          </div>
-          <div class="optimization-status-grid" aria-label="方案评估总体指标">
-            <div class="status-tile"><span>当前状态</span><strong id="optimizationStatus">待启动</strong></div>
-            <div class="status-tile"><span>启动时刻</span><strong id="optimizationStartTime">-</strong></div>
-            <div class="status-tile"><span>结束时刻</span><strong id="optimizationEndTime">-</strong></div>
-            <div class="status-tile"><span>综合评分</span><strong id="evaluationScore">-</strong></div>
-            <div class="status-tile"><span>风险等级</span><strong id="evaluationRisk">-</strong></div>
+            <div class="optimization-status-grid" aria-label="方案评估总体指标">
+              <div class="status-tile"><span>状态</span><strong id="optimizationStatus">待启动</strong></div>
+              <div class="status-tile"><span>开始</span><strong id="optimizationStartTime">-</strong></div>
+              <div class="status-tile"><span>完成</span><strong id="optimizationEndTime">-</strong></div>
+              <div class="status-tile"><span>度电成本</span><strong id="evaluationScore">-</strong></div>
+              <div class="status-tile"><span>绿电占比</span><strong id="evaluationRisk">-</strong></div>
+            </div>
           </div>
         </section>
 
         <section class="optimization-result-card">
           <div class="result-tabs" role="tablist" aria-label="方案评估结果切换">
+            <button id="evaluationLogViewToggle" class="result-tab" data-result-tab="logs" type="button" aria-selected="false">评估日志</button>
             <button class="result-tab active" data-result-tab="overview" type="button" aria-selected="true">评估概览</button>
             <button class="result-tab" data-result-tab="green" type="button" aria-selected="false">经济性指标</button>
             <button class="result-tab" data-result-tab="safety" type="button" aria-selected="false">安全性指标</button>
+            <button id="evaluationCurveViewToggle" class="result-tab" data-result-tab="curves" type="button" aria-selected="false">曲线展示</button>
+          </div>
+          <div id="evaluationLogPanel" class="result-panel optimization-log-result-panel" data-result-panel="logs" role="tabpanel" hidden>
+            <div id="evaluationLogs" class="optimization-logs" aria-live="polite"></div>
           </div>
           <div id="overviewResult" class="result-panel active" data-result-panel="overview" role="tabpanel"></div>
           <div id="greenResult" class="result-panel" data-result-panel="green" role="tabpanel" hidden></div>
           <div id="safetyResult" class="result-panel" data-result-panel="safety" role="tabpanel" hidden></div>
+          <div id="evaluationCurvePanel" class="result-panel optimization-curve-panel" data-result-panel="curves" role="tabpanel" hidden>
+            <aside id="evaluationCurveNameList" class="optimization-curve-name-list" aria-label="小时级曲线、日级统计、月度统计和年度统计列表"></aside>
+            <div id="evaluationCurveChart" class="optimization-curve-chart"></div>
+          </div>
         </section>
 
-      </section>
-
-      <div id="optimizationLogResizeHandle" class="optimization-log-resize-handle evaluation-log-resize-handle" role="separator" tabindex="0" aria-label="调整评估日志高度" aria-orientation="horizontal" aria-valuemin="120" aria-valuemax="520" aria-valuenow="0"></div>
-
-      <section class="evaluation-log-region optimization-log-card">
-        <div class="log-view-tabs" role="tablist" aria-label="评估运行信息切换">
-          <button id="evaluationLogViewToggle" class="log-view-tab active" data-log-view="logs" type="button" aria-selected="true">评估日志</button>
-          <button id="evaluationCurveViewToggle" class="log-view-tab" data-log-view="curves" type="button" aria-selected="false">曲线展示</button>
-        </div>
-        <div id="evaluationLogPanel" class="log-view-panel active" data-log-view-panel="logs">
-          <div id="evaluationLogs" class="optimization-logs" aria-live="polite"></div>
-        </div>
-        <div id="evaluationCurvePanel" class="log-view-panel optimization-curve-panel" data-log-view-panel="curves" hidden>
-          <aside id="evaluationCurveNameList" class="optimization-curve-name-list" aria-label="小时级曲线、日级统计、月度统计和年度统计列表"></aside>
-          <div id="evaluationCurveChart" class="optimization-curve-chart"></div>
-        </div>
       </section>
     </section>
   </main>
   <script src="assets/i18n.js?v=20260514-i18n"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/result_curves.js?v=20260514-i18n"></script>
-  <script src="assets/evaluation.js?v=20260514-i18n"></script>
+  <script src="assets/result_curves.js?v=20260516-simplified-layout"></script>
+  <script src="assets/evaluation.js?v=20260516-simplified-layout"></script>
 </body>
 </html>

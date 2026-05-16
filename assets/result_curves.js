@@ -6,12 +6,27 @@
     { key: "monthly", title: "月度统计" },
     { key: "annual", title: "年度统计" },
   ];
+  const MONTH_RANGES = [
+    ["1月", 0, 744, 1, 31],
+    ["2月", 744, 1416, 32, 59],
+    ["3月", 1416, 2160, 60, 90],
+    ["4月", 2160, 2880, 91, 120],
+    ["5月", 2880, 3624, 121, 151],
+    ["6月", 3624, 4344, 152, 181],
+    ["7月", 4344, 5088, 182, 212],
+    ["8月", 5088, 5832, 213, 243],
+    ["9月", 5832, 6552, 244, 273],
+    ["10月", 6552, 7296, 274, 304],
+    ["11月", 7296, 8016, 305, 334],
+    ["12月", 8016, 8760, 335, 365],
+  ];
 
   function create(options) {
     const state = {
       groups: emptyGroups(),
       annualTable: [],
       selectedCurvesByGroup: { hourly: [], daily: [], monthly: [] },
+      curveRangeFilter: defaultCurveRangeFilter(),
       activeGroup: "hourly",
       hoverIndex: null,
       emptyText: options.emptyText || "暂无小时级曲线",
@@ -21,6 +36,7 @@
     function setData(payload) {
       state.groups = normalizeGroups(payload);
       state.annualTable = Array.isArray(payload?.annual_table) ? payload.annual_table : [];
+      state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
       GROUP_DEFINITIONS.filter((group) => group.key !== "annual").forEach((group) => {
         const curveNames = state.groups[group.key]?.curves || [];
         state.selectedCurvesByGroup[group.key] = (state.selectedCurvesByGroup[group.key] || []).filter((name) => curveNames.includes(name));
@@ -37,6 +53,7 @@
       state.groups = emptyGroups();
       state.annualTable = [];
       state.selectedCurvesByGroup = { hourly: [], daily: [], monthly: [] };
+      state.curveRangeFilter = defaultCurveRangeFilter();
       state.activeGroup = "hourly";
       state.hoverIndex = null;
       render(message || state.emptyText);
@@ -70,11 +87,11 @@
         .join("")}</ul>`;
       bindGroupTabs(target);
       target.querySelectorAll("[data-result-curve-name]").forEach((item) => {
-        item.addEventListener("click", (event) => toggleCurve(item.dataset.resultCurveName || "", { multi: event.shiftKey }));
+        item.addEventListener("click", (event) => toggleCurve(item.dataset.resultCurveName || "", { multi: isMultiCurveSelectionEvent(event) }));
         item.addEventListener("keydown", (event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            toggleCurve(item.dataset.resultCurveName || "", { multi: event.shiftKey });
+            toggleCurve(item.dataset.resultCurveName || "", { multi: isMultiCurveSelectionEvent(event) });
           }
         });
       });
@@ -91,6 +108,7 @@
       target.querySelectorAll("[data-curve-group]").forEach((button) => {
         button.addEventListener("click", () => {
           state.activeGroup = button.dataset.curveGroup || "hourly";
+          state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
           state.hoverIndex = null;
           render();
         });
@@ -119,12 +137,16 @@
 
     function selectedCurveSeries() {
       const group = activeCurveGroup();
-      return selectedCurveNames().flatMap((curveName) =>
-        (group.series[curveName] || []).map((item) => ({
-          ...item,
-          curveName,
-          displayLabel: `${curveName} / ${item.label}`,
-        })),
+      return filterSeriesByRange(
+        selectedCurveNames().flatMap((curveName) =>
+          (group.series[curveName] || []).map((item) => ({
+            ...item,
+            curveName,
+            displayLabel: `${curveName} / ${item.label}`,
+          })),
+        ),
+        state.activeGroup,
+        state.curveRangeFilter,
       );
     }
 
@@ -137,8 +159,10 @@
       }
       const curveNames = selectedCurveNames();
       const series = selectedCurveSeries();
+      const controls = renderRangeControls();
       if (!curveNames.length || !series.length) {
-        target.innerHTML = `<div class="empty-summary">${escapeHtml(message || groupPromptText())}</div>`;
+        target.innerHTML = `${controls}<div class="empty-summary">${escapeHtml(message || groupPromptText())}</div>`;
+        bindRangeControls(target);
         return;
       }
       const width = 1080;
@@ -158,10 +182,7 @@
         return { ratio, value, y: yAt(value) };
       });
 
-      target.innerHTML = `
-        <div class="comparison-curve-legend">${series
-          .map((item, index) => `<span><i style="background:${CHART_COLORS[index % CHART_COLORS.length]}"></i>${escapeHtml(item.displayLabel)}</span>`)
-          .join("")}</div>
+      target.innerHTML = `${controls}
         <div class="comparison-chart-frame" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
           <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(curveNames.join("、"))}曲线">
             <line class="comparison-chart-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
@@ -177,7 +198,57 @@
           ${renderCurveStats(series)}
           <div class="comparison-chart-tooltip" data-result-curve-tooltip hidden></div>
         </div>`;
+      bindRangeControls(target);
       bindChartHover({ target, margin, plotWidth, series });
+    }
+
+    function renderRangeControls() {
+      if (state.activeGroup !== "hourly" && state.activeGroup !== "daily") return "";
+      const filter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
+      const monthOptions = MONTH_RANGES.map(([label], index) => `<option value="${index}" ${index === filter.month ? "selected" : ""}>${label}</option>`).join("");
+      const dayOptions = availableDaysInMonth(filter.month)
+        .map((day) => `<option value="${day}" ${day === filter.day ? "selected" : ""}>${day}日</option>`)
+        .join("");
+      const dayDisabled = state.activeGroup !== "hourly" || filter.scope !== "day";
+      return `
+        <div class="curve-range-filter" aria-label="曲线时间范围筛选">
+          <div class="curve-range-scope" role="group" aria-label="曲线时间范围">
+            ${["year", "month", "day"].map((scope) => {
+              const disabled = state.activeGroup === "daily" && scope === "day";
+              const label = scope === "year" ? "全年" : scope === "month" ? "指定月" : "指定日";
+              return `<button type="button" data-curve-range-scope="${scope}" class="${filter.scope === scope ? "active" : ""}" aria-pressed="${filter.scope === scope ? "true" : "false"}" ${disabled ? "disabled title=\"日级统计只支持全年或指定月筛选\"" : ""}>${label}</button>`;
+            }).join("")}
+          </div>
+          <label>月份<select data-curve-range-month ${filter.scope === "year" ? "disabled" : ""}>${monthOptions}</select></label>
+          <label>日期<select data-curve-range-day ${dayDisabled ? "disabled" : ""}>${dayOptions}</select></label>
+        </div>`;
+    }
+
+    function bindRangeControls(target) {
+      target.querySelectorAll("[data-curve-range-scope]").forEach((button) => {
+        button.addEventListener("click", () => {
+          if (button.disabled) return;
+          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, scope: button.dataset.curveRangeScope || "year" }, state.activeGroup);
+          state.hoverIndex = null;
+          render();
+        });
+      });
+      const monthSelect = target.querySelector("[data-curve-range-month]");
+      if (monthSelect) {
+        monthSelect.addEventListener("change", () => {
+          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, month: Number(monthSelect.value), day: 1 }, state.activeGroup);
+          state.hoverIndex = null;
+          render();
+        });
+      }
+      const daySelect = target.querySelector("[data-curve-range-day]");
+      if (daySelect) {
+        daySelect.addEventListener("change", () => {
+          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, day: Number(daySelect.value) }, state.activeGroup);
+          state.hoverIndex = null;
+          render();
+        });
+      }
     }
 
     function renderAnnualTable(target, message) {
@@ -191,7 +262,7 @@
           <table>
             <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
             <tbody>${state.annualTable
-              .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header] ?? "")}</td>`).join("")}</tr>`)
+              .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? ""))}</td>`).join("")}</tr>`)
               .join("")}</tbody>
           </table>
         </div>`;
@@ -308,6 +379,10 @@
       return state.activeGroup === "hourly" ? state.promptText : `请选择${title}`;
     }
 
+    function isMultiCurveSelectionEvent(event) {
+      return Boolean(event?.ctrlKey || event?.shiftKey || event?.metaKey);
+    }
+
     clear();
     return { setData, clear, render };
   }
@@ -337,6 +412,72 @@
     return groups;
   }
 
+  function defaultCurveRangeFilter() {
+    return { scope: "year", month: 0, day: 1 };
+  }
+
+  function normalizeCurveRangeFilter(filter, groupKey) {
+    const next = { ...defaultCurveRangeFilter(), ...(filter || {}) };
+    if (!["year", "month", "day"].includes(next.scope)) next.scope = "year";
+    if (groupKey === "daily" && next.scope === "day") next.scope = "month";
+    if (groupKey !== "hourly" && groupKey !== "daily") next.scope = "year";
+    next.month = Math.min(Math.max(Number.isFinite(Number(next.month)) ? Number(next.month) : 0, 0), 11);
+    const days = availableDaysInMonth(next.month);
+    next.day = Math.min(Math.max(Number.isFinite(Number(next.day)) ? Number(next.day) : 1, 1), days.length);
+    return next;
+  }
+
+  function availableDaysInMonth(monthIndex) {
+    const range = MONTH_RANGES[Math.min(Math.max(Number(monthIndex) || 0, 0), 11)] || MONTH_RANGES[0];
+    return Array.from({ length: range[4] - range[3] + 1 }, (_, index) => index + 1);
+  }
+
+  function filterSeriesByRange(series, groupKey, filter) {
+    const normalized = normalizeCurveRangeFilter(filter, groupKey);
+    if (normalized.scope === "year" || (groupKey !== "hourly" && groupKey !== "daily")) return series;
+    const range = MONTH_RANGES[normalized.month] || MONTH_RANGES[0];
+    const [hourStart, hourEnd, dayStart, dayEnd] = [range[1], range[2], range[3], range[4]];
+    return series
+      .map((item) => {
+        const points = (item.points || []).filter((point, index) => {
+          if (groupKey === "hourly") {
+            const hourIndex = numericPointIndex(point?.x, index + 1);
+            if (normalized.scope === "month") return hourIndex >= hourStart + 1 && hourIndex <= hourEnd;
+            const selectedDayStart = hourStart + (normalized.day - 1) * 24 + 1;
+            return hourIndex >= selectedDayStart && hourIndex < selectedDayStart + 24;
+          }
+          if (groupKey === "daily") {
+            const dayIndex = numericPointIndex(point?.x, index + 1);
+            return dayIndex >= dayStart && dayIndex <= dayEnd;
+          }
+          return true;
+        });
+        return { ...item, points: relabelFilteredPoints(points, groupKey, normalized) };
+      })
+      .filter((item) => item.points.length);
+  }
+
+  function relabelFilteredPoints(points, groupKey, filter) {
+    if (filter.scope === "month") {
+      return points.map((point, index) => {
+        const dayNumber = groupKey === "hourly" ? Math.floor(index / 24) + 1 : index + 1;
+        return { ...point, x: `第${dayNumber}日` };
+      });
+    }
+    if (filter.scope === "day" && groupKey === "hourly") {
+      return points.map((point, index) => ({ ...point, x: `${index + 1}时` }));
+    }
+    return points;
+  }
+
+  function numericPointIndex(value, fallback) {
+    const direct = Number(value);
+    if (Number.isFinite(direct) && direct > 0) return Math.round(direct);
+    const match = String(value ?? "").match(/\d+/);
+    const parsed = match ? Number(match[0]) : Number(fallback);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 1;
+  }
+
   function downsample(points, limit) {
     if (points.length <= limit) return points;
     const step = Math.ceil(points.length / limit);
@@ -346,7 +487,12 @@
   function formatAxis(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return "-";
-    return number.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+    return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function formatDisplayValue(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
+    return Number.isInteger(value) ? value.toLocaleString("zh-CN") : formatAxis(value);
   }
 
   function escapeHtml(value) {

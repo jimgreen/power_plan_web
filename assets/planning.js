@@ -3,6 +3,7 @@ const state = {
   currentScheme: "",
   payload: null,
   month: 0,
+  timeChartRange: { scope: "year", month: 0, day: 1 },
   timeSeriesLoading: null,
   loadCurveTemplates: [],
   mapConfig: null,
@@ -358,6 +359,7 @@ function bindActions() {
   document.querySelectorAll("[data-curve]").forEach((button) => {
     button.addEventListener("click", () => selectCurve(button.dataset.curve));
   });
+  bindTimeChartRangeControls();
   const timeChart = document.getElementById("timeChart");
   timeChart.addEventListener("mousemove", onChartMouseMove);
   timeChart.addEventListener("mouseleave", hideChartCursor);
@@ -2196,6 +2198,7 @@ function activeTabKey() {
 
 function renderAll() {
   renderSchemes();
+  renderTimeChartRangeControls();
   renderChart();
   renderMonthTabs();
   renderTimeTable();
@@ -2221,7 +2224,7 @@ function renderChart() {
     state.chartMeta = null;
     return;
   }
-  const rows = state.payload.time_series || [];
+  const rows = filteredTimeChartRows(state.payload.time_series || []);
   const width = svg.clientWidth || 900;
   const height = svg.clientHeight || 320;
   const padLeft = 62;
@@ -2251,16 +2254,109 @@ function renderChart() {
       return `<line x1="${padLeft}" x2="${width - padRight}" y1="${tickY.toFixed(1)}" y2="${tickY.toFixed(1)}" stroke="#d4e1dd"/><text x="${padLeft - 8}" y="${(tickY + 4).toFixed(1)}" text-anchor="end" fill="#5a716e" font-size="11">${escapeHtml(formatNumber(value))}</text>`;
     })
     .join("");
-  const xTicks = monthRanges
-    .map(([label, start]) => {
-      const tickX = x(start);
-      return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="#8ba49f"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="#5a716e" font-size="11">${label}</text>`;
-    })
-    .join("");
+  const xTicks = timeChartXTicks(rows, x, height, padTop, plotHeight);
   const d = rows.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(row[curveKey]).toFixed(1)}`).join(" ");
   const axisTitle = `${curveTitle}${unit ? `(${unit})` : ""}`;
   svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="transparent"/><g>${yGrid}</g><line x1="${padLeft}" x2="${width - padRight}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight}" stroke="#5a716e"/><line x1="${padLeft}" x2="${padLeft}" y1="${padTop}" y2="${padTop + plotHeight}" stroke="#5a716e"/><g>${xTicks}</g><path d="${d}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/><g id="chartCursor" class="chart-cursor" hidden><line id="chartCursorLine" x1="0" x2="0" y1="${padTop}" y2="${padTop + plotHeight}"/><circle id="chartCursorPoint" cx="0" cy="0" r="4"/></g><text x="${padLeft}" y="18" fill="#294944" font-size="13" font-weight="700">${escapeHtml(axisTitle)}</text>`;
   state.chartMeta = { rows, curveKey, curveTitle, color, unit, padLeft, padRight, padTop, plotWidth, plotHeight, minValue, valueSpan, width, height };
+}
+
+function bindTimeChartRangeControls() {
+  document.querySelectorAll("[data-time-chart-scope]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.timeChartRange.scope = button.dataset.timeChartScope || "year";
+      state.timeChartRange = normalizeTimeChartRange(state.timeChartRange);
+      hideChartCursor();
+      renderTimeChartRangeControls();
+      renderChart();
+    });
+  });
+  const monthSelect = document.getElementById("timeChartMonth");
+  if (monthSelect) {
+    monthSelect.addEventListener("change", () => {
+      state.timeChartRange.month = Number(monthSelect.value);
+      state.timeChartRange.day = 1;
+      state.timeChartRange = normalizeTimeChartRange(state.timeChartRange);
+      hideChartCursor();
+      renderTimeChartRangeControls();
+      renderChart();
+    });
+  }
+  const daySelect = document.getElementById("timeChartDay");
+  if (daySelect) {
+    daySelect.addEventListener("change", () => {
+      state.timeChartRange.day = Number(daySelect.value);
+      state.timeChartRange = normalizeTimeChartRange(state.timeChartRange);
+      hideChartCursor();
+      renderTimeChartRangeControls();
+      renderChart();
+    });
+  }
+  renderTimeChartRangeControls();
+}
+
+function renderTimeChartRangeControls() {
+  state.timeChartRange = normalizeTimeChartRange(state.timeChartRange);
+  document.querySelectorAll("[data-time-chart-scope]").forEach((button) => {
+    const active = button.dataset.timeChartScope === state.timeChartRange.scope;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  const monthSelect = document.getElementById("timeChartMonth");
+  if (monthSelect) {
+    monthSelect.innerHTML = monthRanges.map(([label], index) => `<option value="${index}" ${index === state.timeChartRange.month ? "selected" : ""}>${label}</option>`).join("");
+    monthSelect.disabled = state.timeChartRange.scope === "year";
+  }
+  const daySelect = document.getElementById("timeChartDay");
+  if (daySelect) {
+    daySelect.innerHTML = availableDaysInMonth(state.timeChartRange.month).map((day) => `<option value="${day}" ${day === state.timeChartRange.day ? "selected" : ""}>${day}日</option>`).join("");
+    daySelect.disabled = state.timeChartRange.scope !== "day";
+  }
+}
+
+function normalizeTimeChartRange(range) {
+  const next = { scope: "year", month: 0, day: 1, ...(range || {}) };
+  if (!["year", "month", "day"].includes(next.scope)) next.scope = "year";
+  next.month = Math.min(Math.max(Number.isFinite(Number(next.month)) ? Number(next.month) : 0, 0), 11);
+  const days = availableDaysInMonth(next.month);
+  next.day = Math.min(Math.max(Number.isFinite(Number(next.day)) ? Number(next.day) : 1, 1), days.length);
+  return next;
+}
+
+function availableDaysInMonth(monthIndex) {
+  const [, start, end] = monthRanges[Math.min(Math.max(Number(monthIndex) || 0, 0), 11)] || monthRanges[0];
+  return Array.from({ length: Math.ceil((end - start) / 24) }, (_, index) => index + 1);
+}
+
+function filteredTimeChartRows(rows) {
+  const range = normalizeTimeChartRange(state.timeChartRange);
+  if (range.scope === "year") {
+    return rows.map((row, index) => ({ ...row, absoluteIndex: index }));
+  }
+  const [, monthStart, monthEnd] = monthRanges[range.month] || monthRanges[0];
+  const start = range.scope === "day" ? monthStart + (range.day - 1) * 24 : monthStart;
+  const end = range.scope === "day" ? Math.min(start + 24, monthEnd) : monthEnd;
+  return rows.slice(start, end).map((row, offset) => ({ ...row, absoluteIndex: start + offset }));
+}
+
+function timeChartXTicks(rows, x, height, padTop, plotHeight) {
+  if (!rows.length) return "";
+  if (state.timeChartRange.scope === "year") {
+    return monthRanges
+      .map(([label, start]) => {
+        const tickX = x(start);
+        return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="#8ba49f"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="#5a716e" font-size="11">${label}</text>`;
+      })
+      .join("");
+  }
+  const tickCount = state.timeChartRange.scope === "day" ? 6 : 5;
+  return Array.from({ length: tickCount }, (_, index) => {
+    const pointIndex = Math.min(Math.round((index / Math.max(tickCount - 1, 1)) * Math.max(rows.length - 1, 0)), rows.length - 1);
+    const row = rows[pointIndex] || {};
+    const label = state.timeChartRange.scope === "day" ? `${((row.absoluteIndex || 0) % 24) + 1}时` : `第${Math.floor(pointIndex / 24) + 1}日`;
+    const tickX = x(pointIndex);
+    return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="#8ba49f"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="#5a716e" font-size="11">${escapeHtml(label)}</text>`;
+  }).join("");
 }
 
 function selectedCurveSpec() {
@@ -2361,11 +2457,12 @@ function applyChartValueEdit(event) {
   const points = interpolatedCurveEditPoints(state.chartDrag?.lastPoint, point);
   let edited = false;
   points.forEach(({ index: pointIndex, value }) => {
-    const row = state.payload.time_series[pointIndex];
+    const absoluteIndex = meta.rows[pointIndex]?.absoluteIndex ?? pointIndex;
+    const row = state.payload.time_series[absoluteIndex];
     if (!row) return;
     const editedValue = roundEditedCurveValue(clampEditedCurveValue(value, meta.curveKey));
-    state.payload.time_series[pointIndex][meta.curveKey] = editedValue;
-    updateVisibleTimeCell(pointIndex, meta.curveKey, editedValue);
+    state.payload.time_series[absoluteIndex][meta.curveKey] = editedValue;
+    updateVisibleTimeCell(absoluteIndex, meta.curveKey, editedValue);
     edited = true;
   });
   if (!edited) return false;
@@ -2993,12 +3090,12 @@ function renderSummary() {
   }
   if (currentSchemeName) currentSchemeName.textContent = state.currentScheme;
   if (state.isSwitchingScheme) {
-    box.innerHTML = `<div>当前方案：<strong>${escapeHtml(state.currentScheme || "未选择方案")}</strong></div><div>正在切换方案...</div>`;
+    box.innerHTML = `<div>当前：<strong>${escapeHtml(state.currentScheme || "未选择方案")}</strong></div><div>正在切换方案...</div>`;
     list.innerHTML = '<div class="validation-item">正在加载方案数据...</div>';
     return;
   }
   const timeSeriesCount = isTimeSeriesLoaded() ? (state.payload.time_series || []).length : state.payload.time_series_count || 0;
-  box.innerHTML = `<div>当前方案：<strong>${escapeHtml(state.currentScheme)}</strong></div><div>时序行数：${timeSeriesCount}</div><div>设备条目：${deviceSpecs.reduce((sum, [key]) => sum + (state.payload[key] || []).length, 0)}</div>`;
+  box.innerHTML = `<div>当前：<strong>${escapeHtml(state.currentScheme)}</strong></div><div>时序行数：${timeSeriesCount}</div><div>设备条目：${deviceSpecs.reduce((sum, [key]) => sum + (state.payload[key] || []).length, 0)}</div>`;
   const localMessages = validateLocal();
   list.innerHTML = localMessages.map((item) => `<div class="validation-item ${item.level}">${escapeHtml(item.message)}</div>`).join("");
 }

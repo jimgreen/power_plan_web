@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260516-control-unify">
+  <link rel="stylesheet" href="assets/planning.css?v=20260516-layout-fill">
 </head>
 <body>
   <main class="planning-shell">
@@ -36,7 +36,7 @@
         <div class="editor-header">
           <div class="current-scheme-panel">
             <div class="current-scheme" aria-live="polite">
-              <span>当前方案:</span>
+              <span>当前:</span>
               <strong id="currentSchemeName">未选择方案</strong>
             </div>
           </div>
@@ -73,6 +73,15 @@
                 <button type="button" data-curve="solar_irradiance" class="curve-button" aria-pressed="false">太阳辐照</button>
                 <button type="button" data-curve="temperature" class="curve-button" aria-pressed="false">环境温度</button>
                 <button type="button" data-curve="load" class="curve-button" aria-pressed="false">负荷</button>
+              </div>
+              <div id="timeChartRange" class="time-chart-range" aria-label="时序曲线时间范围筛选">
+                <div class="time-chart-range-scope" role="group" aria-label="时序曲线时间范围">
+                  <button type="button" data-time-chart-scope="year" class="active" aria-pressed="true">全年</button>
+                  <button type="button" data-time-chart-scope="month" aria-pressed="false">指定月</button>
+                  <button type="button" data-time-chart-scope="day" aria-pressed="false">指定日</button>
+                </div>
+                <label>月份<select id="timeChartMonth"></select></label>
+                <label>日期<select id="timeChartDay"></select></label>
               </div>
             </div>
             <svg id="timeChart" class="time-chart" role="img" aria-label="风光温荷时序曲线"></svg>
@@ -232,6 +241,6 @@
   </main>
   <script src="assets/i18n.js?v=20260514-i18n"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/planning.js?v=20260514-rated-wind-speed"></script>
+  <script src="assets/planning.js?v=20260516-range-controls"></script>
 </body>
 </html>

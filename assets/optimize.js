@@ -194,7 +194,7 @@ function bindSchemeListItem(item, onSelect) {
 
 function renderCurrentScheme() {
   const current = document.getElementById("optimizationCurrentScheme");
-  current.textContent = `当前方案: ${state.currentScheme || "未选择方案"}`;
+  current.textContent = `当前: ${state.currentScheme || "未选择方案"}`;
 }
 
 function bindOptimizationActions() {
@@ -260,10 +260,10 @@ function renderOptimizationSwitchingState(scheme, base = defaultOptimizationStat
     ...base,
     status: "切换中",
     metrics: [
-      { label: "当前状态", value: "切换中", unit: "" },
-      { label: "启动时刻", value: "-", unit: "" },
-      { label: "结束时刻", value: "-", unit: "" },
-      { label: "度电成本", value: "-", unit: "元/kWh" },
+      { label: "状态", value: "切换中", unit: "" },
+      { label: "开始", value: "-", unit: "" },
+      { label: "完成", value: "-", unit: "" },
+      { label: "度电成本", value: "-", unit: "元" },
       { label: "绿电占比", value: "-", unit: "%" },
     ],
     results: {
@@ -397,10 +397,10 @@ function defaultOptimizationState(scheme = "") {
     end_time: "",
     progress: 0,
     metrics: [
-      { label: "当前状态", value: "待启动", unit: "" },
-      { label: "启动时刻", value: "-", unit: "" },
-      { label: "结束时刻", value: "-", unit: "" },
-      { label: "度电成本", value: "-", unit: "元/kWh" },
+      { label: "状态", value: "待启动", unit: "" },
+      { label: "开始", value: "-", unit: "" },
+      { label: "完成", value: "-", unit: "" },
+      { label: "度电成本", value: "-", unit: "元" },
       { label: "绿电占比", value: "-", unit: "%" },
     ],
     results: {
@@ -419,9 +419,9 @@ function defaultOptimizationState(scheme = "") {
 
 function renderMetrics(metrics) {
   const byLabel = new Map(metrics.map((item) => [item.label, item]));
-  setMetric("optimizationStatus", byLabel.get("当前状态"));
-  setMetric("optimizationStartTime", byLabel.get("启动时刻"));
-  setMetric("optimizationEndTime", byLabel.get("结束时刻"));
+  setMetric("optimizationStatus", byLabel.get("状态"));
+  setMetric("optimizationStartTime", byLabel.get("开始"));
+  setMetric("optimizationEndTime", byLabel.get("完成"));
   setMetric("optimizationCost", byLabel.get("度电成本"));
   setMetric("optimizationGreenRatio", byLabel.get("绿电占比"));
 }
@@ -434,7 +434,7 @@ function setMetric(id, item) {
     return;
   }
   const unit = item.unit ? ` ${item.unit}` : "";
-  element.textContent = `${item.value}${unit}`;
+  element.textContent = `${formatMetricValue(item)}${unit}`;
 }
 
 function defaultOverviewTables() {
@@ -757,7 +757,7 @@ function renderResultTable(rows) {
   if (!rows.length) return '<div class="empty-summary">暂无结果</div>';
   const headers = Object.keys(rows[0]);
   return `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header])}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header]))}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
 
@@ -778,21 +778,40 @@ function renderMiniBars(points) {
     .map((point) => {
       const value = Number(point.value) || 0;
       const height = Math.max(6, (value / maxValue) * 100);
-      return `<div class="mini-bar-item"><div class="mini-bar-value">${escapeHtml(value)}</div><div class="mini-bar-track"><span style="height:${height}%"></span></div><div class="mini-bar-label">${escapeHtml(point.label)}</div></div>`;
+      return `<div class="mini-bar-item"><div class="mini-bar-value">${escapeHtml(formatDisplayValue(value))}</div><div class="mini-bar-track"><span style="height:${height}%"></span></div><div class="mini-bar-label">${escapeHtml(point.label)}</div></div>`;
     })
     .join("")}</div>`;
+}
+
+function formatMetricValue(item) {
+  if (!item) return "-";
+  if (["开始", "完成"].includes(item.label)) return formatMetricTime(item.value);
+  return formatDisplayValue(item.value);
+}
+
+function formatMetricTime(value) {
+  const text = String(value ?? "").trim();
+  if (!text || text === "-") return "-";
+  const match = text.match(/(\d{2}:\d{2}:\d{2})$/);
+  return match ? match[1] : text;
+}
+
+function formatDisplayValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
+  if (Number.isInteger(value)) return value.toLocaleString("zh-CN");
+  return formatNumber(value);
 }
 
 function formatNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
-  return number.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+  return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatAxisNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
-  return Math.round(number).toLocaleString("zh-CN");
+  return formatNumber(number);
 }
 
 function formatFrequency(value) {

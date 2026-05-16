@@ -4,7 +4,6 @@ const state = {
   optimization: null,
   pollTimer: null,
   pollDelay: 4000,
-  optimizationLogHeight: null,
   greenResultTableWidth: null,
   safetyResultTableWidth: null,
   overviewLeftColumnWidth: null,
@@ -20,16 +19,11 @@ const state = {
   evaluationCurveViewer: null,
   evaluationResultRailWidth: null,
   curveDataKey: "",
-  activeLogView: "logs",
+  activeResultTab: "overview",
   isSwitchingResult: false,
   greenSeriesVisibility: null,
   safetySeriesVisibility: null,
   seriesToggleBound: false,
-};
-
-const optimizationResizeMinHeights = {
-  result: 220,
-  log: 120,
 };
 
 const resultTabLabels = {
@@ -135,7 +129,6 @@ document.addEventListener("DOMContentLoaded", () => {
         promptText: "请选择小时级曲线",
       })
     : null;
-  bindLogViewTabs();
   bindResultTabs();
   bindOptimizationActions();
   bindEvaluationResultActions();
@@ -147,7 +140,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   bindSeriesToggleButtons();
   bindEvaluationMainResizeHandle();
-  bindOptimizationLogResizeHandle();
   window.addEventListener("resize", () => {
     clampEvaluationMainWidth();
   });
@@ -223,13 +215,13 @@ function bindSchemeListItem(item, onSelect) {
 
 function renderCurrentScheme() {
   const current = document.getElementById("optimizationCurrentScheme");
-  current.textContent = `当前方案: ${state.currentScheme || "未选择方案"}`;
+  current.textContent = `当前: ${state.currentScheme || "未选择方案"}`;
 }
 
 function renderEvaluationCurrentScheme() {
   const current = document.getElementById("evaluationCurrentScheme");
   if (!current) return;
-  current.textContent = `当前方案: ${state.currentScheme || "未选择方案"}`;
+  current.textContent = `当前: ${state.currentScheme || "未选择方案"}`;
 }
 
 function bindOptimizationActions() {
@@ -279,11 +271,11 @@ function renderEvaluationSchemeSwitchingState(scheme, base = defaultOptimization
     ...base,
     status: "切换中",
     metrics: [
-      { label: "当前状态", value: "切换中", unit: "" },
-      { label: "启动时刻", value: "-", unit: "" },
-      { label: "结束时刻", value: "-", unit: "" },
-      { label: "综合评分", value: "-", unit: "分" },
-      { label: "风险等级", value: "-", unit: "" },
+      { label: "状态", value: "切换中", unit: "" },
+      { label: "开始", value: "-", unit: "" },
+      { label: "完成", value: "-", unit: "" },
+      { label: "度电成本", value: "-", unit: "元" },
+      { label: "绿电占比", value: "-", unit: "%" },
     ],
     results: {
       overview_tables: [
@@ -325,11 +317,11 @@ function renderEvaluationSwitchingState(filename, base = defaultOptimizationStat
     ...base,
     status: "切换中",
     metrics: [
-      { label: "当前状态", value: "切换中", unit: "" },
-      { label: "启动时刻", value: "-", unit: "" },
-      { label: "结束时刻", value: "-", unit: "" },
-      { label: "综合评分", value: "-", unit: "分" },
-      { label: "风险等级", value: "-", unit: "" },
+      { label: "状态", value: "切换中", unit: "" },
+      { label: "开始", value: "-", unit: "" },
+      { label: "完成", value: "-", unit: "" },
+      { label: "度电成本", value: "-", unit: "元" },
+      { label: "绿电占比", value: "-", unit: "%" },
     ],
     results: {
       overview_tables: [
@@ -366,29 +358,7 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
   renderEvaluationPlanningResultTable();
-  if (state.activeLogView === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
-}
-
-function bindLogViewTabs() {
-  const buttons = Array.from(document.querySelectorAll("[data-log-view]"));
-  const panels = Array.from(document.querySelectorAll("[data-log-view-panel]"));
-  buttons.forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = button.dataset.logView || "logs";
-      state.activeLogView = target;
-      buttons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle("active", active);
-        item.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const active = panel.dataset.logViewPanel === target;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      if (target === "curves") loadEvaluationCurveData().catch(showError);
-    });
-  });
+  if (state.activeResultTab === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
 }
 
 function renderEvaluationResults() {
@@ -546,7 +516,7 @@ async function manageEvaluationResult(action, extra = {}) {
     state.curveDataKey = "";
     renderEvaluationResults();
     renderEvaluationPlanningResultTable();
-    if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
+    if (state.activeResultTab === "curves") loadEvaluationCurveData().catch(showError);
     renderEvaluationMessage(action, data.selected);
   } catch (error) {
     const data = error.payload || {};
@@ -649,6 +619,7 @@ function bindResultTabs() {
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
       const target = button.dataset.resultTab;
+      state.activeResultTab = target || "overview";
       buttons.forEach((item) => {
         const active = item === button;
         item.classList.toggle("active", active);
@@ -659,6 +630,7 @@ function bindResultTabs() {
         panel.classList.toggle("active", active);
         panel.hidden = !active;
       });
+      if (target === "curves") loadEvaluationCurveData().catch(showError);
       window.requestAnimationFrame(refreshAdaptiveResultCharts);
     });
   });
@@ -676,7 +648,7 @@ function renderOptimization(data) {
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
-  if (state.activeLogView === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
+  if (state.activeResultTab === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
 }
 
 async function loadEvaluationCurveData() {
@@ -735,11 +707,11 @@ function defaultOptimizationState(scheme = "") {
     end_time: "",
     progress: 0,
     metrics: [
-      { label: "当前状态", value: "待启动", unit: "" },
-      { label: "启动时刻", value: "-", unit: "" },
-      { label: "结束时刻", value: "-", unit: "" },
-      { label: "综合评分", value: "-", unit: "分" },
-      { label: "风险等级", value: "-", unit: "" },
+      { label: "状态", value: "待启动", unit: "" },
+      { label: "开始", value: "-", unit: "" },
+      { label: "完成", value: "-", unit: "" },
+      { label: "度电成本", value: "-", unit: "元" },
+      { label: "绿电占比", value: "-", unit: "%" },
     ],
     results: {
       overview_tables: defaultOverviewTables(),
@@ -757,26 +729,11 @@ function defaultOptimizationState(scheme = "") {
 
 function renderMetrics(metrics) {
   const byLabel = new Map(metrics.map((item) => [item.label, item]));
-  setMetric("optimizationStatus", byLabel.get("当前状态"));
-  setMetric("optimizationStartTime", byLabel.get("启动时刻"));
-  setMetric("optimizationEndTime", byLabel.get("结束时刻"));
-  setMetric("evaluationScore", evaluationScoreMetric(byLabel));
-  setMetric("evaluationRisk", evaluationRiskMetric(byLabel));
-}
-
-function evaluationScoreMetric(byLabel) {
-  const greenRatio = Number(byLabel.get("绿电占比")?.value);
-  const cost = Number(byLabel.get("度电成本")?.value);
-  if (!Number.isFinite(greenRatio) || !Number.isFinite(cost)) return { value: "-", unit: "分" };
-  return { value: Math.max(0, Math.min(100, Math.round(greenRatio - cost * 8 + 12))), unit: "分" };
-}
-
-function evaluationRiskMetric(byLabel) {
-  const status = byLabel.get("当前状态")?.value || "待启动";
-  const greenRatio = Number(byLabel.get("绿电占比")?.value);
-  if (status === "待启动") return { value: "-", unit: "" };
-  if (!Number.isFinite(greenRatio)) return { value: "待评估", unit: "" };
-  return { value: greenRatio >= 82 ? "低" : greenRatio >= 68 ? "中" : "高", unit: "" };
+  setMetric("optimizationStatus", byLabel.get("状态"));
+  setMetric("optimizationStartTime", byLabel.get("开始"));
+  setMetric("optimizationEndTime", byLabel.get("完成"));
+  setMetric("evaluationScore", byLabel.get("度电成本"));
+  setMetric("evaluationRisk", byLabel.get("绿电占比"));
 }
 
 function setMetric(id, item) {
@@ -787,7 +744,7 @@ function setMetric(id, item) {
     return;
   }
   const unit = item.unit ? ` ${item.unit}` : "";
-  element.textContent = `${item.value}${unit}`;
+  element.textContent = `${formatMetricValue(item)}${unit}`;
 }
 
 function defaultOverviewTables() {
@@ -1110,7 +1067,7 @@ function renderResultTable(rows) {
   if (!rows.length) return '<div class="empty-summary">暂无结果</div>';
   const headers = Object.keys(rows[0]);
   return `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header])}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header]))}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
 
@@ -1131,21 +1088,40 @@ function renderMiniBars(points) {
     .map((point) => {
       const value = Number(point.value) || 0;
       const height = Math.max(6, (value / maxValue) * 100);
-      return `<div class="mini-bar-item"><div class="mini-bar-value">${escapeHtml(value)}</div><div class="mini-bar-track"><span style="height:${height}%"></span></div><div class="mini-bar-label">${escapeHtml(point.label)}</div></div>`;
+      return `<div class="mini-bar-item"><div class="mini-bar-value">${escapeHtml(formatDisplayValue(value))}</div><div class="mini-bar-track"><span style="height:${height}%"></span></div><div class="mini-bar-label">${escapeHtml(point.label)}</div></div>`;
     })
     .join("")}</div>`;
+}
+
+function formatMetricValue(item) {
+  if (!item) return "-";
+  if (["开始", "完成"].includes(item.label)) return formatMetricTime(item.value);
+  return formatDisplayValue(item.value);
+}
+
+function formatMetricTime(value) {
+  const text = String(value ?? "").trim();
+  if (!text || text === "-") return "-";
+  const match = text.match(/(\d{2}:\d{2}:\d{2})$/);
+  return match ? match[1] : text;
+}
+
+function formatDisplayValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
+  if (Number.isInteger(value)) return value.toLocaleString("zh-CN");
+  return formatNumber(value);
 }
 
 function formatNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
-  return number.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+  return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatAxisNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
-  return Math.round(number).toLocaleString("zh-CN");
+  return formatNumber(number);
 }
 
 function formatFrequency(value) {
@@ -1571,14 +1547,12 @@ function clampEvaluationMainWidth() {
 function evaluationMainWidthBounds() {
   const workspace = document.querySelector(".evaluation-workspace");
   if (!workspace) return { min: 280, max: 620 };
-  const schemeRail = workspace.querySelector(".scheme-rail");
   const handle = document.getElementById("evaluationMainResizeHandle");
   const style = window.getComputedStyle(workspace);
   const gap = cssNumber(style.columnGap || style.gap);
-  const schemeWidth = schemeRail?.getBoundingClientRect().width || 260;
   const handleWidth = handle?.getBoundingClientRect().width || 10;
   const minRightWidth = 420;
-  const max = workspace.clientWidth - schemeWidth - handleWidth - minRightWidth - gap * 3;
+  const max = workspace.clientWidth - handleWidth - minRightWidth - gap * 2;
   return {
     min: 280,
     max: Math.max(280, Math.min(680, max)),
@@ -1685,64 +1659,6 @@ function overviewColumnWidthBounds(handle) {
   return { min: 240, max: Math.max(260, max) };
 }
 
-function bindOptimizationLogResizeHandle() {
-  const handle = document.getElementById("optimizationLogResizeHandle");
-  const logCard = document.querySelector(".optimization-log-card");
-  if (!handle || !logCard) return;
-
-  const applyHeight = (height) => {
-    const safeHeight = clampOptimizationLogHeight(height);
-    setOptimizationLogHeight(safeHeight, handle);
-    setEvaluationUpperHeight(Math.max(optimizationResizeMinHeights.result, evaluationWorkspaceContentHeight() - safeHeight));
-  };
-
-  handle.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = logCard.getBoundingClientRect().height || 180;
-    handle.classList.add("dragging");
-    handle.setPointerCapture?.(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      applyHeight(startHeight - (moveEvent.clientY - startY));
-    };
-    const onDone = () => {
-      handle.classList.remove("dragging");
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onDone);
-      window.removeEventListener("pointercancel", onDone);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onDone);
-    window.addEventListener("pointercancel", onDone);
-  });
-
-  bindResizeHandleKeys(handle, () => state.optimizationLogHeight || logCard.getBoundingClientRect().height || 180, applyHeight, optimizationLogHeightBounds);
-  handle.setAttribute("aria-valuenow", String(Math.round(logCard.getBoundingClientRect().height || 180)));
-}
-
-function bindResizeHandleKeys(handle, currentHeight, applyHeight, boundsFactory) {
-  handle.addEventListener("keydown", (event) => {
-    const keySteps = {
-      ArrowUp: 16,
-      ArrowDown: -16,
-      PageUp: 64,
-      PageDown: -64,
-    };
-    if (event.key in keySteps) {
-      event.preventDefault();
-      applyHeight(currentHeight() + keySteps[event.key]);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      applyHeight(boundsFactory().min);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      applyHeight(boundsFactory().max);
-    }
-  });
-}
-
 function bindHorizontalResizeHandleKeys(handle, currentWidth, applyWidth, boundsFactory) {
   handle.addEventListener("keydown", (event) => {
     const keySteps = {
@@ -1762,62 +1678,6 @@ function bindHorizontalResizeHandleKeys(handle, currentWidth, applyWidth, bounds
       applyWidth(boundsFactory().max);
     }
   });
-}
-
-function setOptimizationLogHeight(height, handle = document.getElementById("optimizationLogResizeHandle")) {
-  const roundedHeight = Math.round(height);
-  state.optimizationLogHeight = roundedHeight;
-  document.documentElement.style.setProperty("--optimization-log-height", `${roundedHeight}px`);
-  handle?.setAttribute("aria-valuenow", String(roundedHeight));
-}
-
-function setEvaluationUpperHeight(height) {
-  document.documentElement.style.setProperty("--evaluation-upper-height", `${Math.round(height)}px`);
-}
-
-function clampOptimizationLogHeight(height) {
-  const bounds = optimizationLogHeightBounds();
-  return Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
-}
-
-function optimizationLogHeightBounds() {
-  const availableHeight = evaluationWorkspaceContentHeight();
-  const maxLogHeight = availableHeight - optimizationResizeMinHeights.result;
-  return {
-    min: optimizationResizeMinHeights.log,
-    max: Math.max(optimizationResizeMinHeights.log, Math.min(520, maxLogHeight)),
-  };
-}
-
-function optimizationMainContentHeight() {
-  const panel = document.querySelector(".optimization-panel");
-  if (!panel) return Math.max(optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
-  const style = window.getComputedStyle(panel);
-  const paddingY = cssNumber(style.paddingTop) + cssNumber(style.paddingBottom);
-  const rowGap = cssNumber(style.rowGap || style.gap);
-  return Math.max(
-    optimizationResizeMinHeights.result,
-    panel.clientHeight - paddingY - rowGap,
-  );
-}
-
-function evaluationWorkspaceContentHeight() {
-  const workspace = document.querySelector(".evaluation-workspace");
-  if (!workspace) return Math.max(optimizationResizeMinHeights.result + optimizationResizeMinHeights.log, window.innerHeight - 260);
-  const style = window.getComputedStyle(workspace);
-  const paddingY = cssNumber(style.paddingTop) + cssNumber(style.paddingBottom);
-  const rowGap = cssNumber(style.rowGap || style.gap);
-  const logHandle = document.getElementById("optimizationLogResizeHandle");
-  const handleHeight = logHandle?.getBoundingClientRect().height || 14;
-  return Math.max(
-    optimizationResizeMinHeights.result + optimizationResizeMinHeights.log,
-    workspace.clientHeight - paddingY - rowGap * 2 - handleHeight,
-  );
-}
-
-function currentOptimizationLogHeight() {
-  const logCard = document.querySelector(".optimization-log-card");
-  return state.optimizationLogHeight || logCard?.getBoundingClientRect().height || 180;
 }
 
 function cssNumber(value) {

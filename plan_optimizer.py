@@ -35,6 +35,7 @@ def run_optimization(
     scheme_payload: dict[str, Any],
     log: LogSink | None = None,
     horizon_hours: int | None = None,
+    allow_direct_result: bool = True,
 ) -> dict[str, Any]:
     """Optimize equipment quantities and dispatch as a joint MILP."""
 
@@ -55,7 +56,7 @@ def run_optimization(
     emit_model_input_summary(model, log)
     emit_device_candidate_summary(model, log)
     emit(log, "info", "已加入台数上下限、建设成本、柴油成本和绿电占比约束", 15)
-    direct_result = direct_zero_load_result(model, log)
+    direct_result = direct_zero_load_result(model, log) if allow_direct_result else None
     if direct_result is None:
         solution = solve_planning_model(model, log)
         emit(log, "info", "优化求解完成，正在整理规划结果和8760曲线", 85)
@@ -89,6 +90,10 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     # before the MILP builder sees it.
     planning_parameters = estimate.first_row(scheme_payload.get("planning_parameters"))
     diesel_price = max(0.0, numeric(planning_parameters.get("diesel_price"), 0.0))
+    diesel_objective_price = max(
+        0.0,
+        numeric(scheme_payload.get("_diesel_objective_price"), diesel_price),
+    )
     green_ratio_lower = min(1.0, max(0.0, numeric(planning_parameters.get("green_power_ratio_lower"), 0.0)))
     raw_time_limit_minutes = planning_parameters.get(
         "optimization_time_limit_minutes",
@@ -133,9 +138,11 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         for device in device_rows["photovoltaics"]
     }
     return {
+        "problem_name": str(scheme_payload.get("_optimization_problem_name") or "规划求解"),
         "time_series": time_series,
         "loads": loads,
         "diesel_price": diesel_price,
+        "diesel_objective_price": diesel_objective_price,
         "green_ratio_lower": green_ratio_lower,
         "optimization_time_limit_minutes": optimization_time_limit_minutes,
         "optimization_time_limit_seconds": optimization_time_limit_seconds,
@@ -211,7 +218,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 ("diesel_power", hour, device["index"]),
                 0.0,
                 device["power_upper"] * device["quantity_upper"],
-                cost=device["fuel_rate"] * model["diesel_price"] / 1000,
+                cost=device["fuel_rate"] * model["diesel_objective_price"] / 1000,
             )
             builder.add_var(
                 ("diesel_on_count", hour, device["index"]),
@@ -483,11 +490,11 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             "solver_log_interval": 2.0,
         },
         log=log,
-        problem_name="规划求解",
+        problem_name=model.get("problem_name", "规划求解"),
         solve_fn=solve_milp,
     )
     if result.x is None:
-        raise ValueError(f"规划优化失败：{result.message}")
+        raise ValueError(f"{model.get('problem_name', '规划求解')}失败：{result.message}")
     objective_value = float(result.fun) if result.fun is not None else 0.0
     emit(
         log,
@@ -1046,7 +1053,33 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
 
 
 def dispatch_totals(dispatch_rows: list[dict[str, Any]]) -> dict[str, float]:
-    totals = estimate.dispatch_totals(dispatch_rows, 0.0, 1.0)
+    totals = {
+        "load_energy": estimate.sum_numeric(dispatch_rows, "load"),
+        "wind_energy": estimate.sum_numeric(dispatch_rows, "wind_power"),
+        "pv_energy": estimate.sum_numeric(dispatch_rows, "pv_power"),
+        "storage_discharge_energy": estimate.sum_numeric(dispatch_rows, "storage_discharge"),
+        "storage_charge_energy": estimate.sum_numeric(dispatch_rows, "storage_charge"),
+        "diesel_energy": estimate.sum_numeric(dispatch_rows, "diesel_power"),
+        "curtailed_energy": estimate.sum_numeric(dispatch_rows, "curtailed_power"),
+        "unmet_load_energy": estimate.sum_numeric(dispatch_rows, "unmet_load"),
+        "hydrogen_production_energy": estimate.sum_numeric(dispatch_rows, "hydrogen_production_power"),
+        "fuel_cell_energy": estimate.sum_numeric(dispatch_rows, "fuel_cell_power"),
+        "wind_available_energy": estimate.sum_numeric(dispatch_rows, "wind_available"),
+        "pv_available_energy": estimate.sum_numeric(dispatch_rows, "pv_available"),
+        "renewable_available_energy": sum(
+            numeric(row.get("renewable_available"), numeric(row.get("wind_available"), 0.0) + numeric(row.get("pv_available"), 0.0))
+            for row in dispatch_rows
+        ),
+        "renewable_energy": sum(
+            numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0)
+            for row in dispatch_rows
+        ),
+        "wind_curtailed_energy": estimate.sum_numeric(dispatch_rows, "wind_curtailed_power"),
+        "pv_curtailed_energy": estimate.sum_numeric(dispatch_rows, "pv_curtailed_power"),
+        "hydrogen_storage_increase": sum(estimate.positive_delta(dispatch_rows, "hydrogen_storage", 0.0)),
+        "hydrogen_storage_decrease": sum(estimate.negative_delta(dispatch_rows, "hydrogen_storage", 0.0)),
+    }
+    totals["renewable_curtailed_rate"] = estimate.percent(totals["curtailed_energy"], totals["renewable_available_energy"])
     totals["diesel_consumption"] = sum(numeric(row.get("diesel_consumption"), 0.0) for row in dispatch_rows)
     totals["hydrogen_production"] = sum(numeric(row.get("hydrogen_production"), 0.0) for row in dispatch_rows)
     totals["green_generation_energy"] = (
@@ -1111,6 +1144,7 @@ def build_results(
         {"指标": "年柴油成本", "数值": costs["annual_diesel_cost"], "单位": "万元"},
         {"指标": "年总成本", "数值": costs["annual_total_cost"], "单位": "万元"},
         {"指标": "总成本", "数值": costs["annual_total_cost"], "单位": "万元"},
+        {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元"},
         {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%"},
         {"指标": "频率风险点", "数值": sum(1 for row in dispatch_rows if numeric(row.get("unmet_load"), 0.0) > 0), "单位": "个"},
     ]
@@ -1135,6 +1169,7 @@ def build_results(
         {"指标": "年均建设成本", "数值": costs["annualized_construction_cost"], "单位": "万元"},
         {"指标": "年柴油成本", "数值": costs["annual_diesel_cost"], "单位": "万元"},
         {"指标": "年总成本", "数值": costs["annual_total_cost"], "单位": "万元"},
+        {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元"},
     ]
     return {
         "overview_tables": [
@@ -1160,7 +1195,7 @@ def build_results(
             },
         ],
         "overview": [
-            {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元/kWh", "说明": "年总成本折算"},
+            {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元", "说明": "年总成本折算"},
             {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "按风光、储能放电和燃料电池发电统计"},
             {"指标": "总成本", "数值": costs["annual_total_cost"], "单位": "万元", "说明": "年均建设成本加年柴油成本"},
         ],
@@ -1203,7 +1238,7 @@ def build_metrics(totals: dict[str, float], costs: dict[str, float]) -> list[dic
         {"label": "年均建设成本", "value": costs["annualized_construction_cost"], "unit": "万元"},
         {"label": "年柴油成本", "value": costs["annual_diesel_cost"], "unit": "万元"},
         {"label": "年总成本", "value": costs["annual_total_cost"], "unit": "万元"},
-        {"label": "度电成本", "value": costs["levelized_cost"], "unit": "元/kWh"},
+        {"label": "度电成本", "value": costs["levelized_cost"], "unit": "元"},
         {"label": "绿电占比", "value": round(totals["green_power_ratio"], 4), "unit": "%"},
     ]
 

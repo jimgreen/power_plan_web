@@ -396,6 +396,106 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(model["storage_charge_efficiency"], 0.91)
         self.assertEqual(model["storage_discharge_efficiency"], 0.89)
 
+    def test_evaluation_run_reuses_planning_optimizer_with_fixed_quantities(self):
+        payload = self._payload()
+        payload["diesel_generators"][0].update({"name": "评估柴发", "quantity_lower": 0, "quantity_upper": 9})
+        payload["wind_turbines"][0].update({"name": "评估风机", "quantity_lower": 0, "quantity_upper": 9})
+        payload["planning_parameters"][0]["diesel_price"] = 0
+        result_rows = [
+            {"设备类型": "柴发", "名称": "评估柴发", "设计台数": 2, "单台容量": 10, "总容量": 20, "单位": "kW"},
+            {"设备类型": "风机", "名称": "评估风机", "设计台数": 3, "单台容量": 10, "总容量": 30, "单位": "kW"},
+        ]
+        captured = {}
+
+        def fake_run_optimization(fixed_payload, log=None, horizon_hours=None, allow_direct_result=True):
+            captured["diesel"] = fixed_payload["diesel_generators"][0]["quantity_lower"], fixed_payload["diesel_generators"][0]["quantity_upper"]
+            captured["wind"] = fixed_payload["wind_turbines"][0]["quantity_lower"], fixed_payload["wind_turbines"][0]["quantity_upper"]
+            captured["horizon_hours"] = horizon_hours
+            captured["allow_direct_result"] = allow_direct_result
+            captured["problem_name"] = fixed_payload.get("_optimization_problem_name")
+            captured["diesel_objective_price"] = fixed_payload.get("_diesel_objective_price")
+            return {
+                "status": "已完成",
+                "progress": 100,
+                "metrics": [{"label": "度电成本", "value": 0.0, "unit": "元"}],
+                "results": {"overview_tables": [], "overview_disks": [], "green_table": [], "safety_table": [], "curves": {}},
+                "planning_result_rows": result_rows,
+                "dispatch_rows": [],
+                "totals": {"diesel_consumption": 0.0},
+            }
+
+        with patch.object(plan_optimizer, "run_optimization", side_effect=fake_run_optimization):
+            result = estimate.run_estimation(payload, result_rows)
+
+        self.assertEqual(captured["diesel"], (2, 2))
+        self.assertEqual(captured["wind"], (3, 3))
+        self.assertIsNone(captured["horizon_hours"])
+        self.assertFalse(captured["allow_direct_result"])
+        self.assertEqual(captured["problem_name"], "方案评估")
+        self.assertEqual(captured["diesel_objective_price"], 1.0)
+        self.assertEqual(result["status"], "已完成")
+
+    def test_evaluation_module_does_not_keep_legacy_simple_dispatch_path(self):
+        source = (WEB_ROOT / "estimate.py").read_text(encoding="utf-8")
+
+        for forbidden in (
+            "build_legacy_dispatch_model",
+            "solve_legacy_dispatch_model",
+            "direct_dispatch_rows",
+            "direct_hour_dispatch",
+            "allocate_renewable_power",
+            "LOAD_SHED_PENALTY",
+            "DIESEL_ON_PENALTY",
+            "ELECTROLYZER_ON_PENALTY",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_evaluation_dispatch_model_is_fixed_quantity_planning_model(self):
+        payload = self._payload()
+        payload["time_series"] = payload["time_series"][:1]
+        payload["diesel_generators"][0].update(
+            {"name": "评估柴发", "capacity": 10, "power_upper": 10, "quantity_lower": 0, "quantity_upper": 9}
+        )
+        result_rows = [
+            {"设备类型": "柴发", "名称": "评估柴发", "设计台数": 2, "单台容量": 10, "总容量": 20, "单位": "kW"},
+        ]
+        model = estimate.build_dispatch_model(payload, result_rows)
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["lower_bounds"] = lower_bounds.copy()
+            captured["upper_bounds"] = upper_bounds.copy()
+            captured["integrality"] = integrality.copy()
+            captured["problem_name"] = problem_name
+            return SimpleNamespace(success=True, x=lower_bounds.copy(), fun=0.0, message="ok")
+
+        with patch.object(estimate, "solve_milp", side_effect=fake_solve_milp):
+            estimate.solve_dispatch_model(model)
+
+        variables = model["variables"]
+        qty_index = variables[("qty", "diesel_generators", 0)]
+        self.assertEqual(captured["lower_bounds"][qty_index], 2)
+        self.assertEqual(captured["upper_bounds"][qty_index], 2)
+        self.assertEqual(captured["integrality"][qty_index], 1)
+        self.assertEqual(captured["problem_name"], "方案评估")
+        self.assertIn(("diesel_power", 0, 0), variables)
+        self.assertNotIn(("diesel_power", 0), variables)
+
+    def test_evaluation_fixed_payload_treats_legacy_storage_row_as_pcs_and_battery(self):
+        payload = self._payload()
+        payload["storage_pcs"][0].update({"quantity_lower": 0, "quantity_upper": 9})
+        payload["storage_battery_packs"][0].update({"quantity_lower": 0, "quantity_upper": 9})
+        result_rows = [
+            {"设备类型": "储能", "设计台数": 2, "单台容量": 100, "总容量": 200, "单位": "kWh"},
+        ]
+
+        fixed_payload = estimate.fixed_quantity_payload(payload, result_rows)
+
+        self.assertEqual(fixed_payload["storage_pcs"][0]["quantity_lower"], 2)
+        self.assertEqual(fixed_payload["storage_pcs"][0]["quantity_upper"], 2)
+        self.assertEqual(fixed_payload["storage_battery_packs"][0]["quantity_lower"], 2)
+        self.assertEqual(fixed_payload["storage_battery_packs"][0]["quantity_upper"], 2)
+
     def test_dispatch_evaluation_applies_storage_and_hydrogen_self_discharge(self):
         payload = self._payload()
         payload["time_series"] = payload["time_series"][:2]

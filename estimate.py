@@ -1,42 +1,22 @@
 #!/usr/bin/env python3
-"""8760-hour evaluation dispatch for a fixed planning result."""
+"""Evaluation entry point implemented as a fixed-quantity planning MILP."""
 
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 from pathlib import Path
 from typing import Any, Callable
 
-import numpy as np
 import planning_store
 
-import dispatch_milp
 from milp_solver import solve_milp
 
 
 LogSink = Callable[[dict[str, Any]], None]
 
-VARIABLES = {
-    "diesel_power": 0,
-    "diesel_on": 1,
-    "wind_power": 2,
-    "pv_power": 3,
-    "storage_charge": 4,
-    "storage_discharge": 5,
-    "storage_soc": 6,
-    "electrolyzer_power": 7,
-    "electrolyzer_on": 8,
-    "hydrogen_storage": 9,
-    "fuel_cell_power": 10,
-    "curtailed_power": 11,
-    "unmet_load": 12,
-}
-VARIABLE_COUNT = len(VARIABLES)
-LOAD_SHED_PENALTY = 1_000_000.0
-DIESEL_ON_PENALTY = 0.001
-ELECTROLYZER_ON_PENALTY = 0.0001
 ENERGY_AGGREGATE_FIELDS = [
     "load_energy",
     "diesel_energy",
@@ -58,114 +38,42 @@ ENERGY_AGGREGATE_FIELDS = [
     "unmet_load_energy",
 ]
 
+EVALUATION_DEVICE_SPECS: dict[str, dict[str, str]] = {
+    "diesel_generators": {"label": "柴发", "capacity_field": "capacity"},
+    "wind_turbines": {"label": "风机", "capacity_field": "capacity"},
+    "photovoltaics": {"label": "光伏", "capacity_field": "capacity"},
+    "storage_pcs": {"label": "储能PCS", "capacity_field": "power_capacity"},
+    "storage_battery_packs": {"label": "储能电池组", "capacity_field": "battery_capacity"},
+    "hydrogen_electrolyzers": {"label": "电制氢", "capacity_field": "power_capacity"},
+    "hydrogen_tanks": {"label": "储氢罐", "capacity_field": "hydrogen_tank_capacity"},
+    "fuel_cells": {"label": "燃料电池", "capacity_field": "power_capacity"},
+}
 
-def run_estimation(scheme_payload: dict[str, Any], planning_result_rows: list[dict[str, Any]], log: LogSink | None = None) -> dict[str, Any]:
-    """Dispatch a fixed equipment plan as one 8760-hour MILP."""
 
-    # Evaluation shares the dispatch model with planning, but all equipment
-    # counts come from the selected result file instead of being optimized.
+def run_estimation(
+    scheme_payload: dict[str, Any],
+    planning_result_rows: list[dict[str, Any]],
+    log: LogSink | None = None,
+) -> dict[str, Any]:
+    """Evaluate the selected result by fixing quantities in the planning MILP."""
+
+    # The planning optimizer owns the shared objective and constraints:
+    # construction cost, diesel consumption, load shedding, unit commitment,
+    # storage, hydrogen, curtailment, disturbance and frequency-security hooks.
+    # Evaluation only fixes every quantity bound to the selected result file.
     time_series = scheme_payload.get("time_series") if isinstance(scheme_payload.get("time_series"), list) else []
     if len(time_series) != 8760:
         raise ValueError(f"评估调度需要8760点时序数据，当前为{len(time_series)}")
 
-    emit(log, "info", "开始8760点混合整数线性优化调度", 0)
-    model = build_dispatch_model(scheme_payload, planning_result_rows)
-    emit(log, "info", "已建立全年联合优化模型：柴发启停、制氢启停、储能、氢储、弃电和切负荷", 10)
-    dispatch_rows = direct_dispatch_rows(model, log)
-    if dispatch_rows is None:
-        dispatch_rows = solve_dispatch_model(model, log)
-    totals = dispatch_totals(dispatch_rows, model["fuel_rate"], model["electric_to_hydrogen_efficiency"])
-    totals = {key: round(value, 4) for key, value in totals.items()}
-    green_ratio = totals["renewable_ratio"]
-    curtailed_ratio = totals["renewable_curtailed_rate"]
-    results = build_results(planning_result_rows, dispatch_rows, totals, green_ratio, curtailed_ratio)
-    metrics = [
-        {"label": "当前状态", "value": "已完成", "unit": ""},
-        {"label": "柴油消耗", "value": totals["diesel_consumption"], "unit": "吨"},
-        {"label": "柴发总电量", "value": totals["diesel_energy"], "unit": "kWh"},
-        {"label": "绿电占比", "value": round(green_ratio, 2), "unit": "%"},
-        {"label": "弃电率", "value": round(curtailed_ratio, 2), "unit": "%"},
-    ]
+    emit(log, "info", "开始8760点混合整数线性优化调度（固定建设台数）", 0)
+    fixed_payload = fixed_quantity_payload(scheme_payload, planning_result_rows)
+    emit(log, "info", "已将当前规划结果转换为固定台数规划问题，复用规划求解模型", 8)
+
+    import plan_optimizer
+
+    result = plan_optimizer.run_optimization(fixed_payload, log=log, allow_direct_result=False)
     emit(log, "ok", "8760点优化调度完成", 100)
-    return {
-        "status": "已完成",
-        "progress": 100,
-        "metrics": metrics,
-        "results": results,
-        "dispatch_rows": dispatch_rows,
-        "totals": totals,
-    }
-
-
-def build_results(
-    planning_result_rows: list[dict[str, Any]],
-    dispatch_rows: list[dict[str, Any]],
-    totals: dict[str, float],
-    green_ratio: float,
-    curtailed_ratio: float,
-) -> dict[str, Any]:
-    # One evaluation run fans out into tables, disks and curve sets so the UI
-    # can switch views without recomputing aggregates.
-    daily = aggregate_daily(dispatch_rows)
-    monthly = aggregate_monthly(daily)
-    annual_rows = annual_energy_rows(totals, green_ratio, curtailed_ratio)
-    return {
-        "overview_tables": [
-            {"title": "规划结果", "rows": planning_result_rows},
-            {
-                "title": "规划年指标",
-                "rows": [
-                    *annual_rows,
-                    {"指标": "负荷总电量", "数值": totals["load_energy"], "单位": "kWh"},
-                    {"指标": "柴发总电量", "数值": totals["diesel_energy"], "单位": "kWh"},
-                    {"指标": "风能总电量", "数值": totals["wind_energy"], "单位": "kWh"},
-                    {"指标": "光伏总电量", "数值": totals["pv_energy"], "单位": "kWh"},
-                    {"指标": "电储总发电量", "数值": totals["storage_discharge_energy"], "单位": "kWh"},
-                    {"指标": "电储总充电量", "数值": totals["storage_charge_energy"], "单位": "kWh"},
-                    {"指标": "弃电量", "数值": totals["curtailed_energy"], "单位": "kWh"},
-                    {"指标": "切负荷量", "数值": totals["unmet_load_energy"], "单位": "kWh"},
-                    {"指标": "制氢总量", "数值": totals["hydrogen_production"], "单位": "Nm3"},
-                    {"指标": "燃料电池发电量", "数值": totals["fuel_cell_energy"], "单位": "kWh"},
-                    {"指标": "柴油消耗", "数值": totals["diesel_consumption"], "单位": "吨"},
-                    {"指标": "绿电占比", "数值": round(green_ratio, 2), "单位": "%"},
-                ],
-            },
-        ],
-        "overview_disks": [
-            {"title": "柴油消耗", "left_label": "柴发电量", "left_value": totals["diesel_energy"], "right_label": "绿电电量", "right_value": totals["wind_energy"] + totals["pv_energy"] + totals["storage_discharge_energy"], "unit": "kWh"},
-            {"title": "新能源利用", "left_label": "弃电量", "left_value": totals["curtailed_energy"], "right_label": "消纳电量", "right_value": totals["wind_energy"] + totals["pv_energy"] - totals["curtailed_energy"], "unit": "kWh"},
-        ],
-        "green_table": [
-            *annual_rows,
-            {"指标": "负荷总电量", "数值": totals["load_energy"], "单位": "kWh"},
-            {"指标": "柴发总电量", "数值": totals["diesel_energy"], "单位": "kWh"},
-            {"指标": "风机总发电量", "数值": totals["wind_energy"], "单位": "kWh"},
-            {"指标": "光伏总发电量", "数值": totals["pv_energy"], "单位": "kWh"},
-            {"指标": "电储总发电量", "数值": totals["storage_discharge_energy"], "单位": "kWh"},
-            {"指标": "新能源弃电率", "数值": round(curtailed_ratio, 2), "单位": "%"},
-            {"指标": "切负荷量", "数值": totals["unmet_load_energy"], "单位": "kWh"},
-            {"指标": "制氢总量", "数值": totals["hydrogen_production"], "单位": "Nm3"},
-            {"指标": "燃料电池发电量", "数值": totals["fuel_cell_energy"], "单位": "kWh"},
-            {"指标": "柴油消耗", "数值": totals["diesel_consumption"], "单位": "吨"},
-        ],
-        "safety_table": [
-            {"指标": "最大未供负荷", "数值": max((row["unmet_load"] for row in dispatch_rows), default=0), "单位": "kW"},
-            {"指标": "最低储能SOC", "数值": min((row["storage_soc"] for row in dispatch_rows), default=0), "单位": "kWh"},
-            {"指标": "最高储能SOC", "数值": max((row["storage_soc"] for row in dispatch_rows), default=0), "单位": "kWh"},
-            {"指标": "最低氢储量", "数值": min((row["hydrogen_storage"] for row in dispatch_rows), default=0), "单位": "Nm3"},
-            {"指标": "最高氢储量", "数值": max((row["hydrogen_storage"] for row in dispatch_rows), default=0), "单位": "Nm3"},
-            {"指标": "调度小时数", "数值": len(dispatch_rows), "单位": "h"},
-        ],
-        "curves": {
-            "green_daily": daily,
-            "green_monthly": monthly,
-            "green_hourly": dispatch_rows,
-            "safety_daily": [
-                {"day": row["day"], "frequency_max": 50.0 if row["unmet_load"] <= 0 else 49.8, "frequency_min": 50.0 if row["unmet_load"] <= 0 else 49.5}
-                for row in daily
-            ],
-        },
-    }
+    return result
 
 
 def annual_energy_rows(totals: dict[str, float], green_ratio: float, curtailed_ratio: float) -> list[dict[str, Any]]:
@@ -274,559 +182,147 @@ def add_energy_ratios(row: dict[str, Any]) -> None:
     row["renewable_curtailed_rate"] = round(percent(numeric(row.get("curtailed_energy"), 0.0), numeric(row.get("renewable_available_energy"), 0.0)), 4)
 
 
-def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    # Convert the selected planning result back into aggregate capacities and
-    # unit counts before constructing the fixed-dispatch model.
-    time_series = scheme_payload["time_series"]
-    planning_parameters = first_row(scheme_payload.get("planning_parameters"))
-    initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))
-    initial_hydrogen_storage_ratio = min(
-        1.0,
-        max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
-    )
-    raw_time_limit_minutes = planning_parameters.get(
-        "optimization_time_limit_minutes",
-        numeric(planning_parameters.get("optimization_time_limit_seconds"), 3600) / 60,
-    )
-    optimization_time_limit_minutes = int(min(120, max(10, round(numeric(raw_time_limit_minutes, 60)))))
-    post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
-    capacities = capacities_from_planning_rows(planning_result_rows)
-    device_params = first_device_params(scheme_payload)
-    diesel_params = device_params.get("diesel_generators", {})
-    storage_pcs_params = device_params.get("storage_pcs", {})
-    storage_battery_params = device_params.get("storage_battery_packs", {})
-    electrolyzer_params = device_params.get("hydrogen_electrolyzers", {})
-    hydrogen_tank_params = device_params.get("hydrogen_tanks", {})
-    fuel_cell_params = device_params.get("fuel_cells", {})
-    storage_charge_efficiency = storage_efficiency_value(
-        storage_pcs_params.get("storage_charge_efficiency"),
-        planning_parameters.get("storage_charge_efficiency"),
-        0.95,
-    )
-    storage_discharge_efficiency = storage_efficiency_value(
-        storage_pcs_params.get("storage_discharge_efficiency"),
-        planning_parameters.get("storage_discharge_efficiency"),
-        0.95,
-    )
-
-    loads = np.array([max(0.0, numeric(row.get("load"), 0.0)) for row in time_series], dtype=float)
-    wind_available = np.array([
-        wind_generation(numeric(row.get("wind_speed"), 0.0), capacities["wind_capacity"], device_params.get("wind_turbines", {}))
-        for row in time_series
-    ], dtype=float)
-    pv_available = np.array([
-        pv_generation(numeric(row.get("solar_irradiance"), 0.0), capacities["pv_capacity"], device_params.get("photovoltaics", {}))
-        for row in time_series
-    ], dtype=float)
-
-    diesel_capacity = capacities["diesel_capacity"]
-    unit_capacity = max(0.0, numeric(diesel_params.get("capacity"), diesel_capacity))
-    diesel_units = max(1, int(round(diesel_capacity / unit_capacity))) if diesel_capacity > 0 and unit_capacity > 0 else 0
-    diesel_unit_power_upper = min(unit_capacity, max(0.0, numeric(diesel_params.get("power_upper"), unit_capacity))) if diesel_units else 0.0
-    if diesel_unit_power_upper <= 0 and unit_capacity > 0:
-        diesel_unit_power_upper = unit_capacity
-    diesel_unit_power_lower = min(diesel_unit_power_upper, max(0.0, numeric(diesel_params.get("power_lower"), 0.0))) if diesel_unit_power_upper > 0 else 0.0
-    diesel_power_upper = diesel_unit_power_upper * diesel_units
-    diesel_power_lower = diesel_unit_power_lower * diesel_units
-
-    electrolyzer_power_upper = capacities["electrolyzer_power_capacity"]
-    electrolyzer_unit_capacity = max(0.0, numeric(electrolyzer_params.get("power_capacity"), electrolyzer_power_upper))
-    electrolyzer_units = max(1, int(round(electrolyzer_power_upper / electrolyzer_unit_capacity))) if electrolyzer_power_upper > 0 and electrolyzer_unit_capacity > 0 else 0
-    electrolyzer_unit_power_upper = electrolyzer_unit_capacity if electrolyzer_units else 0.0
-    electrolyzer_unit_power_lower = min(
-        electrolyzer_unit_power_upper,
-        max(0.0, numeric(electrolyzer_params.get("power_lower"), 0.0)),
-    ) if electrolyzer_unit_power_upper > 0 else 0.0
-    electrolyzer_power_upper = electrolyzer_unit_power_upper * electrolyzer_units
-    electrolyzer_power_lower = electrolyzer_unit_power_lower * electrolyzer_units
-    storage_unit_capacity = max(0.0, numeric(storage_pcs_params.get("power_capacity"), capacities["storage_power_capacity"]))
-    storage_units = max(1, int(round(capacities["storage_power_capacity"] / storage_unit_capacity))) if capacities["storage_power_capacity"] > 0 and storage_unit_capacity > 0 else 0
-    grid_storage_units = storage_units if truthy_flag(storage_pcs_params.get("is_grid_forming"), False) else 0
-    grid_storage_unit_capacity = storage_unit_capacity if grid_storage_units else 0.0
-    storage_soc_upper_ratio = min(1.0, max(0.0, numeric(storage_battery_params.get("soc_upper"), 0.9)))
-    storage_soc_lower_ratio = min(1.0, max(0.0, numeric(storage_battery_params.get("soc_lower"), 0.1)))
-    if storage_soc_upper_ratio < storage_soc_lower_ratio:
-        storage_soc_upper_ratio, storage_soc_lower_ratio = storage_soc_lower_ratio, storage_soc_upper_ratio
-    storage_self_discharge_rate = min(0.01, max(0.0, numeric(storage_battery_params.get("self_discharge_rate"), 0.01)))
-    hydrogen_self_discharge_rate = min(0.01, max(0.0, numeric(hydrogen_tank_params.get("self_discharge_rate"), 0.001)))
-
-    return {
-        "time_series": time_series,
-        "loads": loads,
-        "wind_available": wind_available,
-        "pv_available": pv_available,
-        "wind_speed": np.array([numeric(row.get("wind_speed"), 0.0) for row in time_series], dtype=float),
-        "solar_irradiance": np.array([numeric(row.get("solar_irradiance"), 0.0) for row in time_series], dtype=float),
-        "temperature": np.array([numeric(row.get("temperature"), 0.0) for row in time_series], dtype=float),
-        "diesel_power_upper": diesel_power_upper,
-        "diesel_power_lower": diesel_power_lower,
-        "diesel_units": diesel_units,
-        "diesel_unit_power_upper": diesel_unit_power_upper,
-        "diesel_unit_power_lower": diesel_unit_power_lower,
-        "storage_power_capacity": capacities["storage_power_capacity"],
-        "storage_energy_capacity": capacities["storage_energy_capacity"],
-        "storage_units": storage_units,
-        "storage_unit_capacity": storage_unit_capacity,
-        "grid_storage_units": grid_storage_units,
-        "grid_storage_unit_capacity": grid_storage_unit_capacity,
-        "storage_soc_upper_ratio": storage_soc_upper_ratio,
-        "storage_soc_lower_ratio": storage_soc_lower_ratio,
-        "electrolyzer_power_upper": electrolyzer_power_upper,
-        "electrolyzer_power_lower": electrolyzer_power_lower,
-        "electrolyzer_units": electrolyzer_units,
-        "electrolyzer_unit_power_upper": electrolyzer_unit_power_upper,
-        "electrolyzer_unit_power_lower": electrolyzer_unit_power_lower,
-        "hydrogen_tank_capacity": capacities["hydrogen_tank_capacity"],
-        "fuel_cell_power_capacity": capacities["fuel_cell_power_capacity"],
-        "initial_storage_soc_ratio": initial_storage_soc_ratio,
-        "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
-        "optimization_time_limit_seconds": optimization_time_limit_minutes * 60,
-        "storage_charge_efficiency": storage_charge_efficiency,
-        "storage_discharge_efficiency": storage_discharge_efficiency,
-        "storage_self_discharge_rate": storage_self_discharge_rate,
-        "hydrogen_self_discharge_rate": hydrogen_self_discharge_rate,
-        "post_disturbance_power_balance_enabled": post_disturbance_power_balance_enabled,
-        "load_up_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
-        "load_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_down_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
-        "renewable_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("renewable_down_disturbance_factor"), 0.0)),
-        "fuel_rate": numeric(diesel_params.get("fuel_rate"), 0.26),
-        "electric_to_hydrogen_efficiency": numeric(electrolyzer_params.get("electric_to_hydrogen_efficiency"), 0.7),
-        "hydrogen_to_electric_efficiency": numeric(fuel_cell_params.get("hydrogen_to_electric_efficiency"), 0.55),
-    }
+def result_row_device_key(row: dict[str, Any]) -> str:
+    device_type = str(row.get("设备类型", "") or "")
+    name = str(row.get("名称", "") or "")
+    unit = str(row.get("单位", "") or "")
+    text = f"{device_type} {name}"
+    if "燃料电池" in text:
+        return "fuel_cells"
+    if "储能PCS" in text or "电储PCS" in text or "PCS" in text:
+        return "storage_pcs"
+    if "储能" in text or "电储" in text or "电池" in text:
+        return "storage_battery_packs" if "kWh" in unit or "电池" in text else "storage_pcs"
+    if "电制氢" in text or "制氢" in text:
+        return "hydrogen_electrolyzers"
+    if "储氢" in text:
+        return "hydrogen_tanks"
+    if "柴" in text:
+        return "diesel_generators"
+    if "风" in text:
+        return "wind_turbines"
+    if "光" in text:
+        return "photovoltaics"
+    return ""
 
 
-def direct_dispatch_rows(model: dict[str, Any], log: LogSink | None = None) -> list[dict[str, Any]] | None:
-    """Return an exact per-hour optimum when no storage or hydrogen coupling is present."""
+def normalized_text(value: Any) -> str:
+    return str(value or "").strip()
 
-    # This fast path is only valid when no inventory state links one hour to
-    # the next; otherwise the MILP path is required.
-    coupled_capacities = (
-        "storage_power_capacity",
-        "storage_energy_capacity",
-        "electrolyzer_power_upper",
-        "hydrogen_tank_capacity",
-        "fuel_cell_power_capacity",
-    )
-    if any(numeric(model.get(key), 0.0) > 1e-9 for key in coupled_capacities):
+
+def non_negative_int(value: Any, default: int = 0) -> int:
+    number = numeric(value, float(default))
+    return max(0, int(round(number)))
+
+
+def fixed_quantity_payload(scheme_payload: dict[str, Any], planning_result_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return a deep-copied scheme payload with every device quantity fixed."""
+
+    payload = copy.deepcopy(scheme_payload)
+    payload["_optimization_problem_name"] = "方案评估"
+    payload["_diesel_objective_price"] = max(1.0, numeric(first_row(payload.get("planning_parameters")).get("diesel_price"), 0.0))
+    row_positions: dict[str, int] = {}
+    counts_by_position: dict[tuple[str, int], int] = {}
+
+    for result_row in planning_result_rows or []:
+        if not isinstance(result_row, dict):
+            continue
+        key = result_row_device_key(result_row)
+        if not key:
+            continue
+        row_index = matching_device_parameter_index(payload, key, result_row, row_positions)
+        if row_index is None:
+            continue
+        count = non_negative_int(result_row.get("设计台数"), 0)
+        counts_by_position[(key, row_index)] = count
+        if key == "storage_battery_packs" and "PCS" not in str(result_row.get("设备类型", "")):
+            mirror_storage_battery_count_to_pcs(payload, row_index, count, counts_by_position)
+
+    for key in EVALUATION_DEVICE_SPECS:
+        rows = payload.get(key)
+        if not isinstance(rows, list):
+            continue
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            count = counts_by_position.get((key, index), 0)
+            row["quantity_lower"] = count
+            row["quantity_upper"] = count
+    return payload
+
+
+def mirror_storage_battery_count_to_pcs(
+    payload: dict[str, Any],
+    battery_index: int,
+    count: int,
+    counts_by_position: dict[tuple[str, int], int],
+) -> None:
+    """Treat legacy '储能' rows as both battery and PCS when no PCS row exists."""
+
+    pcs_rows = payload.get("storage_pcs") if isinstance(payload.get("storage_pcs"), list) else []
+    if ("storage_pcs", battery_index) in counts_by_position:
+        return
+    if not pcs_rows:
+        return
+    counts_by_position[("storage_pcs", min(battery_index, len(pcs_rows) - 1))] = count
+
+
+def matching_device_parameter_index(
+    scheme_payload: dict[str, Any],
+    key: str,
+    result_row: dict[str, Any],
+    row_positions: dict[str, int],
+) -> int | None:
+    rows = [row for row in scheme_payload.get(key, []) if isinstance(row, dict)]
+    if not rows:
         return None
-
-    emit(log, "info", "检测到无储能/氢能跨时段耦合，使用逐时解析调度快速求解", 20)
-    rows: list[dict[str, Any]] = []
-    for hour, source_row in enumerate(model["time_series"]):
-        load = round(float(model["loads"][hour]), 4)
-        wind_available = round(float(model["wind_available"][hour]), 4)
-        pv_available = round(float(model["pv_available"][hour]), 4)
-        renewable_available = round(wind_available + pv_available, 4)
-        renewable_used, diesel_power, unmet_load, diesel_on = direct_hour_dispatch(
-            load,
-            renewable_available,
-            model["diesel_power_upper"],
-            model["diesel_units"],
-            model["diesel_unit_power_upper"],
-            model["diesel_unit_power_lower"],
-        )
-        wind_power, pv_power = allocate_renewable_power(renewable_used, wind_available, pv_available)
-        wind_curtailed = max(0.0, round(wind_available - wind_power, 4))
-        pv_curtailed = max(0.0, round(pv_available - pv_power, 4))
-        curtailed_power = round(wind_curtailed + pv_curtailed, 4)
-        hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
-        rows.append(
-            {
-                "hour_index": hour_index,
-                "datetime": source_row.get("datetime", f"H{hour_index:04d}"),
-                "wind_speed": round(float(model["wind_speed"][hour]), 4),
-                "solar_irradiance": round(float(model["solar_irradiance"][hour]), 4),
-                "temperature": round(float(model["temperature"][hour]), 4),
-                "load": load,
-                "diesel_power": diesel_power,
-                "wind_available": wind_available,
-                "wind_power": wind_power,
-                "pv_available": pv_available,
-                "pv_power": pv_power,
-                "renewable_available": renewable_available,
-                "renewable_ratio": round(percent(wind_power + pv_power, load), 4),
-                "storage_power": 0.0,
-                "storage_charge": 0.0,
-                "storage_discharge": 0.0,
-                "storage_soc": 0.0,
-                "diesel_on": diesel_on,
-                "hydrogen_production_power": 0.0,
-                "electrolyzer_on": 0,
-                "fuel_cell_power": 0.0,
-                "hydrogen_storage": 0.0,
-                "wind_curtailed_power": wind_curtailed,
-                "pv_curtailed_power": pv_curtailed,
-                "curtailed_power": curtailed_power,
-                "renewable_curtailed_rate": round(percent(curtailed_power, renewable_available), 4),
-                "unmet_load": unmet_load,
-            }
-        )
-    emit(log, "info", "逐时解析调度完成，正在整理8760点调度曲线", 85)
-    return rows
+    position = row_positions.get(key, 0)
+    row_positions[key] = position + 1
+    result_name = normalized_text(result_row.get("名称"))
+    if result_name:
+        for index, row in enumerate(rows):
+            if normalized_text(row.get("name")) == result_name:
+                return index
+    capacity = numeric(result_row.get("单台容量"), math.nan)
+    capacity_field = EVALUATION_DEVICE_SPECS[key]["capacity_field"]
+    if not math.isnan(capacity):
+        for index, row in enumerate(rows):
+            if abs(numeric(row.get(capacity_field), -1.0) - capacity) <= 1e-6:
+                return index
+    return min(position, len(rows) - 1)
 
 
-def direct_hour_dispatch(
-    load: float,
-    renewable_available: float,
-    diesel_power_upper: float,
-    diesel_units: int,
-    diesel_unit_power_upper: float,
-    diesel_unit_power_lower: float,
-) -> tuple[float, float, float, int]:
-    renewable_used = min(max(0.0, renewable_available), max(0.0, load))
-    residual = max(0.0, load - renewable_used)
-    diesel_power = 0.0
-    diesel_on = 0
-    if residual > 1e-9 and diesel_power_upper > 1e-9 and diesel_units > 0 and diesel_unit_power_upper > 1e-9:
-        diesel_power = min(diesel_power_upper, residual)
-        diesel_on = max(1, min(diesel_units, int(math.ceil(diesel_power / diesel_unit_power_upper - 1e-9))))
-        minimum_power = diesel_on * max(0.0, diesel_unit_power_lower)
-        if minimum_power > diesel_power + 1e-9:
-            extra_power = minimum_power - diesel_power
-            if extra_power <= renewable_used + 1e-9:
-                renewable_used -= extra_power
-                diesel_power = minimum_power
-            elif minimum_power <= load + 1e-9:
-                diesel_power = minimum_power
-                renewable_used = max(0.0, load - diesel_power)
-            else:
-                diesel_power = 0.0
-                diesel_on = 0
-                renewable_used = min(max(0.0, renewable_available), max(0.0, load))
-        diesel_power = min(diesel_power, diesel_power_upper)
-    unmet_load = max(0.0, load - renewable_used - diesel_power)
-    if diesel_power <= 1e-9:
-        diesel_power = 0.0
-        diesel_on = 0
-    return round(renewable_used, 4), round(diesel_power, 4), round(unmet_load, 4), diesel_on
+def build_dispatch_model(scheme_payload: dict[str, Any], planning_result_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    # Backward-compatible entry used by tests and scripts: the returned object
+    # is the planning model with quantity bounds fixed to the result rows.
+    import plan_optimizer
 
-
-def allocate_renewable_power(renewable_used: float, wind_available: float, pv_available: float) -> tuple[float, float]:
-    wind_power = min(max(0.0, wind_available), max(0.0, renewable_used))
-    pv_power = min(max(0.0, pv_available), max(0.0, renewable_used - wind_power))
-    return round(wind_power, 4), round(pv_power, 4)
+    payload = fixed_quantity_payload(scheme_payload, planning_result_rows)
+    return plan_optimizer.build_planning_model(payload, payload["time_series"])
 
 
 def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> list[dict[str, Any]]:
-    loads = model["loads"]
-    n = len(loads)
-    builder = dispatch_milp.MilpModelBuilder()
+    """Solve a fixed-quantity planning model and return hourly dispatch rows."""
 
-    for hour in range(n):
-        builder.add_var(("diesel_power", hour), 0.0, max(0.0, model["diesel_power_upper"]), cost=1.0)
-        builder.add_var(("wind_power", hour), 0.0, max(0.0, model["wind_available"][hour]))
-        builder.add_var(("pv_power", hour), 0.0, max(0.0, model["pv_available"][hour]))
-        builder.add_var(("storage_charge", hour), 0.0, max(0.0, model["storage_power_capacity"]))
-        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, model["storage_power_capacity"]))
-        builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
-        builder.add_var(("storage_discharge_on", hour), 0.0, 1.0, integer=True)
-        builder.add_var(("storage_soc", hour), 0.0, max(0.0, model["storage_energy_capacity"]))
-        builder.add_var(("electrolyzer_power", hour), 0.0, max(0.0, model["electrolyzer_power_upper"]))
-        builder.add_var(("hydrogen_storage", hour), 0.0, max(0.0, model["hydrogen_tank_capacity"]))
-        builder.add_var(("fuel_cell_power", hour), 0.0, max(0.0, model["fuel_cell_power_capacity"]))
-        builder.add_var(
-            ("curtailed_power", hour),
-            0.0,
-            max(0.0, model["wind_available"][hour] + model["pv_available"][hour]),
-        )
-        builder.add_var(("unmet_load", hour), 0.0, max(0.0, loads[hour]), cost=LOAD_SHED_PENALTY)
-        if model["diesel_units"]:
-            builder.add_var(("diesel_on_count", hour), 0.0, model["diesel_units"], integer=True, cost=DIESEL_ON_PENALTY)
-        if model["grid_storage_units"]:
-            builder.add_var(("grid_storage_on_count", hour), 0.0, model["grid_storage_units"], integer=True)
-            builder.add_var(("grid_storage_up_available_count", hour), 0.0, model["grid_storage_units"], integer=True)
-            builder.add_var(("grid_storage_down_available_count", hour), 0.0, model["grid_storage_units"], integer=True)
-        if model["electrolyzer_units"]:
-            builder.add_var(("electrolyzer_on_count", hour), 0.0, model["electrolyzer_units"], integer=True, cost=ELECTROLYZER_ON_PENALTY)
+    if "device_rows" not in model:
+        raise ValueError("方案评估只支持固定台数规划MILP模型")
 
-    def var(key: tuple[Any, ...]) -> int:
-        return builder.var(key)
+    import plan_optimizer
 
-    storage_charge_efficiency = model["storage_charge_efficiency"]
-    storage_discharge_efficiency = model["storage_discharge_efficiency"]
-    storage_self_discharge_per_hour = model["storage_self_discharge_rate"] / 24.0
-    hydrogen_self_discharge_per_hour = model["hydrogen_self_discharge_rate"] / 24.0
-    electric_to_hydrogen_efficiency = max(0.0, model["electric_to_hydrogen_efficiency"])
-    hydrogen_to_electric_efficiency = max(0.0001, model["hydrogen_to_electric_efficiency"])
-    initial_storage = model["storage_energy_capacity"] * model["initial_storage_soc_ratio"]
-    initial_hydrogen = model["hydrogen_tank_capacity"] * model["initial_hydrogen_storage_ratio"]
-
-    for hour in range(n):
-        load = loads[hour]
-        dispatch_milp.add_power_balance_constraint(
-            builder,
-            generation_indices=[
-                var(("diesel_power", hour)),
-                var(("wind_power", hour)),
-                var(("pv_power", hour)),
-                var(("storage_discharge", hour)),
-                var(("fuel_cell_power", hour)),
-            ],
-            charge_indices=[var(("storage_charge", hour))],
-            consumption_indices=[var(("electrolyzer_power", hour))],
-            unmet_index=var(("unmet_load", hour)),
-            load=load,
-        )
-        dispatch_milp.add_availability_constraint(
-            builder,
-            production_indices=[var(("wind_power", hour)), var(("pv_power", hour))],
-            curtailed_index=var(("curtailed_power", hour)),
-            fixed_available=model["wind_available"][hour] + model["pv_available"][hour],
-        )
-        diesel_on_indices = [var(("diesel_on_count", hour))] if model["diesel_units"] else []
-        if diesel_on_indices:
-            dispatch_milp.add_unit_commitment_constraints(
-                builder,
-                power_index=var(("diesel_power", hour)),
-                on_indices=diesel_on_indices,
-                power_upper=model["diesel_unit_power_upper"],
-                power_lower=model["diesel_unit_power_lower"],
-            )
-        else:
-            builder.add_constraint({var(("diesel_power", hour)): 1.0}, 0.0, 0.0)
-        grid_storage_on_indices = [var(("grid_storage_on_count", hour))] if model["grid_storage_units"] else []
-        grid_storage_up_indices = [var(("grid_storage_up_available_count", hour))] if model["grid_storage_units"] else []
-        grid_storage_down_indices = [var(("grid_storage_down_available_count", hour))] if model["grid_storage_units"] else []
-        for on_index, up_index, down_index in zip(grid_storage_on_indices, grid_storage_up_indices, grid_storage_down_indices):
-            builder.add_constraint({up_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
-            builder.add_constraint({down_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
-        electrolyzer_on_indices = [var(("electrolyzer_on_count", hour))] if model["electrolyzer_units"] else []
-        if electrolyzer_on_indices:
-            dispatch_milp.add_unit_commitment_constraints(
-                builder,
-                power_index=var(("electrolyzer_power", hour)),
-                on_indices=electrolyzer_on_indices,
-                power_upper=model["electrolyzer_unit_power_upper"],
-                power_lower=model["electrolyzer_unit_power_lower"],
-            )
-        else:
-            builder.add_constraint({var(("electrolyzer_power", hour)): 1.0}, 0.0, 0.0)
-        storage_flags = dispatch_milp.add_storage_constraints(
-            builder,
-            charge_index=var(("storage_charge", hour)),
-            discharge_index=var(("storage_discharge", hour)),
-            charge_on_index=var(("storage_charge_on", hour)),
-            discharge_on_index=var(("storage_discharge_on", hour)),
-            soc_index=var(("storage_soc", hour)),
-            previous_soc_index=var(("storage_soc", hour - 1)) if hour > 0 else None,
-            power_capacity_upper=model["storage_power_capacity"],
-            fixed_power_capacity=model["storage_power_capacity"],
-            fixed_energy_capacity=model["storage_energy_capacity"],
-            fixed_initial_value=initial_storage,
-            charge_efficiency=storage_charge_efficiency,
-            discharge_efficiency=storage_discharge_efficiency,
-            soc_lower_ratio=model["storage_soc_lower_ratio"],
-            soc_upper_ratio=model["storage_soc_upper_ratio"],
-            self_discharge_rate_per_hour=storage_self_discharge_per_hour,
-        )
-        for index in grid_storage_up_indices:
-            builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -float(model["grid_storage_units"])}, -np.inf, 0.0)
-        for index in grid_storage_down_indices:
-            builder.add_constraint({index: 1.0, storage_flags["soc_below_upper"]: -float(model["grid_storage_units"])}, -np.inf, 0.0)
-        dispatch_milp.add_grid_support_requirement(
-            builder,
-            diesel_on_indices=diesel_on_indices,
-            grid_storage_on_indices=grid_storage_on_indices,
-        )
-        if model["post_disturbance_power_balance_enabled"]:
-            dispatch_milp.add_post_disturbance_balance_constraints(
-                builder,
-                load=load,
-                load_up_factor=model["load_up_disturbance_factor"],
-                load_down_factor=model["load_down_disturbance_factor"],
-                renewable_down_factor=model["renewable_down_disturbance_factor"],
-                diesel_power_indices=[var(("diesel_power", hour))],
-                diesel_on_terms={
-                    index: model["diesel_unit_power_upper"]
-                    for index in diesel_on_indices
-                },
-                grid_storage_charge_index=var(("storage_charge", hour)),
-                grid_storage_discharge_index=var(("storage_discharge", hour)),
-                grid_storage_up_on_terms={
-                    index: model["grid_storage_unit_capacity"]
-                    for index in grid_storage_up_indices
-                },
-                grid_storage_down_on_terms={
-                    index: model["grid_storage_unit_capacity"]
-                    for index in grid_storage_down_indices
-                },
-                wind_power_indices=[var(("wind_power", hour))],
-                pv_power_indices=[var(("pv_power", hour))],
-            )
-        dispatch_milp.add_hydrogen_constraints(
-            builder,
-            storage_index=var(("hydrogen_storage", hour)),
-            previous_storage_index=var(("hydrogen_storage", hour - 1)) if hour > 0 else None,
-            production_terms={
-                var(("electrolyzer_power", hour)): electric_to_hydrogen_efficiency
-            } if model["electrolyzer_power_upper"] > 1e-9 else {},
-            consumption_terms={
-                var(("fuel_cell_power", hour)): 1.0 / hydrogen_to_electric_efficiency
-            } if model["fuel_cell_power_capacity"] > 1e-9 else {},
-            fixed_capacity=model["hydrogen_tank_capacity"],
-            fixed_initial_value=initial_hydrogen,
-            self_discharge_rate_per_hour=hydrogen_self_discharge_per_hour,
-        )
-
-    for day_end_hour in range(23, n, 24):
-        dispatch_milp.add_storage_cycle_constraint(
-            builder,
-            soc_index=var(("storage_soc", day_end_hour)),
-            fixed_initial_value=initial_storage,
-        )
-    if n:
-        dispatch_milp.add_hydrogen_cycle_constraint(
-            builder,
-            storage_index=var(("hydrogen_storage", n - 1)),
-            fixed_initial_value=initial_hydrogen,
-        )
-
-    emit(
-        log,
-        "info",
-        f"评估模型规模：变量{builder.variable_count}个（整数{builder.integer_variable_count}个），约束{builder.constraint_count}条，非零系数{builder.nonzero_count}个",
-        18,
-    )
-    dispatch_milp.emit_builder_diagnostics(builder, log, "方案评估MILP")
-    emit(log, "info", "求解8760点联合混合整数线性优化问题", 20)
-    model["variables"] = builder.variables
-    model["objective"] = builder.objective
-    model["integrality"] = builder.integrality
-    result = dispatch_milp.solve_built_milp(
-        builder,
-        options={
-            "time_limit": model["optimization_time_limit_seconds"],
-            "mip_rel_gap": 0.01,
-            "disp": False,
-            "solver_log": True,
-            "solver_log_interval": 2.0,
-        },
-        log=log,
-        problem_name="方案评估",
-        solve_fn=solve_milp,
-    )
-    if not result.success:
-        raise ValueError(f"8760点联合优化失败：{result.message}")
-    emit(log, "info", "联合优化求解完成，正在整理8760点调度曲线", 85)
-    return dispatch_rows_from_solution(model, result.x)
-
-
-def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> list[dict[str, Any]]:
-    # Convert solver vectors back into hourly records used by charts, tables
-    # and XLSX export.
-    rows = []
-    variables = model.get("variables")
-
-    def value(hour: int, key: str) -> float:
-        if variables:
-            return rounded_solution_from_index(solution, variables[(key, hour)])
-        return rounded_solution(solution, hour, key)
-
-    def count_value(key: str, hour: int) -> int:
-        if variables and (key, hour) in variables:
-            return int(round(rounded_solution_from_index(solution, variables[(key, hour)])))
-        if variables:
-            return 0
-        return round_binary_solution(solution, hour, key)
-
-    for hour, row in enumerate(model["time_series"]):
-        hour_index = int(numeric(row.get("hour_index"), hour + 1) or hour + 1)
-        wind_available = round(float(model["wind_available"][hour]), 4)
-        pv_available = round(float(model["pv_available"][hour]), 4)
-        wind_power = value(hour, "wind_power")
-        pv_power = value(hour, "pv_power")
-        wind_curtailed = max(0.0, round(wind_available - wind_power, 4))
-        pv_curtailed = max(0.0, round(pv_available - pv_power, 4))
-        storage_charge = value(hour, "storage_charge")
-        storage_discharge = value(hour, "storage_discharge")
-        renewable_available = round(wind_available + pv_available, 4)
-        renewable_energy = round(wind_power + pv_power, 4)
-        curtailed_power = round(wind_curtailed + pv_curtailed, 4)
-        load = round(float(model["loads"][hour]), 4)
-        item = {
-            "hour_index": hour_index,
-            "datetime": row.get("datetime", f"H{hour_index:04d}"),
-            "wind_speed": round(float(model["wind_speed"][hour]), 4),
-            "solar_irradiance": round(float(model["solar_irradiance"][hour]), 4),
-            "temperature": round(float(model["temperature"][hour]), 4),
-            "load": load,
-            "diesel_power": value(hour, "diesel_power"),
-            "wind_available": wind_available,
-            "wind_power": wind_power,
-            "pv_available": pv_available,
-            "pv_power": pv_power,
-            "renewable_available": renewable_available,
-            "renewable_ratio": round(percent(renewable_energy, load), 4),
-            "storage_power": round(storage_discharge - storage_charge, 4),
-            "storage_charge": storage_charge,
-            "storage_discharge": storage_discharge,
-            "storage_soc": value(hour, "storage_soc"),
-            "diesel_on": count_value("diesel_on_count", hour),
-            "hydrogen_production_power": value(hour, "electrolyzer_power"),
-            "electrolyzer_on": count_value("electrolyzer_on_count", hour),
-            "fuel_cell_power": value(hour, "fuel_cell_power"),
-            "hydrogen_storage": value(hour, "hydrogen_storage"),
-            "wind_curtailed_power": wind_curtailed,
-            "pv_curtailed_power": pv_curtailed,
-            "curtailed_power": curtailed_power,
-            "renewable_curtailed_rate": round(percent(curtailed_power, renewable_available), 4),
-            "unmet_load": value(hour, "unmet_load"),
-        }
-        rows.append(item)
-    return rows
-
-
-def rounded_solution_from_index(solution: np.ndarray, index: int) -> float:
-    value = float(solution[index])
-    return round(0.0 if abs(value) < 1e-7 else value, 4)
-
-
-def dispatch_totals(dispatch_rows: list[dict[str, Any]], fuel_rate: float, electric_to_hydrogen_efficiency: float) -> dict[str, float]:
-    # Totals are computed from the hourly rows so summary numbers always match
-    # the curves visible in the UI.
-    totals = {
-        "load_energy": sum_numeric(dispatch_rows, "load"),
-        "wind_energy": sum_numeric(dispatch_rows, "wind_power"),
-        "pv_energy": sum_numeric(dispatch_rows, "pv_power"),
-        "storage_discharge_energy": sum_numeric(dispatch_rows, "storage_discharge"),
-        "storage_charge_energy": sum_numeric(dispatch_rows, "storage_charge"),
-        "diesel_energy": sum_numeric(dispatch_rows, "diesel_power"),
-        "curtailed_energy": sum_numeric(dispatch_rows, "curtailed_power"),
-        "unmet_load_energy": sum_numeric(dispatch_rows, "unmet_load"),
-        "hydrogen_production_energy": sum_numeric(dispatch_rows, "hydrogen_production_power"),
-        "fuel_cell_energy": sum_numeric(dispatch_rows, "fuel_cell_power"),
-        "wind_available_energy": sum_numeric(dispatch_rows, "wind_available"),
-        "pv_available_energy": sum_numeric(dispatch_rows, "pv_available"),
-        "renewable_available_energy": sum(numeric(row.get("renewable_available"), numeric(row.get("wind_available"), 0.0) + numeric(row.get("pv_available"), 0.0)) for row in dispatch_rows),
-        "renewable_energy": sum(numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0) for row in dispatch_rows),
-        "wind_curtailed_energy": sum_numeric(dispatch_rows, "wind_curtailed_power"),
-        "pv_curtailed_energy": sum_numeric(dispatch_rows, "pv_curtailed_power"),
-        "hydrogen_storage_increase": sum(positive_delta(dispatch_rows, "hydrogen_storage", 0.0)),
-        "hydrogen_storage_decrease": sum(negative_delta(dispatch_rows, "hydrogen_storage", 0.0)),
-    }
-    totals["hydrogen_production"] = totals["hydrogen_production_energy"] * max(0.0, electric_to_hydrogen_efficiency)
-    totals["diesel_consumption"] = totals["diesel_energy"] * fuel_rate / 1000
-    totals["renewable_ratio"] = percent(totals["renewable_energy"], totals["load_energy"])
-    totals["renewable_curtailed_rate"] = percent(totals["curtailed_energy"], totals["renewable_available_energy"])
-    return totals
-
-
-def rounded_solution(solution: np.ndarray, hour: int, key: str) -> float:
-    value = float(solution[var_index(hour, key)])
-    return round(0.0 if abs(value) < 1e-7 else value, 4)
-
-
-def round_binary_solution(solution: np.ndarray, hour: int, key: str) -> int:
-    return int(round(float(solution[var_index(hour, key)])))
-
-
-def var_index(hour: int, key: str) -> int:
-    return hour * VARIABLE_COUNT + VARIABLES[key]
+    original_solve_milp = plan_optimizer.solve_milp
+    try:
+        # Keep this indirection so tests and scripts that patch
+        # estimate.solve_milp still exercise the shared planning model.
+        plan_optimizer.solve_milp = solve_milp
+        solution = plan_optimizer.solve_planning_model(model, log)
+    finally:
+        plan_optimizer.solve_milp = original_solve_milp
+    return plan_optimizer.dispatch_rows_from_solution(model, solution)
 
 
 def capacities_from_planning_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
     # Result files store planning output as display rows; this function maps
-    # those rows back to aggregate capacities for the evaluation model.
+    # those rows back to aggregate capacities for logs and comparison views.
     capacities = {
         "diesel_capacity": 0.0,
         "wind_capacity": 0.0,
@@ -867,22 +363,6 @@ def planning_row_total_capacity(row: dict[str, Any]) -> float:
     return numeric(row.get("总容量"), 0)
 
 
-def first_device_params(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {
-        key: first_row(payload.get(key))
-        for key in (
-            "diesel_generators",
-            "wind_turbines",
-            "photovoltaics",
-            "storage_pcs",
-            "storage_battery_packs",
-            "hydrogen_electrolyzers",
-            "hydrogen_tanks",
-            "fuel_cells",
-        )
-    }
-
-
 def wind_generation(wind_speed: float, capacity: float, params: dict[str, Any]) -> float:
     if capacity <= 0:
         return 0.0
@@ -900,11 +380,6 @@ def pv_generation(irradiance: float, capacity: float, params: dict[str, Any] | N
     if capacity <= 0:
         return 0.0
     return max(0.0, min(capacity, capacity * max(0.0, irradiance) / 1000.0))
-
-
-def storage_efficiency_value(primary: Any, legacy: Any, default: float) -> float:
-    value = primary if primary not in ("", None) else legacy
-    return min(1.0, max(0.0001, numeric(value, default)))
 
 
 def first_row(rows: Any) -> dict[str, Any]:
@@ -947,7 +422,7 @@ def emit(log: LogSink | None, level: str, message: str, progress: int | None = N
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run 8760-hour evaluation dispatch.")
+    parser = argparse.ArgumentParser(description="Run fixed-quantity planning MILP evaluation.")
     parser.add_argument("scheme_workbook", type=Path)
     parser.add_argument("planning_result_json", type=Path)
     parser.add_argument("output_json", type=Path)

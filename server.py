@@ -636,9 +636,9 @@ class OptimizationRuntime:
 
     def _metrics_unlocked(self) -> list[dict]:
         base = [
-            {"label": "当前状态", "value": self.status, "unit": ""},
-            {"label": "启动时刻", "value": self.start_time or "-", "unit": ""},
-            {"label": "结束时刻", "value": self.end_time or "-", "unit": ""},
+            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "开始", "value": self.start_time or "-", "unit": ""},
+            {"label": "完成", "value": self.end_time or "-", "unit": ""},
         ]
         existing_labels = {item["label"] for item in base}
         for metric in self._metrics:
@@ -650,7 +650,7 @@ class OptimizationRuntime:
             base.append(metric)
             existing_labels.add(label)
         if "度电成本" not in existing_labels:
-            base.append({"label": "度电成本", "value": "-", "unit": "元/kWh"})
+            base.append({"label": "度电成本", "value": "-", "unit": "元"})
         if "绿电占比" not in existing_labels:
             base.append({"label": "绿电占比", "value": "-", "unit": "%"})
         return base
@@ -790,7 +790,7 @@ class OptimizationRuntime:
                 },
             ],
             "overview": [
-                {"指标": "度电成本", "数值": cost, "单位": "元/kWh", "说明": "基于当前候选方案的综合成本估计"},
+                {"指标": "度电成本", "数值": cost, "单位": "元", "说明": "基于当前候选方案的综合成本估计"},
                 {"指标": "绿电占比", "数值": green_ratio, "单位": "%", "说明": "风光与氢储供电占比"},
                 {"指标": "优化进度", "数值": self.progress, "单位": "%", "说明": self.status},
             ],
@@ -1572,16 +1572,19 @@ def read_result_workbook_metrics(workbook) -> list[dict]:
     metrics = []
     for row in rows:
         label = str(row.get("指标", "")).strip()
-        if not label or label in {"方案", "状态", "进度"}:
+        if not label or label in {"方案", "当前状态", "状态", "进度"}:
             continue
-        metrics.append({"label": label, "value": row.get("数值", ""), "unit": row.get("单位", "")})
+        unit = row.get("单位", "")
+        if label == "度电成本":
+            unit = "元"
+        metrics.append({"label": label, "value": row.get("数值", ""), "unit": unit})
     return metrics
 
 
 def merge_runtime_metrics(runtime_metrics: list[dict], workbook_metrics: list[dict]) -> list[dict]:
     if not workbook_metrics:
         return runtime_metrics
-    primary_labels = {"当前状态", "启动时刻", "结束时刻"}
+    primary_labels = {"状态", "开始", "完成"}
     primary = [item for item in runtime_metrics if isinstance(item, dict) and str(item.get("label", "")) in primary_labels]
     secondary = [item for item in runtime_metrics if isinstance(item, dict) and str(item.get("label", "")) not in primary_labels]
     merged = list(primary)
@@ -2219,9 +2222,9 @@ class EvaluationRuntime:
 
     def _metrics_unlocked(self) -> list[dict]:
         base = [
-            {"label": "当前状态", "value": self.status, "unit": ""},
-            {"label": "启动时刻", "value": self.start_time or "-", "unit": ""},
-            {"label": "结束时刻", "value": self.end_time or "-", "unit": ""},
+            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "开始", "value": self.start_time or "-", "unit": ""},
+            {"label": "完成", "value": self.end_time or "-", "unit": ""},
         ]
         existing_labels = {item["label"] for item in base}
         for metric in self._metrics:
@@ -2232,6 +2235,12 @@ class EvaluationRuntime:
                 continue
             base.append(metric)
             existing_labels.add(label)
+        if "度电成本" not in existing_labels:
+            base.append({"label": "度电成本", "value": "-", "unit": "元"})
+            existing_labels.add("度电成本")
+        if "绿电占比" not in existing_labels:
+            base.append({"label": "绿电占比", "value": "-", "unit": "%"})
+            existing_labels.add("绿电占比")
         return base
 
     @staticmethod
@@ -2750,7 +2759,7 @@ def append_task_control_state(payload: dict, task_type_key: str, scheme: str, re
             "can_cancel_queue_task": bool(task["queued"]),
         }
     )
-    replace_metric_value(payload, "当前状态", task["status"])
+    replace_metric_value(payload, "状态", task["status"])
     return payload
 
 

@@ -300,7 +300,7 @@ function renderTable(id, rows, emptyText) {
   }
   const headers = Object.keys(rows[0]);
   target.innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(row[header] ?? "")}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? ""))}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
 
@@ -323,15 +323,19 @@ function renderCurveNameList() {
   target.innerHTML = `<ul aria-multiselectable="true">${target.innerHTML}</ul>`;
   target.querySelectorAll("[data-curve-name]").forEach((button) => {
     button.addEventListener("click", (event) => {
-      toggleSelectedCurve(button.dataset.curveName || "", { multi: event.shiftKey });
+      toggleSelectedCurve(button.dataset.curveName || "", { multi: isMultiCurveSelectionEvent(event) });
     });
     button.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        toggleSelectedCurve(button.dataset.curveName || "", { multi: event.shiftKey });
+        toggleSelectedCurve(button.dataset.curveName || "", { multi: isMultiCurveSelectionEvent(event) });
       }
     });
   });
+}
+
+function isMultiCurveSelectionEvent(event) {
+  return Boolean(event?.ctrlKey || event?.shiftKey || event?.metaKey);
 }
 
 function toggleSelectedCurve(name, options = {}) {
@@ -393,9 +397,6 @@ function renderComparisonCurveChart() {
     y: yAt(minY + ySpan * ratio),
   }));
   target.innerHTML = `
-    <div class="comparison-curve-legend">${series
-      .map((item, index) => `<span><i style="background:${colors[index % colors.length]}"></i>${escapeHtml(item.displayLabel)}</span>`)
-      .join("")}</div>
     <div class="comparison-chart-frame" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
       <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(curveNames.join('、'))}曲线对比">
         <line class="comparison-chart-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
@@ -616,7 +617,12 @@ function resultDisplayName(filename) {
 function formatAxis(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
-  return number.toLocaleString("zh-CN", { maximumFractionDigits: 1 });
+  return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatDisplayValue(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
+  return Number.isInteger(value) ? value.toLocaleString("zh-CN") : formatAxis(value);
 }
 
 function escapeHtml(value) {

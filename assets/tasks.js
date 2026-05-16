@@ -226,7 +226,7 @@ function syncTaskSectionHeights() {
   const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
   const errorHeight = document.getElementById("taskError")?.hidden ? 0 : (document.getElementById("taskError")?.getBoundingClientRect().height || 0);
   const panelContentHeight = Math.max(0, panel.clientHeight - paddingTop - paddingBottom);
-  const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - errorHeight - rowGap * 2);
+  const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - rowGap);
 
   const optimizationDesiredHeight = measureTaskSectionHeight(optimizationSection);
   const evaluationDesiredHeight = measureTaskSectionHeight(evaluationSection);
