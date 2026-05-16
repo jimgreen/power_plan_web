@@ -25,6 +25,24 @@ const AMAP_MAX_ZOOM = 18;
 const AMAP_DEFAULT_ZOOM = 4;
 const WEB_MERCATOR_MAX_LAT = 85.05112878;
 const GLOBAL_TILE_SOURCE_LABEL = "OpenStreetMap 全球底图";
+const OSM_TILE_PROVIDERS = [
+  {
+    name: "OpenStreetMap DE",
+    url: (x, y, z) => `https://tile.openstreetmap.de/${z}/${x}/${y}.png`,
+  },
+  {
+    name: "OpenStreetMap France HOT",
+    url: (x, y, z) => `https://a.tile.openstreetmap.fr/hot/${z}/${x}/${y}.png`,
+  },
+  {
+    name: "CartoDB Light",
+    url: (x, y, z) => `https://b.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`,
+  },
+  {
+    name: "OpenStreetMap",
+    url: (x, y, z) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`,
+  },
+];
 
 const deviceSpecs = [
   ["diesel_generators", "柴发", ["name", "cost", "capacity", "power_upper", "power_lower", "fuel_rate", "inertia_constant_h", "primary_frequency_coefficient_k", "damping_coefficient_d", "governor_time_constant_t", "quantity_lower", "quantity_upper", "design_life_years"]],
@@ -1079,22 +1097,18 @@ async function selectMapProvider(provider) {
 async function loadSelectedMapProvider() {
   const config = await loadMapConfig();
   if (!config) return;
-  const providers = [state.mapProvider, "amap", "baidu", "google"].filter((provider, index, array) => provider && array.indexOf(provider) === index);
+  const providers = [state.mapProvider, "amap", "osm"].filter((provider, index, array) => provider && array.indexOf(provider) === index);
   const errors = [];
   for (const provider of providers) {
     const key = mapProviderKey(config, provider);
     resetMapCanvas();
-    if (!key) {
+    if (provider !== "osm" && !key) {
       errors.push(`${mapProviderLabel(provider)}未配置 Key`);
       continue;
     }
     try {
-      if (provider === "baidu") {
-        await loadBaiduMapScript(key);
-        initBaiduMapPicker();
-      } else if (provider === "google") {
-        await loadGoogleMapScript(key);
-        initGoogleMapPicker();
+      if (provider === "osm") {
+        initOsmTilePicker();
       } else {
         initAmapTilePicker();
       }
@@ -1130,14 +1144,12 @@ function chooseAvailableMapProvider(config, preferred) {
 
 function mapProviderKey(config, provider) {
   if (!config) return "";
-  if (provider === "baidu") return config.baidu_key || "";
-  if (provider === "google") return config.google_key || "";
+  if (provider === "osm") return "openstreetmap";
   return config.amap_key || "";
 }
 
 function mapProviderLabel(provider) {
-  if (provider === "baidu") return "百度地图";
-  if (provider === "google") return "谷歌地图";
+  if (provider === "osm") return "OpenStreetMap";
   return "高德地图";
 }
 
@@ -1145,7 +1157,7 @@ function renderMapProviderTabs(config) {
   document.querySelectorAll("[data-map-provider]").forEach((button) => {
     const provider = button.dataset.mapProvider;
     const active = provider === state.mapProvider;
-    const enabled = Boolean(mapProviderKey(config, provider));
+    const enabled = provider === "osm" || Boolean(mapProviderKey(config, provider));
     button.classList.toggle("active", active);
     button.classList.toggle("disabled", !enabled);
     button.setAttribute("aria-selected", active ? "true" : "false");
@@ -1181,55 +1193,6 @@ function loadAmapScript(key) {
   return window.__powerPlanAmapLoading;
 }
 
-function loadBaiduMapScript(key) {
-  if (window.BMap) return Promise.resolve();
-  if (window.__powerPlanBaiduLoading) return window.__powerPlanBaiduLoading;
-  window.__powerPlanBaiduLoading = new Promise((resolve, reject) => {
-    const callbackName = `powerPlanBaiduMapLoaded_${Date.now()}`;
-    const timeoutId = window.setTimeout(() => {
-      delete window[callbackName];
-      reject(new Error("百度地图脚本加载超时"));
-    }, 10000);
-    window[callbackName] = () => {
-      window.clearTimeout(timeoutId);
-      delete window[callbackName];
-      resolve();
-    };
-    const script = document.createElement("script");
-    script.src = `https://api.map.baidu.com/api?v=3.0&ak=${encodeURIComponent(key)}&callback=${callbackName}`;
-    script.async = true;
-    script.onerror = () => {
-      window.clearTimeout(timeoutId);
-      delete window[callbackName];
-      reject(new Error("百度地图脚本加载失败"));
-    };
-    document.head.appendChild(script);
-  });
-  return window.__powerPlanBaiduLoading;
-}
-
-function loadGoogleMapScript(key) {
-  if (window.google?.maps) return Promise.resolve();
-  if (window.__powerPlanGoogleLoading) return window.__powerPlanGoogleLoading;
-  window.__powerPlanGoogleLoading = new Promise((resolve, reject) => {
-    const callbackName = `powerPlanGoogleMapLoaded_${Date.now()}`;
-    window[callbackName] = () => {
-      delete window[callbackName];
-      resolve();
-    };
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&loading=async&callback=${callbackName}`;
-    script.async = true;
-    script.defer = true;
-    script.onerror = () => {
-      delete window[callbackName];
-      reject(new Error("谷歌地图脚本加载失败"));
-    };
-    document.head.appendChild(script);
-  });
-  return window.__powerPlanGoogleLoading;
-}
-
 function initAmapPicker() {
   initAmapTilePicker();
 }
@@ -1238,36 +1201,20 @@ function initAmapTilePicker() {
   const canvas = document.getElementById("mapPickerCanvas");
   if (!canvas) return;
   const center = currentMapCenterArray();
-  state.mapInstance = createAmapTileMap(canvas, center, AMAP_DEFAULT_ZOOM);
+  state.mapInstance = createTileMap(canvas, center, AMAP_DEFAULT_ZOOM, "amap");
   state.mapMarker = state.mapInstance.marker;
   state.mapCleanup = state.mapInstance.destroy;
   setTimeout(() => state.mapInstance.resize(), 80);
 }
 
-function initBaiduMapPicker() {
-  const [longitude, latitude] = currentMapCenterArray();
-  const center = new window.BMap.Point(longitude, latitude);
-  state.mapInstance = new window.BMap.Map("mapPickerCanvas");
-  state.mapInstance.centerAndZoom(center, 5);
-  state.mapInstance.enableScrollWheelZoom(true);
-  state.mapMarker = new window.BMap.Marker(center);
-  state.mapInstance.addOverlay(state.mapMarker);
-  state.mapInstance.addEventListener("click", (event) => {
-    setMapPoint(event.point.lat, event.point.lng);
-  });
-}
-
-function initGoogleMapPicker() {
-  const [longitude, latitude] = currentMapCenterArray();
-  const center = { lat: latitude, lng: longitude };
-  state.mapInstance = new window.google.maps.Map(document.getElementById("mapPickerCanvas"), {
-    zoom: 5,
-    center,
-  });
-  state.mapMarker = new window.google.maps.Marker({ position: center, map: state.mapInstance });
-  state.mapInstance.addListener("click", (event) => {
-    setMapPoint(event.latLng.lat(), event.latLng.lng());
-  });
+function initOsmTilePicker() {
+  const canvas = document.getElementById("mapPickerCanvas");
+  if (!canvas) return;
+  const center = currentMapCenterArray();
+  state.mapInstance = createTileMap(canvas, center, AMAP_DEFAULT_ZOOM, "osm");
+  state.mapMarker = state.mapInstance.marker;
+  state.mapCleanup = state.mapInstance.destroy;
+  setTimeout(() => state.mapInstance.resize(), 80);
 }
 
 function currentMapCenterArray() {
@@ -1287,15 +1234,20 @@ function coordinateInputNumber(id) {
 }
 
 function createAmapTileMap(canvas, center, initialZoom) {
+  return createTileMap(canvas, center, initialZoom, "amap");
+}
+
+function createTileMap(canvas, center, initialZoom, provider = "amap") {
   canvas.classList.add("amap-tile-map");
+  const attribution = provider === "osm" ? `${GLOBAL_TILE_SOURCE_LABEL} / ${OSM_TILE_PROVIDERS[0].name}` : `高德地图 / ${GLOBAL_TILE_SOURCE_LABEL}`;
   canvas.innerHTML = `
     <div class="amap-tile-layer" aria-hidden="true"></div>
     <div class="amap-coordinate-marker" aria-hidden="true"><span></span></div>
-    <div class="amap-map-controls" aria-label="高德地图缩放控件">
+    <div class="amap-map-controls" aria-label="${mapProviderLabel(provider)}缩放控件">
       <button type="button" data-amap-zoom="in" aria-label="放大地图">+</button>
       <button type="button" data-amap-zoom="out" aria-label="缩小地图">-</button>
     </div>
-    <div class="amap-map-attribution">高德地图 / ${GLOBAL_TILE_SOURCE_LABEL}</div>
+    <div class="amap-map-attribution">${attribution}</div>
   `;
   const tileLayer = canvas.querySelector(".amap-tile-layer");
   const markerElement = canvas.querySelector(".amap-coordinate-marker");
@@ -1305,7 +1257,7 @@ function createAmapTileMap(canvas, center, initialZoom) {
   let dragState = null;
 
   const render = () => {
-    renderAmapTileLayer(canvas, tileLayer, centerPoint, zoom);
+    renderAmapTileLayer(canvas, tileLayer, centerPoint, zoom, provider);
     renderAmapMarker(canvas, markerElement, centerPoint, markerPoint, zoom);
   };
 
@@ -1415,7 +1367,7 @@ function createAmapTileMap(canvas, center, initialZoom) {
   };
 }
 
-function renderAmapTileLayer(canvas, tileLayer, center, zoom) {
+function renderAmapTileLayer(canvas, tileLayer, center, zoom, provider = "amap") {
   if (!canvas || !tileLayer) return;
   const width = canvas.clientWidth || 800;
   const height = canvas.clientHeight || 420;
@@ -1437,13 +1389,20 @@ function renderAmapTileLayer(canvas, tileLayer, center, zoom) {
       const left = tileX * AMAP_TILE_SIZE - startX;
       const top = tileY * AMAP_TILE_SIZE - startY;
       const server = (Math.abs(wrappedTileX + tileY) % 4) + 1;
+      const tileSource = provider === "osm"
+        ? osmTileUrl(wrappedTileX, tileY, zoom, 0)
+        : amapTileUrl(server, wrappedTileX, tileY, zoom);
+      const osmFallbacks = osmTileFallbackUrls(wrappedTileX, tileY, zoom);
+      const fallbackAttribute = osmFallbacks.length
+        ? ` data-fallback-index="${provider === "osm" ? 1 : 0}" data-fallback-srcs="${encodeURIComponent(JSON.stringify(osmFallbacks))}"`
+        : "";
       tiles.push(
-        `<img class="amap-map-tile" alt="" draggable="false" src="${amapTileUrl(server, wrappedTileX, tileY, zoom)}" data-fallback-src="${osmTileUrl(wrappedTileX, tileY, zoom)}" style="left:${left.toFixed(2)}px;top:${top.toFixed(2)}px;">`,
+        `<img class="amap-map-tile" alt="" draggable="false" src="${tileSource}"${fallbackAttribute} style="left:${left.toFixed(2)}px;top:${top.toFixed(2)}px;">`,
       );
     }
   }
   tileLayer.innerHTML = tiles.join("");
-  tileLayer.querySelectorAll(".amap-map-tile[data-fallback-src]").forEach((tile) => {
+  tileLayer.querySelectorAll(".amap-map-tile[data-fallback-srcs]").forEach((tile) => {
     tile.addEventListener("error", () => switchAmapTileToGlobalFallback(tile), { once: true });
   });
 }
@@ -1461,16 +1420,29 @@ function amapTileUrl(server, x, y, z) {
   return `https://webrd0${server}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x=${x}&y=${y}&z=${z}`;
 }
 
-function osmTileUrl(x, y, z) {
-  return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+function osmTileUrl(x, y, z, providerIndex = 0) {
+  const provider = OSM_TILE_PROVIDERS[providerIndex] || OSM_TILE_PROVIDERS[0];
+  return provider.url(x, y, z);
+}
+
+function osmTileFallbackUrls(x, y, z) {
+  return OSM_TILE_PROVIDERS.map((provider) => provider.url(x, y, z));
 }
 
 function switchAmapTileToGlobalFallback(tile) {
-  if (!tile || tile.dataset.fallbackUsed === "1") return;
-  const fallbackSource = tile.dataset.fallbackSrc;
+  if (!tile) return;
+  let fallbackSources = [];
+  try {
+    fallbackSources = JSON.parse(decodeURIComponent(tile.dataset.fallbackSrcs || "[]"));
+  } catch (error) {
+    fallbackSources = [];
+  }
+  const fallbackIndex = Number(tile.dataset.fallbackIndex || 0);
+  const fallbackSource = fallbackSources[fallbackIndex];
   if (!fallbackSource) return;
-  tile.dataset.fallbackUsed = "1";
+  tile.dataset.fallbackIndex = String(fallbackIndex + 1);
   tile.classList.add("global-fallback");
+  tile.addEventListener("error", () => switchAmapTileToGlobalFallback(tile), { once: true });
   tile.src = fallbackSource;
 }
 
@@ -1524,16 +1496,7 @@ function setMapPoint(latitude, longitude, source = "map", geocodeResult = null) 
   state.mapPoint = { latitude, longitude };
   document.getElementById("weatherLatitude").value = Number(latitude).toFixed(6);
   document.getElementById("weatherLongitude").value = Number(longitude).toFixed(6);
-  if (state.mapProvider === "baidu" && state.mapInstance && window.BMap) {
-    const point = new window.BMap.Point(longitude, latitude);
-    state.mapInstance.centerAndZoom(point, source === "geocode" ? 11 : state.mapInstance.getZoom ? state.mapInstance.getZoom() : 5);
-    if (state.mapMarker) state.mapMarker.setPosition(point);
-  } else if (state.mapProvider === "google" && state.mapInstance && window.google?.maps) {
-    const point = { lat: latitude, lng: longitude };
-    state.mapInstance.setCenter(point);
-    if (source === "geocode") state.mapInstance.setZoom(11);
-    if (state.mapMarker) state.mapMarker.setPosition(point);
-  } else if (state.mapInstance) {
+  if (state.mapInstance) {
     state.mapInstance.setCenter([longitude, latitude]);
     if (source === "geocode" && state.mapInstance.setZoom) state.mapInstance.setZoom(11);
     if (state.mapMarker) state.mapMarker.setPosition([longitude, latitude]);

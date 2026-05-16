@@ -54,9 +54,26 @@ SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 NASA_POWER_HOURLY_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 AMAP_GEOCODING_URL = "https://restapi.amap.com/v3/geocode/geo"
 DEFAULT_AMAP_WEB_SERVICE_KEY = "21db26646aac8fed4620eaa36f210018"
-DEFAULT_BAIDU_MAP_BROWSER_KEY = "ebp62kY5I2KTRF6WVn3byZ9VZCc3uuE8"
 OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+PHOTON_GEOCODING_URL = "https://photon.komoot.io/api/"
+CHINESE_PLACE_ALIASES = {
+    "上海": "shanghai",
+    "上海市": "shanghai",
+    "北京": "beijing",
+    "北京市": "beijing",
+    "广州": "guangzhou",
+    "广州市": "guangzhou",
+    "深圳": "shenzhen",
+    "深圳市": "shenzhen",
+    "天津": "tianjin",
+    "天津市": "tianjin",
+    "重庆": "chongqing",
+    "重庆市": "chongqing",
+    "香港": "hong kong",
+    "澳门": "macau",
+    "台北": "taipei",
+}
 OPTIMIZATION_RESULT_WORKBOOK_NAME = "opt_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
 PLANNING_RESULT_SHEET_NAME = "规划结果"
@@ -156,13 +173,6 @@ AMAP_WEB_SERVICE_KEY = (
     or os.environ.get("AMAP_KEY")
     or DEFAULT_AMAP_WEB_SERVICE_KEY
 )
-BAIDU_MAP_BROWSER_KEY = (
-    os.environ.get("POWER_PLAN_BAIDU_MAP_KEY")
-    or os.environ.get("BAIDU_MAP_BROWSER_KEY")
-    or os.environ.get("BAIDU_MAP_AK")
-    or DEFAULT_BAIDU_MAP_BROWSER_KEY
-)
-GOOGLE_MAPS_BROWSER_KEY = os.environ.get("POWER_PLAN_GOOGLE_MAPS_KEY") or os.environ.get("GOOGLE_MAPS_BROWSER_KEY") or os.environ.get("GOOGLE_MAPS_API_KEY")
 NASA_POWER_PARAMETERS = {
     "wind_speed": "WS10M",
     "solar_irradiance": "ALLSKY_SFC_SW_DWN",
@@ -2595,18 +2605,34 @@ def geocode_place_name(place: str) -> dict:
     if not query_text:
         raise ValueError("地名不能为空")
     errors: list[str] = []
-    providers = geocode_provider_order(query_text)
-    for provider in providers:
-        try:
-            return provider(query_text)
-        except GeocodingError as exc:
-            errors.append(str(exc))
+    for candidate in geocode_query_candidates(query_text):
+        providers = geocode_provider_order(candidate)
+        for provider in providers:
+            try:
+                result = provider(candidate)
+                if candidate != query_text:
+                    result["place"] = query_text
+                    result["display_name"] = f"{query_text} / {result.get('display_name') or candidate}"
+                return result
+            except GeocodingError as exc:
+                errors.append(str(exc))
     raise GeocodingError("；".join(errors) or "未找到该地名对应的经纬度坐标")
+
+
+def geocode_query_candidates(place: str) -> list[str]:
+    """Return the original query plus an English alias for common Chinese place names."""
+    query_text = str(place or "").strip()
+    normalized = re.sub(r"\s+", "", query_text.lower())
+    alias = CHINESE_PLACE_ALIASES.get(normalized)
+    candidates = [query_text]
+    if alias and alias not in candidates:
+        candidates.append(alias)
+    return candidates
 
 
 def geocode_provider_order(place: str):
     """Prefer Amap for Chinese place names, and global providers for foreign names."""
-    global_providers = [geocode_with_open_meteo, geocode_with_nominatim]
+    global_providers = [geocode_with_open_meteo, geocode_with_photon, geocode_with_nominatim]
     if not AMAP_WEB_SERVICE_KEY:
         return global_providers
     if should_prefer_global_geocoder(place):
@@ -2726,6 +2752,45 @@ def geocode_with_nominatim(place: str) -> dict:
         "latitude": latitude,
         "longitude": longitude,
         "source": "OpenStreetMap Nominatim",
+    }
+
+
+def geocode_with_photon(place: str) -> dict:
+    query = urlencode({"q": place, "limit": 1, "lang": "en"})
+    url = f"{PHOTON_GEOCODING_URL}?{query}"
+    try:
+        with urlopen_with_user_agent(url, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise GeocodingError(f"Photon 地名解析接口返回错误: HTTP {exc.code}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise GeocodingError(f"Photon 地名解析接口连接失败: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GeocodingError("Photon 地名解析接口返回内容不是合法 JSON") from exc
+    features = data.get("features", []) if isinstance(data, dict) else []
+    if not features:
+        raise GeocodingError("Photon 未找到该地名对应的经纬度坐标")
+    first = features[0]
+    coordinates = first.get("geometry", {}).get("coordinates", [])
+    try:
+        longitude = float(coordinates[0])
+        latitude = float(coordinates[1])
+    except (IndexError, TypeError, ValueError) as exc:
+        raise GeocodingError("Photon 地名解析结果缺少有效经纬度") from exc
+    properties = first.get("properties", {})
+    display_parts = [
+        properties.get("name"),
+        properties.get("city"),
+        properties.get("state"),
+        properties.get("country"),
+    ]
+    display_name = "，".join(str(part) for part in display_parts if part)
+    return {
+        "place": place,
+        "display_name": display_name or place,
+        "latitude": latitude,
+        "longitude": longitude,
+        "source": "OpenStreetMap Photon API",
     }
 
 
@@ -3218,15 +3283,13 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
         if path == "/api/planning/map-config" and method == "GET":
             providers = [
                 {"key": "amap", "label": "高德地图", "enabled": bool(AMAP_WEB_SERVICE_KEY)},
-                {"key": "baidu", "label": "百度地图", "enabled": bool(BAIDU_MAP_BROWSER_KEY)},
-                {"key": "google", "label": "谷歌地图", "enabled": bool(GOOGLE_MAPS_BROWSER_KEY)},
+                {"key": "osm", "label": "OpenStreetMap", "enabled": True},
             ]
             preferred = next((provider["key"] for provider in providers if provider["enabled"]), "manual")
             return _json_response(
                 {
                     "amap_key": AMAP_WEB_SERVICE_KEY,
-                    "baidu_key": BAIDU_MAP_BROWSER_KEY,
-                    "google_key": GOOGLE_MAPS_BROWSER_KEY,
+                    "osm_key": "",
                     "providers": providers,
                     "preferred_provider": preferred,
                 }

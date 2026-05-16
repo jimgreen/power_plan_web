@@ -2608,25 +2608,16 @@ class PowerPlanServerTest(unittest.TestCase):
 
     def test_planning_map_config_has_default_amap_key(self):
         self.assertEqual(server.DEFAULT_AMAP_WEB_SERVICE_KEY, "21db26646aac8fed4620eaa36f210018")
-        self.assertEqual(server.DEFAULT_BAIDU_MAP_BROWSER_KEY, "ebp62kY5I2KTRF6WVn3byZ9VZCc3uuE8")
 
-    def test_planning_map_config_exposes_baidu_and_google_keys_when_configured(self):
-        original_baidu_key = server.BAIDU_MAP_BROWSER_KEY
-        original_google_key = server.GOOGLE_MAPS_BROWSER_KEY
-        server.BAIDU_MAP_BROWSER_KEY = "baidu-test-key"
-        server.GOOGLE_MAPS_BROWSER_KEY = "google-test-key"
-        try:
-            status, headers, body = server.handle_planning_api_path("/api/planning/map-config", "GET", b"")
-        finally:
-            server.BAIDU_MAP_BROWSER_KEY = original_baidu_key
-            server.GOOGLE_MAPS_BROWSER_KEY = original_google_key
-
+    def test_planning_map_config_exposes_osm_provider_without_google_or_baidu(self):
+        status, headers, body = server.handle_planning_api_path("/api/planning/map-config", "GET", b"")
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(status, 200)
-        self.assertEqual(data["baidu_key"], "baidu-test-key")
-        self.assertEqual(data["google_key"], "google-test-key")
-        self.assertIn({"key": "baidu", "label": "百度地图", "enabled": True}, data["providers"])
-        self.assertIn({"key": "google", "label": "谷歌地图", "enabled": True}, data["providers"])
+        self.assertNotIn("baidu_key", data)
+        self.assertNotIn("google_key", data)
+        self.assertEqual(data["osm_key"], "")
+        self.assertIn({"key": "osm", "label": "OpenStreetMap", "enabled": True}, data["providers"])
+        self.assertNotIn("google", {provider["key"] for provider in data["providers"]})
 
     def test_planning_geocode_endpoint_falls_back_to_nominatim(self):
         class FakeResponse:
@@ -2645,6 +2636,8 @@ class PowerPlanServerTest(unittest.TestCase):
         def fake_urlopen(url, timeout):
             if "geocoding-api.open-meteo.com" in url:
                 return FakeResponse({"results": []})
+            if "photon.komoot.io" in url:
+                return FakeResponse({"features": []})
             self.assertIn("nominatim.openstreetmap.org", url)
             return FakeResponse([{"lat": "39.9042", "lon": "116.4074", "display_name": "北京"}])
 
@@ -2665,6 +2658,118 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(data["latitude"], 39.9042)
         self.assertEqual(data["longitude"], 116.4074)
         self.assertEqual(data["source"], "OpenStreetMap Nominatim")
+
+    def test_planning_geocode_uses_chinese_alias_when_original_query_fails(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+        requested_urls = []
+
+        def fake_urlopen(url, timeout):
+            requested_urls.append(url)
+            if "restapi.amap.com" in url:
+                return FakeResponse({"status": "0", "info": "ENGINE_RESPONSE_DATA_ERROR"})
+            if "geocoding-api.open-meteo.com" in url and "shanghai" in url:
+                return FakeResponse(
+                    {
+                        "results": [
+                            {
+                                "name": "上海",
+                                "latitude": 31.22222,
+                                "longitude": 121.45806,
+                                "country": "中国",
+                                "admin1": "上海市",
+                            }
+                        ]
+                    }
+                )
+            if "geocoding-api.open-meteo.com" in url:
+                return FakeResponse({"results": []})
+            if "photon.komoot.io" in url or "nominatim.openstreetmap.org" in url:
+                return FakeResponse({"features": []} if "photon.komoot.io" in url else [])
+            raise AssertionError(f"unexpected url: {url}")
+
+        original_key = server.AMAP_WEB_SERVICE_KEY
+        server.AMAP_WEB_SERVICE_KEY = "test-key"
+        try:
+            with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/geocode",
+                    "POST",
+                    json.dumps({"place": "上海"}, ensure_ascii=False).encode("utf-8"),
+                )
+        finally:
+            server.AMAP_WEB_SERVICE_KEY = original_key
+
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["place"], "上海")
+        self.assertEqual(data["latitude"], 31.22222)
+        self.assertEqual(data["longitude"], 121.45806)
+        self.assertEqual(data["source"], "Open-Meteo Geocoding API")
+        self.assertTrue(any("shanghai" in url for url in requested_urls))
+
+    def test_planning_geocode_falls_back_to_photon(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+        def fake_urlopen(url, timeout):
+            if "geocoding-api.open-meteo.com" in url:
+                return FakeResponse({"results": []})
+            if "photon.komoot.io" in url:
+                return FakeResponse(
+                    {
+                        "features": [
+                            {
+                                "geometry": {"coordinates": [-0.1277653, 51.5074456]},
+                                "properties": {
+                                    "name": "London",
+                                    "state": "England",
+                                    "country": "United Kingdom",
+                                },
+                            }
+                        ]
+                    }
+                )
+            raise AssertionError(f"unexpected url: {url}")
+
+        original_key = server.AMAP_WEB_SERVICE_KEY
+        server.AMAP_WEB_SERVICE_KEY = ""
+        try:
+            with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/geocode",
+                    "POST",
+                    json.dumps({"place": "London"}, ensure_ascii=False).encode("utf-8"),
+                )
+        finally:
+            server.AMAP_WEB_SERVICE_KEY = original_key
+
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["latitude"], 51.5074456)
+        self.assertEqual(data["longitude"], -0.1277653)
+        self.assertEqual(data["source"], "OpenStreetMap Photon API")
 
     def test_planning_page_has_current_scheme_display(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
@@ -3892,10 +3997,12 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn(label, import_modal)
         for label in ("随机曲线", "模式1", "模式2", "模式3", "负荷最大值", "负荷最小值", "负荷平均值", "确定", "取消"):
             self.assertIn(label, html)
-        for label in ("高德地图", "百度地图", "谷歌地图"):
+        for label in ("高德地图", "OpenStreetMap"):
             self.assertIn(label, modal)
-        for provider in ('data-map-provider="amap"', 'data-map-provider="baidu"', 'data-map-provider="google"'):
+        self.assertNotIn("谷歌地图", modal)
+        for provider in ('data-map-provider="amap"', 'data-map-provider="osm"'):
             self.assertIn(provider, modal)
+        self.assertNotIn('data-map-provider="google"', modal)
         self.assertNotIn('id="weatherPlace"', weather_bar)
         self.assertNotIn('id="geocodePlace"', weather_bar)
         self.assertNotIn(">地图选点</button>", weather_bar)
@@ -3908,12 +4015,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/time-series/import", script)
         self.assertIn("/api/planning/load-curve/generate", script)
         self.assertIn("selectMapProvider", script)
-        self.assertIn("loadBaiduMapScript", script)
-        self.assertIn("initBaiduMapPicker", script)
-        self.assertIn("api.map.baidu.com/api?v=3.0", script)
-        self.assertIn("window.BMap", script)
-        self.assertIn("loadGoogleMapScript", script)
-        self.assertIn("initGoogleMapPicker", script)
+        self.assertNotIn("loadBaiduMapScript", script)
+        self.assertNotIn("initBaiduMapPicker", script)
+        self.assertNotIn("api.map.baidu.com/api?v=3.0", script)
+        self.assertNotIn("window.BMap", script)
+        self.assertNotIn("loadGoogleMapScript", script)
+        self.assertNotIn("initGoogleMapPicker", script)
+        self.assertNotIn("maps.googleapis.com/maps/api/js", script)
+        self.assertNotIn("window.google", script)
         self.assertIn("importTimeSeriesFile", script)
         self.assertIn("openTimeSeriesImportModal", script)
         self.assertIn("openTimeSeriesImportFile", script)
@@ -3947,6 +4056,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("renderAmapTileLayer", script)
         self.assertIn("webrd0${server}.is.autonavi.com", script)
         self.assertIn("osmTileUrl", script)
+        self.assertIn("OSM_TILE_PROVIDERS", script)
+        self.assertIn("tile.openstreetmap.de", script)
+        self.assertIn("a.tile.openstreetmap.fr/hot", script)
+        self.assertIn("b.basemaps.cartocdn.com/light_all", script)
+        self.assertIn("tile.openstreetmap.org", script)
+        self.assertIn("data-fallback-srcs", script)
         self.assertIn("switchAmapTileToGlobalFallback", script)
         self.assertIn("OpenStreetMap 全球底图", script)
         self.assertIn("lngLatToWebMercatorPixel", script)
