@@ -1,4 +1,4 @@
-import json
+﻿import json
 import shutil
 import sys
 import time
@@ -1188,7 +1188,7 @@ class PowerPlanServerTest(unittest.TestCase):
         server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
         try:
             server.PLANNING_STORE.create_scheme("方案A")
-            result_path = planning_root / "方案A" / "optimization_results.xlsx"
+            result_path = planning_root / "方案A" / "opt_results.xlsx"
             result_path.write_text("old result", encoding="utf-8")
 
             runtime = server.OptimizationRuntime()
@@ -1239,7 +1239,7 @@ class PowerPlanServerTest(unittest.TestCase):
         server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
         try:
             server.PLANNING_STORE.create_scheme("方案A")
-            result_path = planning_root / "方案A" / "optimization_results.xlsx"
+            result_path = planning_root / "方案A" / "opt_results.xlsx"
             workbook = Workbook()
             workbook.active.title = "总体指标"
             workbook.active.append(["指标", "数值", "单位"])
@@ -1300,7 +1300,7 @@ class PowerPlanServerTest(unittest.TestCase):
         server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
         try:
             server.PLANNING_STORE.create_scheme("方案A")
-            result_path = planning_root / "方案A" / "optimization_results.xlsx"
+            result_path = planning_root / "方案A" / "opt_results.xlsx"
             workbook = Workbook()
             workbook.active.title = "总体指标"
             workbook.active.append(["指标", "数值", "单位"])
@@ -1488,7 +1488,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body.decode("utf-8"))["results"], [])
 
-            source_path = planning_root / "方案A" / "optimization_results.xlsx"
+            source_path = planning_root / "方案A" / "opt_results.xlsx"
             create_workbook = Workbook()
             create_workbook.active.title = "总体指标"
             create_workbook.active.append(["指标", "数值"])
@@ -1510,7 +1510,7 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             listed = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(listed["selected"], "optimization_results.xlsx")
+            self.assertEqual(listed["selected"], "opt_results.xlsx")
             broken_item = next(item for item in listed["results"] if item["name"] == "aaa_results.xlsx")
             self.assertFalse(broken_item["readable"])
             self.assertIn("结果文件无法读取", broken_item["message"])
@@ -1539,7 +1539,7 @@ class PowerPlanServerTest(unittest.TestCase):
                     {
                         "scheme": "方案A",
                         "action": "copy",
-                        "filename": "optimization_results.xlsx",
+                        "filename": "opt_results.xlsx",
                         "target_name": "custom",
                     },
                     ensure_ascii=False,
@@ -1557,7 +1557,7 @@ class PowerPlanServerTest(unittest.TestCase):
                     {
                         "scheme": "方案A",
                         "action": "copy",
-                        "filename": "optimization_results.xlsx",
+                        "filename": "opt_results.xlsx",
                         "target_name": "custom",
                     },
                     ensure_ascii=False,
@@ -1575,7 +1575,7 @@ class PowerPlanServerTest(unittest.TestCase):
                     {
                         "scheme": "方案A",
                         "action": "copy",
-                        "filename": "optimization_results.xlsx",
+                        "filename": "opt_results.xlsx",
                         "target_name": "aaa",
                     },
                     ensure_ascii=False,
@@ -1609,7 +1609,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 "/api/evaluation/results",
                 "POST",
                 json.dumps(
-                    {"scheme": "方案A", "action": "delete", "filename": "optimization_results.xlsx"},
+                    {"scheme": "方案A", "action": "delete", "filename": "opt_results.xlsx"},
                     ensure_ascii=False,
                 ).encode("utf-8"),
             )
@@ -1617,13 +1617,13 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 400)
             self.assertEqual(protected_delete["error"], "bad_request")
             self.assertIn("默认结果文件不允许删除", protected_delete["message"])
-            self.assertTrue((planning_root / "方案A" / "optimization_results.xlsx").exists())
+            self.assertTrue((planning_root / "方案A" / "opt_results.xlsx").exists())
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
                 "POST",
                 json.dumps(
-                    {"scheme": "方案A", "action": "save", "filename": "optimization_results.xlsx"},
+                    {"scheme": "方案A", "action": "save", "filename": "opt_results.xlsx"},
                     ensure_ascii=False,
                 ).encode("utf-8"),
             )
@@ -1859,7 +1859,7 @@ class PowerPlanServerTest(unittest.TestCase):
             deleted = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertFalse((planning_root / "方案A" / "custom_results.xlsx").exists())
-            self.assertEqual([item["name"] for item in deleted["results"]], ["aaa_results.xlsx", "optimization_results.xlsx"])
+            self.assertEqual([item["name"] for item in deleted["results"]], ["aaa_results.xlsx", "opt_results.xlsx"])
             self.assertEqual(deleted["selected"], "aaa_results.xlsx")
         finally:
             server.PLANNING_STORE = original_store
@@ -4153,3 +4153,4 @@ class PowerPlanServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

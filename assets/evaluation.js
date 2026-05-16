@@ -483,7 +483,7 @@ function collectPlanningResultRows() {
 }
 
 function selectedResultIsDefault() {
-  return state.selectedResultFile === "optimization_results.xlsx";
+  return state.selectedResultFile === "opt_results.xlsx";
 }
 
 function selectedResultIsReadable() {

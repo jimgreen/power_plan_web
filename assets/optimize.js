@@ -348,11 +348,11 @@ async function loadOptimizationCurveData() {
     return;
   }
   const runKey = state.optimization?.end_time || state.optimization?.status || "";
-  const key = `${state.currentScheme}/optimization_results.xlsx/${runKey}`;
+  const key = `${state.currentScheme}/opt_results.xlsx/${runKey}`;
   if (state.curveDataKey === key) return;
   state.curveDataKey = key;
   state.optimizationCurveViewer.clear("正在加载小时级曲线");
-  const items = [{ scheme: state.currentScheme, filename: "optimization_results.xlsx" }];
+  const items = [{ scheme: state.currentScheme, filename: "opt_results.xlsx" }];
   try {
     const data = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
     if (key !== state.curveDataKey) return;
