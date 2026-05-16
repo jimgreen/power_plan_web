@@ -2638,7 +2638,7 @@ function renderPlanningParameterGroupTable(group, row, editable = false) {
     .join("");
   const toggle = editable && group.toggleKey ? planningGroupToggle(group, row) : "";
   const status = group.toggleKey ? `<em class="planning-parameter-group-status">${groupEnabled ? "已启用" : "未启用"}</em>` : "";
-  return `<section class="planning-parameter-group ${groupEnabled ? "" : "disabled"}" data-planning-group="${escapeHtml(group.key)}"><h3>${toggle}<span>${escapeHtml(group.title)}</span>${status}</h3><table><thead><tr><th>参数名称</th><th>参数值</th><th>取值范围</th></tr></thead><tbody>${rows}</tbody></table></section>`;
+  return `<section class="planning-parameter-group ${groupEnabled ? "" : "disabled"}" data-planning-group="${escapeHtml(group.key)}"><h3>${toggle}<span>${escapeHtml(group.title)}</span>${status}</h3><table><colgroup><col class="planning-parameter-name-col"><col class="planning-parameter-value-col"><col class="planning-parameter-range-col"></colgroup><thead><tr><th>参数名称</th><th>参数值</th><th>取值范围</th></tr></thead><tbody>${rows}</tbody></table></section>`;
 }
 
 function planningGroupToggle(group, row) {

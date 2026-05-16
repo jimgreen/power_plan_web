@@ -2482,6 +2482,8 @@ def build_task_list() -> list[dict]:
             result_name = str(result_item.get("name") or "").strip()
             if not result_name:
                 continue
+            if not task_list_evaluation_result_is_eligible(result_item):
+                continue
             key = f"{scheme}\0{result_name}"
             eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
             eval_state = (
@@ -2497,9 +2499,6 @@ def build_task_list() -> list[dict]:
                 queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
                 queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
             )
-            can_use_result = bool(result_item.get("readable", True)) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME
-            eval_task["can_start"] = eval_task["can_start"] and can_use_result
-            eval_task["can_queue"] = eval_task["can_queue"] and can_use_result
             tasks[eval_task["id"]] = eval_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
@@ -2516,18 +2515,26 @@ def build_task_list() -> list[dict]:
 
     for key, runtime in EVALUATION_RUNTIME.runtimes().items():
         scheme, result = split_evaluation_runtime_key(key)
+        queued = TASK_SCHEDULER.is_queued("evaluation", scheme, result)
+        if result == OPTIMIZATION_RESULT_WORKBOOK_NAME and runtime.status != "运行中" and not queued:
+            continue
         state = runtime.snapshot(include_hourly_curves=False)
         task = task_from_runtime_state(
             "evaluation",
             state,
             scheme=scheme,
             result=result,
-            queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result),
+            queued=queued,
             queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result),
         )
         tasks[task["id"]] = task
 
     return sorted(tasks.values(), key=task_sort_key)
+
+
+def task_list_evaluation_result_is_eligible(result_item: dict) -> bool:
+    result_name = str(result_item.get("name") or "").strip()
+    return bool(result_name) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME and bool(result_item.get("readable", True))
 
 
 def task_sort_key(item: dict) -> tuple[int, str, str]:

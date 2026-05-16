@@ -24,7 +24,8 @@ body {
 
 button,
 input,
-select { font: inherit; }
+select,
+textarea { font: inherit; }
 
 button {
   border: 0;
@@ -396,7 +397,7 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(120px, var(--optimization-task-table-height, 300px)) 8px minmax(0, 1fr);
+  grid-template-rows: auto minmax(140px, var(--optimization-task-section-height, 1fr)) minmax(140px, var(--evaluation-task-section-height, 1fr));
   gap: 12px;
   padding: 18px;
   overflow: hidden;
@@ -428,9 +429,35 @@ button:disabled {
   overflow: auto;
 }
 
+.tasks-panel .status-error {
+  grid-row: 1;
+}
+
 .task-table table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1120px;
+  table-layout: fixed;
+}
+
+.task-col-scheme { width: 11%; }
+.task-col-result { width: 11%; }
+.task-col-status { width: 8%; }
+.task-col-process { width: 8%; }
+.task-col-start { width: 12%; }
+.task-col-end { width: 12%; }
+.task-col-elapsed { width: 8%; }
+.task-col-log { width: 14%; }
+.task-col-actions { width: 16%; }
+
+.task-table th,
+.task-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-table td:last-child {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .task-section {
@@ -439,6 +466,14 @@ button:disabled {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
+}
+
+.task-section-optimization {
+  grid-row: 2;
+}
+
+.task-section-evaluation {
+  grid-row: 3;
 }
 
 .task-section-head {
@@ -453,46 +488,32 @@ button:disabled {
   font-size: 16px;
 }
 
-.task-table-resize-handle {
-  position: relative;
-  min-height: 8px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  cursor: row-resize;
-  touch-action: none;
-  transition: opacity 0.16s ease;
+.task-scheme-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #486966;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.task-table-resize-handle::before {
-  content: "";
-  position: absolute;
-  inset: 3px 0;
-  border-radius: 999px;
-  background:
-    linear-gradient(90deg, transparent, rgba(21, 211, 255, 0.44), transparent),
-    rgba(5, 34, 70, 0.3);
-  box-shadow:
-    inset 0 0 0 1px rgba(21, 211, 255, 0.18),
-    0 0 8px rgba(21, 211, 255, 0.12);
-  transition: background 0.16s ease, box-shadow 0.16s ease;
-}
-
-.task-table-resize-handle:hover,
-.task-table-resize-handle:focus-visible,
-.task-table-resize-handle.dragging {
+.task-scheme-filter select {
+  min-width: 160px;
+  max-width: 240px;
+  height: 34px;
+  padding: 0 32px 0 12px;
+  border: 1px solid rgba(21, 211, 255, 0.34);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(237, 246, 245, 0.92));
+  color: #173936;
+  font-weight: 800;
   outline: none;
 }
 
-.task-table-resize-handle:hover::before,
-.task-table-resize-handle:focus-visible::before,
-.task-table-resize-handle.dragging::before {
-  background:
-    linear-gradient(90deg, transparent, rgba(108, 238, 255, 0.62), transparent),
-    rgba(13, 92, 89, 0.26);
-  box-shadow:
-    inset 0 0 0 1px rgba(108, 238, 255, 0.34),
-    0 0 12px rgba(21, 211, 255, 0.18);
+.task-scheme-filter select:focus {
+  border-color: rgba(21, 211, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(21, 211, 255, 0.14);
 }
 
 .task-log-cell {
@@ -503,9 +524,10 @@ button:disabled {
 }
 
 .task-actions {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .task-actions button {
@@ -3159,13 +3181,29 @@ body.modal-open {
 }
 
 .planning-parameter-group table {
+  width: 100%;
   min-width: 0;
+  table-layout: fixed;
+}
+
+.planning-parameter-name-col {
+  width: 42%;
+}
+
+.planning-parameter-value-col {
+  width: 24%;
+}
+
+.planning-parameter-range-col {
+  width: 34%;
 }
 
 .planning-parameter-group th,
 .planning-parameter-group td {
   padding: 7px 8px;
   white-space: normal;
+  overflow-wrap: anywhere;
+  vertical-align: middle;
 }
 
 .planning-parameter-group th {
@@ -4395,4 +4433,207 @@ td {
 
 .users-table select {
   min-width: 120px;
+}
+
+/* Unified control polish: keep late-page controls on the same HUD system. */
+:root {
+  --control-border: rgba(21, 211, 255, 0.42);
+  --control-border-hover: rgba(108, 238, 255, 0.74);
+  --control-bg: linear-gradient(180deg, rgba(5, 34, 70, 0.68), rgba(4, 19, 42, 0.62));
+  --control-bg-hover:
+    radial-gradient(circle at 50% 0%, rgba(44, 225, 255, 0.16), transparent 54%),
+    linear-gradient(180deg, rgba(6, 47, 86, 0.76), rgba(4, 24, 58, 0.68));
+  --control-primary-bg:
+    radial-gradient(circle at 50% 0%, rgba(44, 225, 255, 0.28), transparent 48%),
+    linear-gradient(180deg, rgba(4, 76, 140, 0.86), rgba(3, 34, 86, 0.82));
+  --control-danger-bg: linear-gradient(180deg, rgba(108, 32, 48, 0.8), rgba(54, 14, 30, 0.68));
+  --control-muted-bg: linear-gradient(180deg, rgba(5, 34, 70, 0.48), rgba(4, 19, 42, 0.48));
+  --input-bg: rgba(1, 14, 42, 0.82);
+}
+
+.main-nav a,
+.main-nav button,
+.primary,
+.secondary,
+.tab,
+.scheme-actions button,
+.evaluation-result-action-buttons button,
+.optimization-actions button,
+.log-view-tab,
+.comparison-add-tab,
+.comparison-tab-head button,
+.pager button,
+.add-row,
+.month-tab,
+.summary-tab,
+.result-tab,
+.device-filter,
+.device-jump a,
+.curve-button,
+.weather-import-bar button,
+.time-series-import-toolbar button,
+.map-picker-head button,
+.coordinate-search-row button,
+.map-picker-foot button,
+.map-provider-tab,
+.time-series-import-curve-toggle,
+.amap-map-controls button,
+.user-status button,
+.task-actions button {
+  min-height: 34px;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  background: var(--control-bg);
+  color: var(--hud-muted-strong);
+  box-shadow: inset 0 0 16px rgba(24, 175, 255, 0.16);
+  text-shadow: 0 0 10px rgba(44, 183, 255, 0.34);
+  transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease, opacity 0.16s ease;
+}
+
+.main-nav .active,
+.primary,
+.scheme-actions .primary,
+.month-tab.active,
+.summary-tab.active,
+.result-tab.active,
+.log-view-tab.active,
+.tab.active,
+.comparison-tab.active,
+.curve-button.active,
+.curve-button[aria-pressed="true"],
+.map-provider-tab.active,
+.time-series-import-curve-toggle.active,
+.time-series-import-curve-toggle[aria-pressed="true"] {
+  border-color: rgba(108, 238, 255, 0.94);
+  background: var(--control-primary-bg);
+  color: #ffffff;
+  box-shadow:
+    inset 0 0 22px rgba(24, 175, 255, 0.48),
+    0 0 24px rgba(0, 190, 255, 0.24);
+}
+
+.secondary,
+.optimization-actions .queue-action {
+  border-color: rgba(108, 147, 160, 0.28) !important;
+  background: var(--control-muted-bg) !important;
+  color: rgba(189, 234, 255, 0.78) !important;
+  box-shadow: inset 0 0 12px rgba(24, 175, 255, 0.08) !important;
+  text-shadow: none !important;
+}
+
+.danger,
+.delete-row {
+  border-color: rgba(255, 107, 107, 0.55) !important;
+  background: var(--control-danger-bg) !important;
+  color: #ffd6d6 !important;
+}
+
+.main-nav a:hover,
+.main-nav button:hover:not(:disabled),
+.tab:hover,
+.scheme-actions button:hover:not(:disabled),
+.evaluation-result-action-buttons button:hover:not(:disabled),
+.optimization-actions button:hover:not(:disabled),
+.log-view-tab:hover,
+.comparison-add-tab:hover:not(:disabled),
+.comparison-tab-head button:hover,
+.pager button:hover:not(:disabled),
+.add-row:hover,
+.month-tab:hover,
+.summary-tab:hover,
+.result-tab:hover,
+.device-filter:hover,
+.device-jump a:hover,
+.curve-button:hover,
+.weather-import-bar button:hover,
+.time-series-import-toolbar button:hover,
+.map-picker-head button:hover,
+.coordinate-search-row button:hover,
+.map-picker-foot button:hover,
+.map-provider-tab:hover,
+.time-series-import-curve-toggle:hover,
+.time-series-import-curve-toggle:focus-visible,
+.amap-map-controls button:hover,
+.user-status button:hover:not(:disabled),
+.task-actions button:hover:not(:disabled) {
+  border-color: var(--control-border-hover);
+  background: var(--control-bg-hover);
+  color: #ffffff;
+  box-shadow:
+    inset 0 0 22px rgba(24, 175, 255, 0.42),
+    0 0 20px rgba(0, 190, 255, 0.2);
+}
+
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(33, 213, 255, 0.6);
+  outline-offset: 2px;
+}
+
+td input,
+td select,
+.auth-card input,
+.users-table select,
+.language-switch select,
+.task-scheme-filter select,
+.weather-import-bar input,
+.load-generator-grid input,
+.load-generator-grid select,
+.evaluation-result-actions select,
+.comparison-tab-selectors select,
+.coordinate-search-row input {
+  border-color: rgba(20, 190, 255, 0.32);
+  background: var(--input-bg);
+  color: var(--hud-text);
+  box-shadow: inset 0 0 12px rgba(24, 175, 255, 0.08);
+  accent-color: var(--hud-cyan);
+}
+
+td input:focus,
+td select:focus,
+.auth-card input:focus,
+.users-table select:focus,
+.language-switch select:focus,
+.task-scheme-filter select:focus,
+.weather-import-bar input:focus,
+.load-generator-grid input:focus,
+.load-generator-grid select:focus,
+.evaluation-result-actions select:focus,
+.comparison-tab-selectors select:focus,
+.coordinate-search-row input:focus {
+  border-color: rgba(108, 238, 255, 0.74);
+  outline: 2px solid rgba(33, 213, 255, 0.42);
+  outline-offset: 1px;
+  background: rgba(3, 28, 68, 0.94);
+}
+
+.task-scheme-filter {
+  color: var(--hud-muted);
+}
+
+.task-scheme-filter span {
+  color: var(--hud-cyan);
+}
+
+.task-scheme-filter select {
+  min-width: 160px;
+  max-width: 240px;
+  height: 34px;
+  padding: 0 32px 0 12px;
+}
+
+.map-provider-tabs {
+  border-bottom-color: rgba(20, 190, 255, 0.26);
+  background: rgba(2, 18, 50, 0.72);
+}
+
+.amap-map-controls button {
+  background: rgba(5, 34, 70, 0.78);
+  color: var(--hud-text);
+  box-shadow:
+    inset 0 0 14px rgba(24, 175, 255, 0.14),
+    0 8px 20px rgba(0, 8, 28, 0.28);
 }

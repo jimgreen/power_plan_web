@@ -2,14 +2,29 @@ const taskState = {
   tasks: [],
   loading: false,
   pollTimer: null,
-  optimizationTaskTableHeight: null,
+  heightSyncFrame: 0,
+  evaluationSchemeFilter: "",
 };
+const TASK_SECTION_MIN_HEIGHT = 140;
+const TASK_COLUMN_GROUP = `
+      <colgroup>
+        <col class="task-col-scheme">
+        <col class="task-col-result">
+        <col class="task-col-status">
+        <col class="task-col-process">
+        <col class="task-col-start">
+        <col class="task-col-end">
+        <col class="task-col-elapsed">
+        <col class="task-col-log">
+        <col class="task-col-actions">
+      </colgroup>
+`;
 
 document.addEventListener("DOMContentLoaded", () => {
-  document.getElementById("refreshTasks")?.addEventListener("click", () => loadTasks().catch(showTaskError));
   document.getElementById("optimizationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("evaluationTaskTable")?.addEventListener("click", handleTaskAction);
-  bindTaskTableResizeHandle();
+  document.getElementById("evaluationSchemeFilter")?.addEventListener("change", handleEvaluationSchemeFilterChange);
+  window.addEventListener("resize", scheduleTaskSectionHeights);
   loadTasks().catch(showTaskError);
   taskState.pollTimer = window.setInterval(() => loadTasks({ silent: true }).catch(showTaskError), 4000);
 });
@@ -43,14 +58,19 @@ async function loadTasks(options = {}) {
 }
 
 function renderTasks() {
+  const hadEvaluationSchemeFilter = Boolean(taskState.evaluationSchemeFilter);
+  const filterReset = renderEvaluationSchemeFilter();
   renderTaskSection("optimization", "optimizationTaskTable", "暂无规划计算任务");
   renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
+  if (!hadEvaluationSchemeFilter || filterReset || !taskState.evaluationSchemeFilter) {
+    scheduleTaskSectionHeights();
+  }
 }
 
 function renderTaskSection(taskTypeKey, targetId, emptyText) {
   const target = document.getElementById(targetId);
   if (!target) return;
-  const tasks = taskState.tasks.filter((task) => task.task_type_key === taskTypeKey);
+  const tasks = filteredTasksForSection(taskTypeKey);
   if (!tasks.length) {
     target.innerHTML = `<div class="task-empty">${escapeHtml(emptyText)}</div>`;
     translateNode(target);
@@ -58,6 +78,7 @@ function renderTaskSection(taskTypeKey, targetId, emptyText) {
   }
   target.innerHTML = `
     <table>
+      ${TASK_COLUMN_GROUP}
       <thead>
         <tr>
           <th>任务所用方案</th>
@@ -77,6 +98,37 @@ function renderTaskSection(taskTypeKey, targetId, emptyText) {
     </table>
   `;
   translateNode(target);
+}
+
+function filteredTasksForSection(taskTypeKey) {
+  const tasks = taskState.tasks.filter((task) => task.task_type_key === taskTypeKey);
+  if (taskTypeKey !== "evaluation" || !taskState.evaluationSchemeFilter) return tasks;
+  return tasks.filter((task) => String(task.scheme || "") === taskState.evaluationSchemeFilter);
+}
+
+function renderEvaluationSchemeFilter() {
+  const select = document.getElementById("evaluationSchemeFilter");
+  if (!select) return false;
+  const schemeNames = Array.from(
+    new Set(taskState.tasks.filter((task) => task.task_type_key === "evaluation").map((task) => String(task.scheme || "").trim()).filter(Boolean))
+  ).sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
+  let filterReset = false;
+  if (taskState.evaluationSchemeFilter && !schemeNames.includes(taskState.evaluationSchemeFilter)) {
+    taskState.evaluationSchemeFilter = "";
+    filterReset = true;
+  }
+  select.innerHTML = [`<option value="">全部方案</option>`, ...schemeNames.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)].join("");
+  select.value = taskState.evaluationSchemeFilter;
+  translateNode(select);
+  return filterReset;
+}
+
+function handleEvaluationSchemeFilterChange(event) {
+  taskState.evaluationSchemeFilter = String(event.target?.value || "");
+  renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
+  if (!taskState.evaluationSchemeFilter) {
+    scheduleTaskSectionHeights();
+  }
 }
 
 function renderTaskRow(task) {
@@ -140,77 +192,6 @@ async function handleTaskAction(event) {
   }
 }
 
-function bindTaskTableResizeHandle() {
-  const handle = document.getElementById("taskTableResizeHandle");
-  const panel = handle?.closest(".tasks-panel");
-  if (!handle || !panel) return;
-
-  const applyHeight = (height) => setOptimizationTaskTableHeight(panel, handle, height);
-  const currentHeight = () =>
-    taskState.optimizationTaskTableHeight ||
-    panel.querySelector(".task-section-optimization")?.getBoundingClientRect().height ||
-    300;
-
-  applyHeight(currentHeight());
-
-  handle.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = currentHeight();
-    handle.classList.add("dragging");
-    handle.setPointerCapture?.(event.pointerId);
-
-    const onMove = (moveEvent) => {
-      applyHeight(startHeight + moveEvent.clientY - startY);
-    };
-    const onDone = () => {
-      handle.classList.remove("dragging");
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onDone);
-      window.removeEventListener("pointercancel", onDone);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onDone);
-    window.addEventListener("pointercancel", onDone);
-  });
-
-  handle.addEventListener("keydown", (event) => {
-    const steps = { ArrowUp: -18, ArrowDown: 18, PageUp: -72, PageDown: 72 };
-    if (event.key in steps) {
-      event.preventDefault();
-      applyHeight(currentHeight() + steps[event.key]);
-    } else if (event.key === "Home") {
-      event.preventDefault();
-      applyHeight(taskTableHeightBounds(panel).min);
-    } else if (event.key === "End") {
-      event.preventDefault();
-      applyHeight(taskTableHeightBounds(panel).max);
-    }
-  });
-}
-
-function setOptimizationTaskTableHeight(panel, handle, height) {
-  const bounds = taskTableHeightBounds(panel);
-  const numericHeight = Number(height);
-  const safeHeight = Math.min(Math.max(Number.isFinite(numericHeight) ? numericHeight : bounds.min, bounds.min), bounds.max);
-  const roundedHeight = Math.round(safeHeight);
-  taskState.optimizationTaskTableHeight = roundedHeight;
-  panel.style.setProperty("--optimization-task-table-height", `${roundedHeight}px`);
-  handle?.setAttribute("aria-valuenow", String(roundedHeight));
-  handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
-  handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
-}
-
-function taskTableHeightBounds(panel) {
-  const min = 120;
-  const height = panel?.clientHeight || window.innerHeight;
-  return {
-    min,
-    max: Math.max(min, height - 220),
-  };
-}
-
 function showTaskError(error) {
   setTaskError(error?.message || "请求失败");
 }
@@ -220,6 +201,63 @@ function setTaskError(message) {
   if (!target) return;
   target.textContent = message || "";
   target.hidden = !message;
+  scheduleTaskSectionHeights();
+}
+
+function scheduleTaskSectionHeights() {
+  if (taskState.heightSyncFrame) {
+    window.cancelAnimationFrame(taskState.heightSyncFrame);
+  }
+  taskState.heightSyncFrame = window.requestAnimationFrame(() => {
+    taskState.heightSyncFrame = 0;
+    syncTaskSectionHeights();
+  });
+}
+
+function syncTaskSectionHeights() {
+  const panel = document.querySelector(".tasks-panel");
+  const optimizationSection = panel?.querySelector(".task-section-optimization");
+  const evaluationSection = panel?.querySelector(".task-section-evaluation");
+  if (!panel || !optimizationSection || !evaluationSection) return;
+
+  const styles = window.getComputedStyle(panel);
+  const paddingTop = parseFloat(styles.paddingTop || "0") || 0;
+  const paddingBottom = parseFloat(styles.paddingBottom || "0") || 0;
+  const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
+  const errorHeight = document.getElementById("taskError")?.hidden ? 0 : (document.getElementById("taskError")?.getBoundingClientRect().height || 0);
+  const panelContentHeight = Math.max(0, panel.clientHeight - paddingTop - paddingBottom);
+  const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - errorHeight - rowGap * 2);
+
+  const optimizationDesiredHeight = measureTaskSectionHeight(optimizationSection);
+  const evaluationDesiredHeight = measureTaskSectionHeight(evaluationSection);
+  const totalDesiredHeight = Math.max(optimizationDesiredHeight + evaluationDesiredHeight, 1);
+
+  let optimizationHeight;
+  if (totalDesiredHeight <= availableHeight) {
+    const remainingHeight = availableHeight - totalDesiredHeight;
+    optimizationHeight = optimizationDesiredHeight + remainingHeight * (optimizationDesiredHeight / totalDesiredHeight);
+  } else {
+    optimizationHeight = (availableHeight * optimizationDesiredHeight) / totalDesiredHeight;
+  }
+  optimizationHeight = clamp(optimizationHeight, TASK_SECTION_MIN_HEIGHT, availableHeight - TASK_SECTION_MIN_HEIGHT);
+  const evaluationHeight = Math.max(TASK_SECTION_MIN_HEIGHT, availableHeight - optimizationHeight);
+
+  panel.style.setProperty("--optimization-task-section-height", `${Math.round(optimizationHeight)}px`);
+  panel.style.setProperty("--evaluation-task-section-height", `${Math.round(evaluationHeight)}px`);
+}
+
+function measureTaskSectionHeight(section) {
+  const styles = window.getComputedStyle(section);
+  const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
+  const headHeight = section.querySelector(".task-section-head")?.getBoundingClientRect().height || 0;
+  const tableElement = section.querySelector(".task-table table");
+  const emptyElement = section.querySelector(".task-empty");
+  const contentHeight = tableElement?.getBoundingClientRect().height || emptyElement?.getBoundingClientRect().height || 0;
+  return Math.max(TASK_SECTION_MIN_HEIGHT, Math.ceil(headHeight + rowGap + contentHeight));
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
 function translateNode(target) {
