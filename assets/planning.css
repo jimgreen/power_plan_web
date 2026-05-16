@@ -176,10 +176,27 @@ button:disabled {
 
 .scheme-list-items {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.planning-scheme-rail-layout {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+}
+
+.planning-scheme-rail-layout .scheme-list-title {
+  margin: 0;
+}
+
+.planning-scheme-rail-layout .scheme-list {
+  min-height: 0;
+  overflow: auto;
 }
 
 .scheme-actions {
@@ -197,6 +214,21 @@ button:disabled {
   flex: 0 0 auto;
 }
 
+.scheme-actions-rail {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-left: 0;
+  overflow: visible;
+}
+
+.scheme-actions-rail button {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
 .scheme-list-title {
   margin: 0 0 14px;
   color: #102b2a;
@@ -207,11 +239,13 @@ button:disabled {
 .scheme-item {
   width: 100%;
   text-align: left;
-  padding: 9px 10px 9px 14px;
+  min-height: 32px;
+  padding: 6px 9px 6px 12px;
   border-left: 3px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: #24413d;
+  line-height: 1.25;
   cursor: pointer;
   user-select: none;
   transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease, box-shadow 0.16s ease;
@@ -404,10 +438,12 @@ button:disabled {
 
 .comparison-workspace {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .tasks-workspace {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .tasks-panel {
@@ -419,6 +455,11 @@ button:disabled {
   gap: 12px;
   padding: 18px;
   overflow: hidden;
+}
+
+.tasks-workspace > .tasks-panel {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .tasks-toolbar {
@@ -613,6 +654,11 @@ button:disabled {
   gap: 14px;
   padding: 16px;
   overflow: hidden;
+}
+
+.comparison-workspace > .comparison-panel {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .comparison-tab-bar {

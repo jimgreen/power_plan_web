@@ -164,7 +164,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260516-layout-fill", page_html)
+            self.assertIn("assets/planning.css?v=20260516-comparison-fill", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -749,6 +749,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("refreshTasks", script)
         self.assertNotIn(".task-table-resize-handle", css)
         self.assertIn("grid-template-rows: minmax(0, var(--optimization-task-section-height, 1fr)) minmax(0, var(--evaluation-task-section-height, 1fr))", css)
+        self.assertIn(".tasks-workspace > .tasks-panel", css)
+        tasks_workspace_css = css.split(".tasks-workspace {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-rows: minmax(0, 1fr)", tasks_workspace_css)
         self.assertIn("position: absolute", css)
         self.assertIn(".task-section-optimization", css)
         self.assertIn("grid-row: 1", css)
@@ -3502,6 +3505,9 @@ class PowerPlanServerTest(unittest.TestCase):
         scheme_item_css = css.split(".scheme-item {", 1)[1].split("}", 1)[0]
         self.assertIn("cursor: pointer", scheme_item_css)
         self.assertIn("user-select: none", scheme_item_css)
+        self.assertIn("min-height: 32px", scheme_item_css)
+        self.assertIn("padding: 6px 9px 6px 12px", scheme_item_css)
+        self.assertIn("line-height: 1.25", scheme_item_css)
         self.assertIn("clearPlanningDisplayForSchemeSwitch", planning_script)
         self.assertIn("renderPlanningSwitchingState", planning_script)
         planning_scheme_handler = planning_script.split("bindSchemeListItem(item, () =>", 1)[1].split("));", 1)[0]
@@ -3930,6 +3936,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("<button type=\"button\" class=\"${name === state.selectedCurve", script)
         self.assertIn("comparison-table-curve-resize-handle", css)
         self.assertIn(".comparison-table-column-resize-handle", css)
+        self.assertIn(".comparison-workspace > .comparison-panel", css)
+        comparison_workspace_css = css.split(".comparison-workspace {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-rows: minmax(0, 1fr)", comparison_workspace_css)
         comparison_panel_css = css.split(".comparison-panel {", 1)[1].split("}", 1)[0]
         self.assertIn("grid-template-rows: minmax(108px, auto) minmax(150px, var(--comparison-table-height, 30vh)) 12px minmax(260px, 1fr)", comparison_panel_css)
         comparison_tab_bar_css = css.split(".comparison-tab-bar {", 1)[1].split("}", 1)[0]
@@ -4338,7 +4347,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("maximumFractionDigits: 2", script)
             self.assertNotIn("maximumFractionDigits: 1", script)
 
-    def test_planning_scheme_rail_only_shows_scheme_list_title(self):
+    def test_planning_scheme_rail_places_scheme_actions_around_list(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
         rail = html.split('<aside class="scheme-rail">', 1)[1].split("</aside>", 1)[0]
@@ -4346,6 +4355,18 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("方案管理", rail)
         self.assertIn("方案列表", rail)
         self.assertIn('id="schemeList"', rail)
+        for control in ("createScheme", "deleteScheme", "renameScheme", "copyScheme"):
+            self.assertIn(f'id="{control}"', rail)
+        self.assertLess(rail.index('id="createScheme"'), rail.index("方案列表"))
+        self.assertLess(rail.index('id="deleteScheme"'), rail.index("方案列表"))
+        self.assertLess(rail.index('id="createScheme"'), rail.index('id="schemeList"'))
+        self.assertLess(rail.index('id="deleteScheme"'), rail.index('id="schemeList"'))
+        self.assertLess(rail.index('id="schemeList"'), rail.index('id="renameScheme"'))
+        self.assertLess(rail.index('id="schemeList"'), rail.index('id="copyScheme"'))
+        self.assertIn(".planning-scheme-rail-layout", css)
+        self.assertIn("grid-template-rows: auto auto minmax(0, 1fr) auto", css)
+        self.assertIn(".scheme-actions-rail", css)
+        self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", css)
         self.assertIn(".scheme-list-title", css)
         self.assertIn("color: #102b2a", css)
         self.assertIn("font-size: 18px", css)
@@ -4366,10 +4387,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('class="scheme-actions"', editor_header)
         self.assertIn("margin-left: auto", (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8"))
         self.assertIn('id="saveScheme"', editor_header)
-        self.assertIn('id="renameScheme"', editor_header)
-        self.assertIn('id="copyScheme"', editor_header)
-        self.assertIn('id="deleteScheme"', editor_header)
-        self.assertIn(">修改名称<", editor_header)
+        self.assertNotIn('id="renameScheme"', editor_header)
+        self.assertNotIn('id="copyScheme"', editor_header)
+        self.assertNotIn('id="deleteScheme"', editor_header)
+        self.assertIn('id="renameScheme"', rail)
+        self.assertIn('id="copyScheme"', rail)
+        self.assertIn('id="deleteScheme"', rail)
+        self.assertIn(">修改名称<", rail)
         self.assertNotIn("修改方案名称", editor_header)
         self.assertNotIn("修改方案名", editor_header)
         self.assertNotIn('id="saveScheme"', topbar)

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260516-layout-fill">
+  <link rel="stylesheet" href="assets/planning.css?v=20260516-comparison-fill">
 </head>
 <body>
   <main class="planning-shell">
@@ -28,8 +28,18 @@
 
     <section class="workspace">
       <aside class="scheme-rail">
-        <div class="scheme-list-title">方案列表</div>
-        <div id="schemeList" class="scheme-list"></div>
+        <div class="planning-scheme-rail-layout">
+          <div class="scheme-actions scheme-actions-rail scheme-actions-rail-top" aria-label="方案创建与删除">
+            <button id="createScheme" type="button">新建方案</button>
+            <button id="deleteScheme" class="danger" type="button">删除方案</button>
+          </div>
+          <div class="scheme-list-title">方案列表</div>
+          <div id="schemeList" class="scheme-list"></div>
+          <div class="scheme-actions scheme-actions-rail scheme-actions-rail-bottom" aria-label="方案复制与改名">
+            <button id="renameScheme" type="button">修改名称</button>
+            <button id="copyScheme" type="button">复制方案</button>
+          </div>
+        </div>
       </aside>
 
       <section class="editor-panel">
@@ -47,11 +57,7 @@
             <button class="tab" data-tab="limits" type="button">方案概览</button>
           </div>
           <div class="scheme-actions" aria-label="方案操作">
-            <button id="createScheme" type="button">新建方案</button>
-            <button id="copyScheme" type="button">复制方案</button>
-            <button id="renameScheme" type="button">修改名称</button>
             <button id="saveScheme" class="primary" type="button">保存方案</button>
-            <button id="deleteScheme" class="danger" type="button">删除方案</button>
           </div>
         </div>
 
