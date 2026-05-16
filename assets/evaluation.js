@@ -34,8 +34,8 @@ const optimizationResizeMinHeights = {
 
 const resultTabLabels = {
   overview: "评估概览",
-  green: "经济性评估",
-  safety: "安全性评估",
+  green: "经济性指标",
+  safety: "安全性指标",
 };
 
 const greenDailySeries = [
@@ -907,7 +907,7 @@ function renderGreenResult(rows, dailyPoints, options = {}) {
   panel.innerHTML = `
     <div class="green-result-layout">
       <div class="data-table green-result-table">${renderResultTable(formattedRows)}</div>
-      <div class="result-column-resize-handle" data-result-column-resize="green" role="separator" tabindex="0" aria-label="调整经济性评估表格和曲线宽度" aria-orientation="vertical"></div>
+      <div class="result-column-resize-handle" data-result-column-resize="green" role="separator" tabindex="0" aria-label="调整经济性指标表格和曲线宽度" aria-orientation="vertical"></div>
       <section class="green-chart-card green-daily-chart" aria-label="${escapeHtml(resultTabLabels.green)}日曲线">
         <div class="green-chart-viewport" data-result-chart-viewport="green">${renderGreenDailyChart(state.greenDailyPoints)}</div>
       </section>
@@ -975,7 +975,7 @@ function renderSafetyResult(rows, dailyPoints, options = {}) {
   panel.innerHTML = `
     <div class="safety-result-layout">
       <div class="data-table safety-result-table">${renderResultTable(formattedRows)}</div>
-      <div class="result-column-resize-handle" data-result-column-resize="safety" role="separator" tabindex="0" aria-label="调整安全性评估表格和曲线宽度" aria-orientation="vertical"></div>
+      <div class="result-column-resize-handle" data-result-column-resize="safety" role="separator" tabindex="0" aria-label="调整安全性指标表格和曲线宽度" aria-orientation="vertical"></div>
       <section class="safety-chart-card safety-frequency-chart" aria-label="${escapeHtml(resultTabLabels.safety)}日曲线">
         <div class="safety-chart-viewport" data-result-chart-viewport="safety">${renderSafetyDailyChart(state.safetyDailyPoints)}</div>
       </section>

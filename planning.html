@@ -110,9 +110,6 @@
                 <label>指定模式
                   <select id="loadGeneratorMode">
                     <option value="random">随机曲线</option>
-                    <option value="pattern1">模式1</option>
-                    <option value="pattern2">模式2</option>
-                    <option value="pattern3">模式3</option>
                   </select>
                 </label>
                 <label>负荷最大值<input id="loadGeneratorMax" type="number" min="0" step="any"></label>
@@ -123,6 +120,9 @@
               <div class="map-picker-foot">
                 <span id="loadGeneratorHint">输入最大值、最小值、平均值，并选择生成模式。</span>
                 <button id="generateLoadCurve" type="button">生成负荷曲线</button>
+                <button id="importLoadCurveFile" type="button">文件导入</button>
+                <input id="loadCurveImportFile" type="file" accept=".csv,.xlsx" hidden>
+                <button id="saveLoadTemplate" type="button">保存模板</button>
                 <button id="confirmLoadGenerator" class="primary" type="button">确定</button>
                 <button id="cancelLoadGenerator" type="button">取消</button>
               </div>

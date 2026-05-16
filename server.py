@@ -48,6 +48,7 @@ import planning_store
 WEB_ROOT = Path(__file__).resolve().parent
 DATA_DIR = WEB_ROOT / "data"
 VENDOR_DIR = WEB_ROOT / "vendor"
+LOAD_CURVE_TEMPLATE_PATH = DATA_DIR / "load_curve_templates.csv"
 USER_DB_PATH = Path(os.environ.get("POWER_PLAN_USER_DB", WEB_ROOT / "power_plan_users.sqlite3"))
 SESSION_COOKIE_NAME = "power_plan_session"
 SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -2600,6 +2601,10 @@ class GeocodingError(RuntimeError):
     """Raised when a place name cannot be resolved to coordinates."""
 
 
+class LoadCurveTemplateExistsError(FileExistsError):
+    """Raised when saving a load-curve template would overwrite an existing template."""
+
+
 def geocode_place_name(place: str) -> dict:
     query_text = str(place or "").strip()
     if not query_text:
@@ -2960,6 +2965,230 @@ def normalize_imported_time_series(headers: list[str], raw_rows: list[dict[str, 
     return {"time_series": imported_rows, "time_series_count": len(imported_rows), "message": message}
 
 
+def import_load_curve_file(filename: str, content: bytes, minimum: object, maximum: object, average: object) -> dict:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix == ".csv":
+        headers, rows = read_time_series_csv(content)
+    elif suffix == ".xlsx":
+        headers, rows = read_time_series_xlsx(content)
+    else:
+        raise ValueError("导入文件仅支持 .csv 或 .xlsx 格式")
+    return normalize_imported_load_curve(headers, rows, filename, minimum, maximum, average)
+
+
+def normalize_imported_load_curve(
+    headers: list[str],
+    raw_rows: list[dict[str, object]],
+    filename: str,
+    minimum: object,
+    maximum: object,
+    average: object,
+) -> dict:
+    if not raw_rows:
+        raise ValueError("导入失败，文件没有可用数据行")
+    min_value, max_value, avg_value = validate_load_curve_targets(minimum, maximum, average)
+    column_map = match_load_curve_import_columns(headers)
+    values, repaired_numeric_count, missing_count, duplicate_count = normalized_imported_load_values(raw_rows, column_map)
+    scaled_values = scale_load_values_to_targets(values, min_value, max_value, avg_value)
+    rows = [{"hour_index": index + 1, "load": value} for index, value in enumerate(scaled_values)]
+    message = f"已从{filename}导入8760点负荷曲线"
+    if len(raw_rows) != TIME_SERIES_IMPORT_ROW_COUNT:
+        message += f"，文件共有{len(raw_rows)}行，已自适应扩展到8760点"
+    if missing_count:
+        message += f"，已按相邻点自动补齐{missing_count}个缺失时点"
+    if duplicate_count:
+        message += f"，已合并{duplicate_count}个重复小时数据"
+    if repaired_numeric_count:
+        message += f"，已修复{repaired_numeric_count}个无效数值"
+    return {
+        "source": "file",
+        "load_curve": rows,
+        "load_curve_count": len(rows),
+        "statistics": {
+            "max": round_load_value(max(scaled_values)),
+            "min": round_load_value(min(scaled_values)),
+            "average": round_load_value(sum(scaled_values) / len(scaled_values)),
+        },
+        "message": message,
+    }
+
+
+def match_load_curve_import_columns(headers: list[str]) -> dict[str, str]:
+    normalized_headers = [(normalize_import_header(header), header) for header in headers if str(header or "").strip()]
+    load_aliases = TIME_SERIES_IMPORT_REQUIRED_COLUMNS["load"][1]
+    load_column = match_time_series_header(normalized_headers, load_aliases)
+    if not load_column:
+        raise ValueError("导入失败，找不到对应的列：负荷")
+    column_map = {"load": load_column}
+    matched_time = match_time_series_header(normalized_headers, TIME_SERIES_IMPORT_OPTIONAL_COLUMNS["datetime"])
+    if matched_time:
+        column_map["datetime"] = matched_time
+    return column_map
+
+
+def normalized_imported_load_values(raw_rows: list[dict[str, object]], column_map: dict[str, str]) -> tuple[list[float | int], int, int, int]:
+    load_column = column_map["load"]
+    time_column = column_map.get("datetime")
+    raw_values = [imported_numeric_value_or_none(row.get(load_column)) for row in raw_rows]
+    grouped_by_hour: dict[int, list[float | int | None]] = {}
+    if time_column:
+        for raw_row, value in zip(raw_rows, raw_values):
+            target_hour = imported_load_curve_hour_index(raw_row, time_column)
+            if target_hour is None or target_hour < 1 or target_hour > TIME_SERIES_IMPORT_ROW_COUNT:
+                continue
+            grouped_by_hour.setdefault(target_hour, []).append(value)
+    if grouped_by_hour:
+        parsed_by_hour = {}
+        duplicate_count = 0
+        for hour, hour_values in grouped_by_hour.items():
+            duplicate_count += max(0, len(hour_values) - 1)
+            valid_values = [float(value) for value in hour_values if value is not None]
+            parsed_by_hour[hour] = {
+                "hour_index": hour,
+                "datetime": f"H{hour:04d}",
+                "load": sum(valid_values) / len(valid_values) if valid_values else None,
+            }
+        repaired_numeric_count = repair_imported_load_values(parsed_by_hour)
+        imported_rows = fill_imported_load_curve_hours(parsed_by_hour)
+        missing_count = sum(1 for item in imported_rows if item.get("_filled"))
+        source_values = [row["load"] for row in imported_rows[: max(grouped_by_hour)]]
+        return resample_load_values(source_values, TIME_SERIES_IMPORT_ROW_COUNT), repaired_numeric_count, missing_count, duplicate_count
+    repaired_values, repaired_numeric_count = repair_load_value_sequence(raw_values)
+    return resample_load_values(repaired_values, TIME_SERIES_IMPORT_ROW_COUNT), repaired_numeric_count, 0, 0
+
+
+def imported_load_curve_hour_index(raw_row: dict[str, object], column: str) -> int | None:
+    value = raw_row.get(column)
+    if value in ("", None):
+        return None
+    if isinstance(value, datetime):
+        return (value.timetuple().tm_yday - 1) * 24 + value.hour + 1
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    hour_match = re.fullmatch(r"[hH]\s*0*(\d{1,4})", text)
+    if hour_match:
+        return int(hour_match.group(1))
+    numeric_match = re.fullmatch(r"0*(\d{1,4})(?:\.0+)?", text)
+    if numeric_match:
+        return int(numeric_match.group(1))
+    datetime_match = re.search(r"\b(\d{1,2})[:：](\d{1,2})(?::\d{1,2})?\b", text)
+    date_match = re.search(r"(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})", text)
+    if datetime_match and date_match:
+        try:
+            parsed = datetime(
+                int(date_match.group(1)),
+                int(date_match.group(2)),
+                int(date_match.group(3)),
+                int(datetime_match.group(1)),
+            )
+            return (parsed.timetuple().tm_yday - 1) * 24 + parsed.hour + 1
+        except ValueError:
+            return None
+    return None
+
+
+def repair_imported_load_values(parsed_by_hour: dict[int, dict]) -> int:
+    hours = sorted(parsed_by_hour)
+    valid_hours = [hour for hour in hours if parsed_by_hour[hour].get("load") is not None]
+    if not valid_hours:
+        raise ValueError("导入失败，负荷没有任何有效数值，无法用相邻点修复")
+    repaired_count = 0
+    previous_valid_hour = None
+    next_valid_index = 0
+    for hour in hours:
+        if parsed_by_hour[hour].get("load") is not None:
+            previous_valid_hour = hour
+            if next_valid_index < len(valid_hours) and valid_hours[next_valid_index] == hour:
+                next_valid_index += 1
+            continue
+        if previous_valid_hour is not None:
+            source_hour = previous_valid_hour
+        else:
+            while next_valid_index < len(valid_hours) and valid_hours[next_valid_index] < hour:
+                next_valid_index += 1
+            source_hour = valid_hours[next_valid_index]
+        parsed_by_hour[hour]["load"] = parsed_by_hour[source_hour]["load"]
+        repaired_count += 1
+    return repaired_count
+
+
+def fill_imported_load_curve_hours(parsed_by_hour: dict[int, dict]) -> list[dict]:
+    first_row = parsed_by_hour[min(parsed_by_hour)]
+    previous = None
+    imported_rows = []
+    for hour in range(1, TIME_SERIES_IMPORT_ROW_COUNT + 1):
+        if hour in parsed_by_hour:
+            current = dict(parsed_by_hour[hour])
+            current["hour_index"] = hour
+            previous = current
+            imported_rows.append(current)
+            continue
+        base = previous or first_row
+        filled = {"hour_index": hour, "datetime": f"H{hour:04d}", "load": base["load"], "_filled": True}
+        previous = filled
+        imported_rows.append(filled)
+    return imported_rows
+
+
+def repair_load_value_sequence(values: list[float | int | None]) -> tuple[list[float | int], int]:
+    valid_indexes = [index for index, value in enumerate(values) if value is not None]
+    if not valid_indexes:
+        raise ValueError("导入失败，负荷没有任何有效数值，无法用相邻点修复")
+    repaired = list(values)
+    repaired_count = 0
+    previous_valid_index = None
+    next_valid_index = 0
+    for index, value in enumerate(repaired):
+        if value is not None:
+            previous_valid_index = index
+            if next_valid_index < len(valid_indexes) and valid_indexes[next_valid_index] == index:
+                next_valid_index += 1
+            continue
+        if previous_valid_index is not None:
+            source_index = previous_valid_index
+        else:
+            source_index = valid_indexes[next_valid_index]
+        repaired[index] = repaired[source_index]
+        repaired_count += 1
+    return [value for value in repaired if value is not None], repaired_count
+
+
+def resample_load_values(values: list[float | int], target_count: int) -> list[float]:
+    if len(values) == target_count:
+        return [float(value) for value in values]
+    if len(values) == 1:
+        return [float(values[0]) for _ in range(target_count)]
+    source_last = len(values) - 1
+    target_last = target_count - 1
+    resampled = []
+    for index in range(target_count):
+        source_position = (index / target_last) * source_last
+        left_index = int(math.floor(source_position))
+        right_index = min(source_last, left_index + 1)
+        ratio = source_position - left_index
+        left_value = float(values[left_index])
+        right_value = float(values[right_index])
+        resampled.append(left_value + (right_value - left_value) * ratio)
+    return resampled
+
+
+def scale_load_values_to_targets(values: list[float | int], min_value: float, max_value: float, avg_value: float) -> list[float | int]:
+    if max_value == min_value:
+        return [round_load_value(min_value) for _ in range(TIME_SERIES_IMPORT_ROW_COUNT)]
+    raw_min = min(float(value) for value in values)
+    raw_max = max(float(value) for value in values)
+    raw_span = raw_max - raw_min
+    if raw_span <= 0:
+        raise ValueError("导入负荷曲线没有变化，无法按指定最大值和最小值缩放")
+    target_mean = (avg_value - min_value) / (max_value - min_value)
+    shape = [(float(value) - raw_min) / raw_span for value in values]
+    adjusted_shape = adjust_shape_mean(shape, target_mean)
+    return [round_load_value(min_value + (max_value - min_value) * value) for value in adjusted_shape]
+
+
 def match_time_series_import_columns(headers: list[str]) -> dict[str, str]:
     normalized_headers = [(normalize_import_header(header), header) for header in headers if str(header or "").strip()]
     column_map: dict[str, str] = {}
@@ -3122,24 +3351,10 @@ def repair_imported_numeric_values(parsed_by_hour: dict[int, dict]) -> int:
 
 def generate_load_curve(mode: str, minimum: object, maximum: object, average: object) -> dict:
     mode_key = str(mode or "random").strip() or "random"
-    if mode_key not in {"random", "pattern1", "pattern2", "pattern3"}:
-        raise ValueError("负荷生成模式必须为随机曲线、模式1、模式2或模式3")
-    min_value = load_curve_number(minimum, "负荷最小值")
-    max_value = load_curve_number(maximum, "负荷最大值")
-    avg_value = load_curve_number(average, "负荷平均值")
-    if min_value < 0 or max_value < 0 or avg_value < 0:
-        raise ValueError("负荷最大值、负荷最小值、负荷平均值必须为非负数")
-    if max_value < min_value:
-        raise ValueError("负荷最大值不能小于负荷最小值")
+    min_value, max_value, avg_value = validate_load_curve_targets(minimum, maximum, average)
     if max_value == min_value:
-        if avg_value != min_value:
-            raise ValueError("最大值等于最小值时，平均值必须与其相等")
         values = [round_load_value(min_value) for _ in range(TIME_SERIES_IMPORT_ROW_COUNT)]
     else:
-        low_mean = min_value + (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
-        high_mean = max_value - (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
-        if avg_value < low_mean or avg_value > high_mean:
-            raise ValueError("平均值必须介于最小值和最大值之间，并能同时满足最大/最小约束")
         shape = normalized_load_shape(mode_key)
         adjusted_shape = adjust_shape_mean(shape, (avg_value - min_value) / (max_value - min_value))
         values = [round_load_value(min_value + (max_value - min_value) * value) for value in adjusted_shape]
@@ -3156,6 +3371,151 @@ def generate_load_curve(mode: str, minimum: object, maximum: object, average: ob
     }
 
 
+def list_load_curve_templates() -> dict:
+    templates = read_load_curve_templates()
+    return {"templates": load_curve_template_summaries(templates)}
+
+
+def save_load_curve_template(name: str, rows: object, overwrite: object = False) -> dict:
+    clean_name = planning_store.sanitize_scheme_name(str(name or ""))
+    if clean_name in {"", ".", ".."} or planning_store.INVALID_NAME_RE.search(clean_name) or ".." in clean_name:
+        raise ValueError("模板名称不能为空，且不能包含路径或非法字符")
+    values = normalize_load_curve_template_values(rows)
+    templates = read_load_curve_templates()
+    exists = any(template.get("name") == clean_name for template in templates)
+    if exists and not truthy_json_value(overwrite):
+        raise LoadCurveTemplateExistsError(f"模板名称已存在：{clean_name}")
+    next_template = {
+        "name": clean_name,
+        "load_curve": values,
+        "load_curve_count": len(values),
+        "updated_at": _now_iso(),
+    }
+    next_templates = [template for template in templates if template.get("name") != clean_name]
+    next_templates.append(next_template)
+    next_templates.sort(key=lambda item: item["name"])
+    write_load_curve_templates(next_templates)
+    return {
+        "template": load_curve_template_summary(next_template),
+        "templates": load_curve_template_summaries(next_templates),
+        "message": f"{'已覆盖' if exists else '已保存'}负荷模板：{clean_name}",
+    }
+
+
+def read_load_curve_templates() -> list[dict]:
+    if not LOAD_CURVE_TEMPLATE_PATH.exists():
+        return []
+    try:
+        with LOAD_CURVE_TEMPLATE_PATH.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            headers = [header for header in (reader.fieldnames or []) if str(header or "").strip()]
+            template_names = [header for header in headers if header != "hour_index"]
+            columns = {name: [] for name in template_names}
+            for row in reader:
+                for name in template_names:
+                    columns[name].append(row.get(name, ""))
+    except OSError as exc:
+        raise ValueError(f"负荷模板文件读取失败：{exc}") from exc
+    normalized = []
+    for name, values in columns.items():
+        clean_name = planning_store.sanitize_scheme_name(str(name))
+        try:
+            normalized_values = normalize_load_curve_template_values(values)
+        except ValueError:
+            continue
+        if clean_name:
+            normalized.append(
+                {
+                    "name": clean_name,
+                    "load_curve": normalized_values,
+                    "load_curve_count": len(normalized_values),
+                    "updated_at": "",
+                }
+            )
+    normalized.sort(key=lambda item: item["name"])
+    return normalized
+
+
+def write_load_curve_templates(templates: list[dict]) -> None:
+    LOAD_CURVE_TEMPLATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = LOAD_CURVE_TEMPLATE_PATH.with_name(f".{LOAD_CURVE_TEMPLATE_PATH.name}.tmp")
+    headers = ["hour_index", *[template["name"] for template in templates]]
+    try:
+        with tmp_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=headers)
+            writer.writeheader()
+            for index in range(TIME_SERIES_IMPORT_ROW_COUNT):
+                row = {"hour_index": index + 1}
+                for template in templates:
+                    row[template["name"]] = template["load_curve"][index]
+                writer.writerow(row)
+        file_ops.replace_file_with_retry(tmp_path, LOAD_CURVE_TEMPLATE_PATH, "负荷模板文件")
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def normalize_load_curve_template_values(rows: object) -> list[float | int]:
+    if not isinstance(rows, list) or len(rows) != TIME_SERIES_IMPORT_ROW_COUNT:
+        raise ValueError(f"负荷模板必须包含{TIME_SERIES_IMPORT_ROW_COUNT}点曲线")
+    values = []
+    for index, row in enumerate(rows, start=1):
+        raw_value = row.get("load") if isinstance(row, dict) else row
+        value = imported_numeric_value_or_none(raw_value)
+        if value is None:
+            raise ValueError(f"负荷模板第{index}点不是有效数值")
+        values.append(round_load_value(value))
+    return values
+
+
+def load_curve_template_summaries(templates: list[dict]) -> list[dict]:
+    return [load_curve_template_summary(template) for template in templates]
+
+
+def load_curve_template_summary(template: dict) -> dict:
+    return {
+        "name": template.get("name", ""),
+        "load_curve_count": int(template.get("load_curve_count") or TIME_SERIES_IMPORT_ROW_COUNT),
+        "updated_at": template.get("updated_at", ""),
+    }
+
+
+def load_curve_template_shape(mode: str) -> list[float]:
+    template_name = mode.split(":", 1)[1].strip() if ":" in mode else ""
+    if not template_name:
+        raise ValueError("负荷模板名称不能为空")
+    clean_name = planning_store.sanitize_scheme_name(template_name)
+    for template in read_load_curve_templates():
+        if template.get("name") == clean_name:
+            values = template["load_curve"]
+            minimum = min(float(value) for value in values)
+            maximum = max(float(value) for value in values)
+            span = maximum - minimum
+            if span <= 0:
+                return [0.5 for _ in values]
+            return [(float(value) - minimum) / span for value in values]
+    raise ValueError(f"负荷模板不存在：{clean_name}")
+
+
+def validate_load_curve_targets(minimum: object, maximum: object, average: object) -> tuple[float, float, float]:
+    min_value = load_curve_number(minimum, "负荷最小值")
+    max_value = load_curve_number(maximum, "负荷最大值")
+    avg_value = load_curve_number(average, "负荷平均值")
+    if min_value < 0 or max_value < 0 or avg_value < 0:
+        raise ValueError("负荷最大值、负荷最小值、负荷平均值必须为非负数")
+    if max_value < min_value:
+        raise ValueError("负荷最大值不能小于负荷最小值")
+    if max_value == min_value:
+        if avg_value != min_value:
+            raise ValueError("最大值等于最小值时，平均值必须与其相等")
+        return min_value, max_value, avg_value
+    low_mean = min_value + (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
+    high_mean = max_value - (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
+    if avg_value < low_mean or avg_value > high_mean:
+        raise ValueError("平均值必须介于最小值和最大值之间，并能同时满足最大/最小约束")
+    return min_value, max_value, avg_value
+
+
 def load_curve_number(value: object, label: str) -> float:
     try:
         number = float(value)
@@ -3167,10 +3527,14 @@ def load_curve_number(value: object, label: str) -> float:
 
 
 def normalized_load_shape(mode: str) -> list[float]:
+    if mode.startswith("template:"):
+        return load_curve_template_shape(mode)
     if mode == "random":
         raw = deterministic_random_shape()
-    else:
+    elif mode in {"pattern1", "pattern2", "pattern3"}:
         raw = standard_load_shape(mode)
+    else:
+        raise ValueError("负荷生成模式必须为随机曲线、模式1、模式2、模式3或已保存模板")
     minimum = min(raw)
     maximum = max(raw)
     span = maximum - minimum
@@ -3280,6 +3644,34 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                     payload.get("average"),
                 )
             )
+        if path == "/api/planning/load-curve/import" and method == "POST":
+            payload = _read_json_body(body)
+            filename = str(payload.get("filename", ""))
+            content_base64 = str(payload.get("content_base64", ""))
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("导入失败，文件内容无法解析") from exc
+            return _json_response(
+                import_load_curve_file(
+                    filename,
+                    content,
+                    payload.get("min"),
+                    payload.get("max"),
+                    payload.get("average"),
+                )
+            )
+        if path == "/api/planning/load-curve/templates" and method == "GET":
+            return _json_response(list_load_curve_templates())
+        if path == "/api/planning/load-curve/templates" and method == "POST":
+            payload = _read_json_body(body)
+            return _json_response(
+                save_load_curve_template(
+                    str(payload.get("name", "")),
+                    payload.get("load_curve"),
+                    payload.get("overwrite"),
+                )
+            )
         if path == "/api/planning/map-config" and method == "GET":
             providers = [
                 {"key": "amap", "label": "高德地图", "enabled": bool(AMAP_WEB_SERVICE_KEY)},
@@ -3343,6 +3735,8 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
         return _json_response({"error": "geocoding_error", "message": str(exc)}, HTTPStatus.BAD_GATEWAY)
     except PermissionError as exc:
         return _json_response({"error": "file_locked", "message": str(exc)}, HTTPStatus.CONFLICT)
+    except LoadCurveTemplateExistsError as exc:
+        return _json_response({"error": "exists", "message": str(exc)}, HTTPStatus.CONFLICT)
     except (ValueError, FileExistsError, FileNotFoundError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)

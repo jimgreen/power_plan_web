@@ -4,6 +4,7 @@ const state = {
   payload: null,
   month: 0,
   timeSeriesLoading: null,
+  loadCurveTemplates: [],
   mapConfig: null,
   mapPoint: null,
   mapInstance: null,
@@ -264,6 +265,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindActions();
   bindAdaptiveLayout();
   syncAdaptiveLayout();
+  loadLoadCurveTemplates().catch(showError);
   loadSchemes().catch(showError);
 });
 
@@ -316,6 +318,9 @@ function bindActions() {
   document.getElementById("openLoadGenerator").addEventListener("click", openLoadGenerator);
   document.getElementById("closeLoadGenerator").addEventListener("click", closeLoadGenerator);
   document.getElementById("generateLoadCurve").addEventListener("click", generateLoadCurve);
+  document.getElementById("importLoadCurveFile").addEventListener("click", importLoadCurveFile);
+  document.getElementById("loadCurveImportFile").addEventListener("change", onLoadCurveImportFileChange);
+  document.getElementById("saveLoadTemplate").addEventListener("click", saveLoadTemplate);
   document.getElementById("confirmLoadGenerator").addEventListener("click", confirmGeneratedLoadCurve);
   document.getElementById("cancelLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("geocodePlace").addEventListener("click", geocodePlace);
@@ -490,7 +495,12 @@ async function api(path, options = {}) {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.message || data.error || "请求失败");
+  if (!response.ok) {
+    const error = new Error(data.message || data.error || "请求失败");
+    error.code = data.error;
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -501,6 +511,28 @@ async function loadSchemes() {
     await selectScheme(state.schemes[0].name);
   } else {
     renderSummary();
+  }
+}
+
+async function loadLoadCurveTemplates() {
+  const result = await api("/api/planning/load-curve/templates");
+  state.loadCurveTemplates = Array.isArray(result.templates) ? result.templates : [];
+  renderLoadGeneratorModeOptions();
+}
+
+function renderLoadGeneratorModeOptions() {
+  const select = document.getElementById("loadGeneratorMode");
+  if (!select) return;
+  const currentValue = select.value || "random";
+  const fixedOptions = [
+    ["random", "随机曲线"],
+  ];
+  const templateOptions = state.loadCurveTemplates
+    .map((template) => `<option value="template:${escapeHtml(template.name)}">${escapeHtml(template.name)}</option>`)
+    .join("");
+  select.innerHTML = `${fixedOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}${templateOptions}`;
+  if (Array.from(select.options).some((option) => option.value === currentValue)) {
+    select.value = currentValue;
   }
 }
 
@@ -950,9 +982,7 @@ async function generateLoadCurve() {
     return;
   }
   const mode = document.getElementById("loadGeneratorMode").value;
-  const max = Number(document.getElementById("loadGeneratorMax").value);
-  const min = Number(document.getElementById("loadGeneratorMin").value);
-  const average = Number(document.getElementById("loadGeneratorAverage").value);
+  const { max, min, average } = currentLoadGeneratorTargets();
   setLoadGeneratorHint("正在生成负荷曲线...");
   const result = await api("/api/planning/load-curve/generate", {
     method: "POST",
@@ -966,6 +996,105 @@ async function generateLoadCurve() {
   state.pendingLoadCurve = result.load_curve || [];
   renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
   setLoadGeneratorHint("负荷曲线已生成，请检查预览后点击确定。", "ok");
+}
+
+async function saveLoadTemplate() {
+  const rows = loadCurveRowsForTemplate();
+  if (!Array.isArray(rows) || rows.length !== 8760) {
+    setLoadGeneratorHint("请先生成或导入负荷曲线", "error");
+    return;
+  }
+  const defaultName = currentLoadTemplateName();
+  const name = prompt("请输入负荷模板名称", defaultName);
+  if (name === null) return;
+  const cleanName = normalizeSchemeName(name);
+  if (!cleanName) {
+    setLoadGeneratorHint("模板名称不能为空", "error");
+    return;
+  }
+  await saveLoadTemplateRequest(cleanName, rows, false);
+}
+
+async function saveLoadTemplateRequest(name, rows, overwrite) {
+  setLoadGeneratorHint("正在保存负荷模板...");
+  try {
+    const result = await api("/api/planning/load-curve/templates", {
+      method: "POST",
+      body: JSON.stringify({ name, load_curve: rows, overwrite }),
+    });
+    state.loadCurveTemplates = Array.isArray(result.templates) ? result.templates : state.loadCurveTemplates;
+    renderLoadGeneratorModeOptions();
+    document.getElementById("loadGeneratorMode").value = `template:${result.template.name}`;
+    setLoadGeneratorHint(result.message || `负荷模板已保存：${result.template.name}`, "ok");
+  } catch (error) {
+    const message = error.message || String(error);
+    if (!overwrite && (error.code === "exists" || message.includes("模板名称已存在"))) {
+      if (confirm(`模板名称已存在：${name}。是否覆盖保存？`)) {
+        await saveLoadTemplateRequest(name, rows, true);
+      } else {
+        setLoadGeneratorHint("负荷模板保存已取消");
+      }
+      return;
+    }
+    setLoadGeneratorHint(`负荷模板保存失败：${message}`, "error");
+  }
+}
+
+function loadCurveRowsForTemplate() {
+  if (Array.isArray(state.pendingLoadCurve) && state.pendingLoadCurve.length === 8760) {
+    return state.pendingLoadCurve;
+  }
+  return currentLoadCurveRows();
+}
+
+function currentLoadTemplateName() {
+  const select = document.getElementById("loadGeneratorMode");
+  const selected = select?.selectedOptions?.[0];
+  const value = select?.value || "";
+  if (value.startsWith("template:")) return value.slice("template:".length);
+  return selected?.textContent?.trim() || "负荷模板";
+}
+
+function importLoadCurveFile() {
+  if (!state.currentScheme || !state.payload) {
+    setLoadGeneratorHint("请先选择方案", "error");
+    return;
+  }
+  const input = document.getElementById("loadCurveImportFile");
+  input.value = "";
+  input.click();
+}
+
+async function onLoadCurveImportFileChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  setLoadGeneratorHint(`正在导入负荷文件：${file.name}`);
+  try {
+    const { max, min, average } = currentLoadGeneratorTargets();
+    const content_base64 = await arrayBufferToBase64(await file.arrayBuffer());
+    const result = await api("/api/planning/load-curve/import", {
+      method: "POST",
+      body: JSON.stringify({ filename: file.name, content_base64, max, min, average }),
+    });
+    state.pendingLoadCurve = result.load_curve || [];
+    renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
+    const level = isTimeSeriesImportWarning(result) ? "warning" : "ok";
+    setLoadGeneratorHint(result.message || "负荷文件导入成功，请检查预览后点击确定。", level);
+  } catch (error) {
+    state.pendingLoadCurve = null;
+    renderLoadGeneratorPreview(state.originalLoadCurve, []);
+    setLoadGeneratorHint(`负荷文件导入失败：${error.message || String(error)}`, "error");
+  } finally {
+    event.target.value = "";
+  }
+}
+
+function currentLoadGeneratorTargets() {
+  return {
+    max: Number(document.getElementById("loadGeneratorMax").value),
+    min: Number(document.getElementById("loadGeneratorMin").value),
+    average: Number(document.getElementById("loadGeneratorAverage").value),
+  };
 }
 
 async function confirmGeneratedLoadCurve() {
@@ -1012,6 +1141,7 @@ function setLoadGeneratorHint(message, level = "") {
   hint.textContent = message;
   hint.classList.toggle("error", level === "error");
   hint.classList.toggle("ok", level === "ok");
+  hint.classList.toggle("warning", level === "warning");
 }
 
 function currentLoadCurveRows() {

@@ -288,8 +288,8 @@ async function loadComparisonCurveData(items = state.tabs.filter((tab) => tab.sc
 
 function renderComparisonTables() {
   renderTable("capacityComparisonTable", state.comparison.tables?.capacity || [], "暂无规划容量对比");
-  renderTable("energyComparisonTable", state.comparison.tables?.energy || [], "暂无供能指标对比");
-  renderTable("safetyComparisonTable", state.comparison.tables?.safety || [], "暂无安全指标对比");
+  renderTable("energyComparisonTable", state.comparison.tables?.energy || [], "暂无经济性指标对比");
+  renderTable("safetyComparisonTable", state.comparison.tables?.safety || [], "暂无安全性指标对比");
 }
 
 function renderTable(id, rows, emptyText) {

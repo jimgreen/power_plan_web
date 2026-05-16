@@ -204,6 +204,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Load Up Disturbance Factor", i18n_script)
         self.assertIn("Load Down Disturbance Factor", i18n_script)
         self.assertIn("Renewable Down Disturbance Factor", i18n_script)
+        self.assertIn("Import File", i18n_script)
+        self.assertIn("Importing load file", i18n_script)
+        self.assertIn("Load file imported", i18n_script)
+        self.assertIn("8760-point load curve", i18n_script)
+        self.assertIn("Save Template", i18n_script)
+        self.assertIn("Template name already exists", i18n_script)
         self.assertIn("MutationObserver", i18n_script)
         self.assertIn("patchDialogs", i18n_script)
         self.assertIn("target.parentNode.insertBefore(wrap, target)", i18n_script)
@@ -2370,6 +2376,161 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("平均值必须介于最小值和最大值之间", json.loads(body.decode("utf-8"))["message"])
 
+    def test_planning_load_curve_import_scales_and_pads_csv_to_8760(self):
+        rows = ["时间,用电功率(kW)", "2024-01-01 00:00,10", "2024-01-01 02:00,30", "2024-01-01 05:00,50"]
+        content = "\n".join(rows).encode("utf-8")
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/load-curve/import",
+            "POST",
+            json.dumps(
+                {
+                    "filename": "load.csv",
+                    "content_base64": base64.b64encode(content).decode("ascii"),
+                    "max": 180,
+                    "min": 40,
+                    "average": 95,
+                }
+            ).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        values = [row["load"] for row in payload["load_curve"]]
+        self.assertEqual(payload["load_curve_count"], 8760)
+        self.assertAlmostEqual(min(values), 40, places=3)
+        self.assertAlmostEqual(max(values), 180, places=3)
+        self.assertAlmostEqual(sum(values) / len(values), 95, places=3)
+        self.assertIn("已从load.csv导入8760点负荷曲线", payload["message"])
+        self.assertIn("自动补齐", payload["message"])
+        self.assertIn("缺失时点", payload["message"])
+
+    def test_planning_load_curve_import_parses_xlsx_with_fuzzy_load_header(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["小时", "负荷功率"])
+        for i in range(24):
+            sheet.append([i + 1, 50 + i])
+        stream = BytesIO()
+        workbook.save(stream)
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/load-curve/import",
+            "POST",
+            json.dumps(
+                {
+                    "filename": "load.xlsx",
+                    "content_base64": base64.b64encode(stream.getvalue()).decode("ascii"),
+                    "max": 100,
+                    "min": 10,
+                    "average": 55,
+                }
+            ).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["load_curve_count"], 8760)
+        self.assertEqual(payload["source"], "file")
+        self.assertAlmostEqual(payload["statistics"]["min"], 10, places=3)
+        self.assertAlmostEqual(payload["statistics"]["max"], 100, places=3)
+
+    def test_planning_load_curve_templates_save_conflict_overwrite_and_generate(self):
+        template_path = WEB_ROOT / "tests" / "tmp_load_curve_templates.csv"
+        if template_path.exists():
+            template_path.unlink()
+        original_path = server.LOAD_CURVE_TEMPLATE_PATH
+        server.LOAD_CURVE_TEMPLATE_PATH = template_path
+        try:
+            first_curve = [{"hour_index": i + 1, "load": 10 + (i % 24)} for i in range(8760)]
+            second_curve = [{"hour_index": i + 1, "load": 30 + (i % 48)} for i in range(8760)]
+
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/load-curve/templates",
+                "POST",
+                json.dumps({"name": "模板A", "load_curve": first_curve}).encode("utf-8"),
+            )
+
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(payload["template"]["name"], "模板A")
+            self.assertEqual(payload["template"]["load_curve_count"], 8760)
+            self.assertIn("模板A", [item["name"] for item in payload["templates"]])
+            self.assertTrue(template_path.exists())
+            template_text = template_path.read_text(encoding="utf-8-sig")
+            self.assertTrue(template_text.startswith("hour_index,模板A"))
+
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/load-curve/templates",
+                "POST",
+                json.dumps({"name": "模板A", "load_curve": second_curve}).encode("utf-8"),
+            )
+
+            self.assertEqual(status, 409)
+            self.assertIn("模板名称已存在", json.loads(body.decode("utf-8"))["message"])
+
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/load-curve/templates",
+                "POST",
+                json.dumps({"name": "模板A", "load_curve": second_curve, "overwrite": True}).encode("utf-8"),
+            )
+
+            self.assertEqual(status, 200)
+            self.assertIn("已覆盖负荷模板：模板A", json.loads(body.decode("utf-8"))["message"])
+
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/load-curve/generate",
+                "POST",
+                json.dumps({"mode": "template:模板A", "max": 100, "min": 20, "average": 50}).encode("utf-8"),
+            )
+
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            values = [row["load"] for row in payload["load_curve"]]
+            self.assertEqual(payload["mode"], "template:模板A")
+            self.assertAlmostEqual(min(values), 20, places=3)
+            self.assertAlmostEqual(max(values), 100, places=3)
+            self.assertAlmostEqual(sum(values) / len(values), 50, places=3)
+        finally:
+            server.LOAD_CURVE_TEMPLATE_PATH = original_path
+            if template_path.exists():
+                template_path.unlink()
+
+    def test_planning_load_curve_template_route_rejects_bad_post_body_not_not_found(self):
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/load-curve/templates",
+            "POST",
+            json.dumps({"name": "模板X", "load_curve": []}, ensure_ascii=False).encode("utf-8"),
+        )
+
+        self.assertEqual(status, 400)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["error"], "bad_request")
+        self.assertIn("负荷模板必须包含8760点曲线", payload["message"])
+
+    def test_default_load_curve_templates_are_available(self):
+        status, headers, body = server.handle_planning_api_path("/api/planning/load-curve/templates", "GET", b"")
+
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        names = [item["name"] for item in payload["templates"]]
+        self.assertGreaterEqual(names.index("模板1"), 0)
+        self.assertIn("模板2", names)
+        self.assertIn("模板3", names)
+
+        for name in ("模板1", "模板2", "模板3"):
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/load-curve/generate",
+                "POST",
+                json.dumps({"mode": f"template:{name}", "max": 120, "min": 20, "average": 65}, ensure_ascii=False).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(payload["load_curve_count"], 8760)
+            self.assertAlmostEqual(payload["statistics"]["min"], 20, places=3)
+            self.assertAlmostEqual(payload["statistics"]["max"], 120, places=3)
+            self.assertAlmostEqual(payload["statistics"]["average"], 65, places=3)
+
     def test_planning_api_delete_scheme(self):
         planning_root = WEB_ROOT / "tests" / "tmp_planning_delete_api"
         shutil.rmtree(planning_root, ignore_errors=True)
@@ -2844,7 +3005,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="stopOptimization"', html)
         for label in ("当前状态", "启动时刻", "结束时刻", "度电成本", "绿电占比"):
             self.assertIn(label, html)
-        for tab in ("结果概览", "供能分析", "安全评估"):
+        for tab in ("结果概览", "经济性指标", "安全性指标"):
             self.assertIn(tab, html)
         self.assertNotIn("绿电结果", html)
         self.assertNotIn("安全结果", html)
@@ -2908,8 +3069,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("scrollTop", script)
         self.assertIn("data-result-tab", script)
         self.assertIn("结果概览", script)
-        self.assertIn("供能分析", script)
-        self.assertIn("安全评估", script)
+        self.assertIn("经济性指标", script)
+        self.assertIn("安全性指标", script)
         self.assertNotIn("绿电结果", script)
         self.assertNotIn("安全结果", script)
         self.assertIn("optimizationStatusPath", script)
@@ -2975,7 +3136,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn(label, html)
         for label in ("当前状态", "启动时刻", "结束时刻", "综合评分", "风险等级"):
             self.assertIn(label, html)
-        for tab in ("评估概览", "经济性评估", "安全性评估"):
+        for tab in ("评估概览", "经济性指标", "安全性指标"):
             self.assertIn(tab, html)
         self.assertIn('id="evaluationLogViewToggle"', html)
         self.assertIn('id="evaluationCurveViewToggle"', html)
@@ -3110,7 +3271,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("comparison-table-grid", html)
         for table_id in ("capacityComparisonTable", "energyComparisonTable", "safetyComparisonTable"):
             self.assertIn(table_id, html)
-        for title in ("规划容量对比", "供能指标对比", "安全指标对比"):
+        for title in ("规划容量对比", "经济性指标对比", "安全性指标对比"):
             self.assertIn(title, html)
         self.assertIn("capacityEnergyResizeHandle", html)
         self.assertIn("energySafetyResizeHandle", html)
@@ -3964,7 +4125,10 @@ class PowerPlanServerTest(unittest.TestCase):
             "loadGeneratorMax",
             "loadGeneratorMin",
             "loadGeneratorAverage",
+            "importLoadCurveFile",
+            "loadCurveImportFile",
             "generateLoadCurve",
+            "saveLoadTemplate",
             "loadGeneratorPreview",
             "confirmLoadGenerator",
             "cancelLoadGenerator",
@@ -3995,8 +4159,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(weather_bar.index(">负荷生成<"), weather_bar.index(">坐标选择<"))
         for label in ("打开文件", "风速", "太阳辐射", "室温", "负荷", "确定", "取消"):
             self.assertIn(label, import_modal)
-        for label in ("随机曲线", "模式1", "模式2", "模式3", "负荷最大值", "负荷最小值", "负荷平均值", "确定", "取消"):
+        for label in ("随机曲线", "负荷最大值", "负荷最小值", "负荷平均值", "文件导入", "保存模板", "确定", "取消"):
             self.assertIn(label, html)
+        load_generator_modal = html.split('<div id="loadGeneratorModal"', 1)[1].split('<div id="mapPickerModal"', 1)[0]
+        for label in ("模式1", "模式2", "模式3"):
+            self.assertNotIn(label, load_generator_modal)
         for label in ("高德地图", "OpenStreetMap"):
             self.assertIn(label, modal)
         self.assertNotIn("谷歌地图", modal)
@@ -4014,6 +4181,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/weather-history", script)
         self.assertIn("/api/planning/time-series/import", script)
         self.assertIn("/api/planning/load-curve/generate", script)
+        self.assertIn("/api/planning/load-curve/import", script)
+        self.assertIn("/api/planning/load-curve/templates", script)
         self.assertIn("selectMapProvider", script)
         self.assertNotIn("loadBaiduMapScript", script)
         self.assertNotIn("initBaiduMapPicker", script)
@@ -4036,8 +4205,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('setTimeSeriesImportHint(result.message || "导入文件解析成功，请确认后保存。", level)', script)
         self.assertIn('hint.classList.toggle("warning", level === "warning")', script)
         self.assertIn("#timeSeriesImportHint.warning", css)
+        self.assertIn("#loadGeneratorHint.warning", css)
         self.assertIn("openLoadGenerator", script)
         self.assertIn("generateLoadCurve", script)
+        self.assertIn("importLoadCurveFile", script)
+        self.assertIn("onLoadCurveImportFileChange", script)
+        self.assertIn("loadLoadCurveTemplates", script)
+        self.assertIn("saveLoadTemplate", script)
+        self.assertIn("saveLoadTemplateRequest(name, rows, true)", script)
+        self.assertIn("模板名称已存在", script)
         self.assertIn("renderLoadGeneratorPreview", script)
         self.assertIn("confirmGeneratedLoadCurve", script)
         self.assertIn("cancelLoadGenerator", script)

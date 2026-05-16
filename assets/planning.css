@@ -2521,6 +2521,10 @@ body.modal-open {
   color: #1b7c4d;
 }
 
+#loadGeneratorHint.warning {
+  color: #ffd27a;
+}
+
 #timeSeriesImportHint.error {
   color: #ff9b9b;
 }
