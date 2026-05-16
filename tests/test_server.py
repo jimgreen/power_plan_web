@@ -591,6 +591,21 @@ class PowerPlanServerTest(unittest.TestCase):
                 for key in ("id", "task_key", "task_type", "scheme", "result", "status", "process_id", "start_time", "end_time", "elapsed_seconds", "latest_log", "can_start", "can_stop"):
                     self.assertIn(key, task)
 
+            disabled_task = {
+                "task_type_key": "evaluation",
+                "scheme": "方案A",
+                "result": "blocked_results.xlsx",
+                "can_start": False,
+                "can_queue": False,
+                "can_stop": False,
+                "queued": False,
+            }
+            self.assertFalse(server.task_list_item_is_visible(disabled_task))
+            disabled_but_queued_task = {**disabled_task, "queued": True}
+            self.assertTrue(server.task_list_item_is_visible(disabled_but_queued_task))
+            disabled_but_running_task = {**disabled_task, "can_stop": True}
+            self.assertTrue(server.task_list_item_is_visible(disabled_but_running_task))
+
             status, headers, body = server.handle_control_path(
                 "/api/tasks/control",
                 json.dumps({"action": "stop", "task_type": "optimization", "scheme": "方案A"}, ensure_ascii=False).encode("utf-8"),

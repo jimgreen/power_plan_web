@@ -2529,12 +2529,17 @@ def build_task_list() -> list[dict]:
         )
         tasks[task["id"]] = task
 
-    return sorted(tasks.values(), key=task_sort_key)
+    return sorted((task for task in tasks.values() if task_list_item_is_visible(task)), key=task_sort_key)
 
 
 def task_list_evaluation_result_is_eligible(result_item: dict) -> bool:
     result_name = str(result_item.get("name") or "").strip()
     return bool(result_name) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME and bool(result_item.get("readable", True))
+
+
+def task_list_item_is_visible(task: dict) -> bool:
+    """Hide rows that business rules made completely non-operable."""
+    return bool(task.get("queued") or task.get("can_start") or task.get("can_queue") or task.get("can_stop"))
 
 
 def task_sort_key(item: dict) -> tuple[int, str, str]:
