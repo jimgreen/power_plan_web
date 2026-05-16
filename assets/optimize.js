@@ -16,6 +16,7 @@ const state = {
   optimizationCurveViewer: null,
   curveDataKey: "",
   activeResultTab: "overview",
+  isSwitchingScheme: false,
   greenSeriesVisibility: null,
   safetySeriesVisibility: null,
   seriesToggleBound: false,
@@ -172,11 +173,11 @@ function renderSchemes() {
       state.currentScheme = item.dataset.name || "";
       renderSchemes();
       renderCurrentScheme();
-      state.optimization = defaultOptimizationState(state.currentScheme);
-      renderOptimization(state.optimization);
-      state.curveDataKey = "";
-      state.optimizationCurveViewer?.clear("正在加载小时级曲线");
-      refreshOptimizationStatus(state.currentScheme).catch(showError);
+      clearOptimizationDisplayForSchemeSwitch(state.currentScheme);
+      refreshOptimizationStatus(state.currentScheme).catch((error) => {
+        state.isSwitchingScheme = false;
+        showError(error);
+      });
     });
   });
 }
@@ -239,9 +240,52 @@ function saveOptimizationLogs() {
   saveLogsToFile(logs, `规划求解_${state.currentScheme || "未选择方案"}_运行日志`);
 }
 
+function clearOptimizationDisplayForSchemeSwitch(scheme = state.currentScheme) {
+  if (state.pollTimer) {
+    window.clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  state.isSwitchingScheme = true;
+  state.curveDataKey = "";
+  state.greenDailyPoints = [];
+  state.safetyDailyPoints = [];
+  state.optimization = defaultOptimizationState(scheme);
+  state.optimization = renderOptimizationSwitchingState(scheme, state.optimization);
+  renderOptimization(state.optimization);
+  state.optimizationCurveViewer?.clear("正在加载小时级曲线");
+}
+
+function renderOptimizationSwitchingState(scheme, base = defaultOptimizationState(scheme)) {
+  return {
+    ...base,
+    status: "切换中",
+    metrics: [
+      { label: "当前状态", value: "切换中", unit: "" },
+      { label: "启动时刻", value: "-", unit: "" },
+      { label: "结束时刻", value: "-", unit: "" },
+      { label: "度电成本", value: "-", unit: "元/kWh" },
+      { label: "绿电占比", value: "-", unit: "%" },
+    ],
+    results: {
+      overview_tables: [
+        { title: "规划结果", rows: [] },
+        { title: "规划年指标", rows: [] },
+      ],
+      overview_disks: defaultOverviewDisks(),
+      green: [],
+      green_table: [],
+      safety: [],
+      safety_table: [],
+      curves: { green: [], green_daily: [], safety: [], safety_daily: [] },
+    },
+    logs: [{ time: "", level: "info", message: `正在切换方案：${scheme || "未选择方案"}` }],
+  };
+}
+
 async function refreshOptimizationStatus(scheme = state.currentScheme) {
   const data = await api(optimizationStatusPath(scheme));
   if (scheme !== state.currentScheme) return;
+  state.isSwitchingScheme = false;
   state.optimization = data;
   renderOptimization(data);
   scheduleOptimizationPolling();
@@ -286,15 +330,16 @@ function bindResultTabs() {
 function renderOptimization(data) {
   updateOptimizationActions(data);
   renderMetrics(data.metrics || []);
+  const allowEmptyResult = data.status === "切换中";
   renderOverviewTables(data.results?.overview_tables || defaultOverviewTables(), data.results?.overview_disks || defaultOverviewDisks());
-  renderGreenResult(data.results?.green_table || defaultGreenTable(), data.results?.curves?.green_daily || []);
-  renderSafetyResult(data.results?.safety_table || defaultSafetyTable(), data.results?.curves?.safety_daily || []);
+  renderGreenResult(data.results?.green_table || [], data.results?.curves?.green_daily || [], { allowEmpty: allowEmptyResult });
+  renderSafetyResult(data.results?.safety_table || [], data.results?.curves?.safety_daily || [], { allowEmpty: allowEmptyResult });
   bindOverviewColumnResizeHandles();
   bindResultColumnResizeHandles();
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
-  if (state.activeResultTab === "curves") loadOptimizationCurveData().catch(showError);
+  if (state.activeResultTab === "curves" && !state.isSwitchingScheme) loadOptimizationCurveData().catch(showError);
 }
 
 async function loadOptimizationCurveData() {
@@ -502,11 +547,11 @@ function renderResultPanel(key, title, rows, points) {
     </div>`;
 }
 
-function renderGreenResult(rows, dailyPoints) {
+function renderGreenResult(rows, dailyPoints, options = {}) {
   const panel = document.getElementById("greenResult");
   if (!panel) return;
   state.greenDailyPoints = Array.isArray(dailyPoints) ? dailyPoints : [];
-  const safeRows = rows.length ? rows : defaultGreenTable();
+  const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultGreenTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
     "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],
@@ -570,11 +615,11 @@ function renderGreenDailyChart(points) {
     <div class="chart-hover-tooltip" data-chart-hover-tooltip="green" hidden></div>`;
 }
 
-function renderSafetyResult(rows, dailyPoints) {
+function renderSafetyResult(rows, dailyPoints, options = {}) {
   const panel = document.getElementById("safetyResult");
   if (!panel) return;
   state.safetyDailyPoints = Array.isArray(dailyPoints) ? dailyPoints : [];
-  const safeRows = rows.length ? rows : defaultSafetyTable();
+  const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultSafetyTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
     "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],

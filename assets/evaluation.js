@@ -21,6 +21,7 @@ const state = {
   evaluationResultRailWidth: null,
   curveDataKey: "",
   activeLogView: "logs",
+  isSwitchingResult: false,
   greenSeriesVisibility: null,
   safetySeriesVisibility: null,
   seriesToggleBound: false,
@@ -199,16 +200,13 @@ function renderSchemes() {
       renderSchemes();
       renderCurrentScheme();
       renderEvaluationCurrentScheme();
-      state.resultFiles = [];
-      state.selectedResultFile = "";
-      state.planningResultRows = [];
-      state.optimization = defaultOptimizationState(state.currentScheme);
-      renderOptimization(state.optimization);
-      state.curveDataKey = "";
-      state.evaluationCurveViewer?.clear("正在加载小时级曲线");
+      clearEvaluationDisplayForSchemeSwitch(state.currentScheme);
       loadEvaluationResults()
         .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
-        .catch(showError);
+        .catch((error) => {
+          state.isSwitchingResult = false;
+          showError(error);
+        });
     });
   });
 }
@@ -242,16 +240,110 @@ function bindOptimizationActions() {
 function bindEvaluationResultActions() {
   document.getElementById("evaluationResultSelect").addEventListener("change", (event) => {
     state.selectedResultFile = event.target.value || "";
-    state.curveDataKey = "";
-    state.evaluationCurveViewer?.clear("正在加载小时级曲线");
-    updateEvaluationResultActions();
+    clearEvaluationResultDisplayForSwitch(state.selectedResultFile);
     loadEvaluationResults(state.selectedResultFile)
       .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
-      .catch(showError);
+      .catch((error) => {
+        state.isSwitchingResult = false;
+        showError(error);
+      });
   });
   document.getElementById("deleteEvaluationResult").addEventListener("click", () => manageEvaluationResult("delete"));
   document.getElementById("copyEvaluationResult").addEventListener("click", copyEvaluationResult);
   document.getElementById("saveEvaluationResult").addEventListener("click", saveEvaluationResult);
+}
+
+function clearEvaluationDisplayForSchemeSwitch(scheme = state.currentScheme) {
+  if (state.pollTimer) {
+    window.clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  state.isSwitchingResult = true;
+  state.resultFiles = [];
+  state.selectedResultFile = "";
+  state.planningResultRows = [];
+  state.curveDataKey = "";
+  state.greenDailyPoints = [];
+  state.safetyDailyPoints = [];
+  state.optimization = defaultOptimizationState(scheme);
+  state.optimization = renderEvaluationSchemeSwitchingState(scheme, state.optimization);
+  renderEvaluationResults();
+  renderEvaluationPlanningResultTable();
+  renderOptimization(state.optimization);
+  state.evaluationCurveViewer?.clear("正在加载小时级曲线");
+}
+
+function renderEvaluationSchemeSwitchingState(scheme, base = defaultOptimizationState(scheme)) {
+  return {
+    ...base,
+    status: "切换中",
+    metrics: [
+      { label: "当前状态", value: "切换中", unit: "" },
+      { label: "启动时刻", value: "-", unit: "" },
+      { label: "结束时刻", value: "-", unit: "" },
+      { label: "综合评分", value: "-", unit: "分" },
+      { label: "风险等级", value: "-", unit: "" },
+    ],
+    results: {
+      overview_tables: [
+        { title: "规划结果", rows: [] },
+        { title: "规划年指标", rows: [] },
+      ],
+      overview_disks: defaultOverviewDisks(),
+      green: [],
+      green_table: [],
+      safety: [],
+      safety_table: [],
+      curves: { green: [], green_daily: [], safety: [], safety_daily: [] },
+    },
+    logs: [{ time: "", level: "info", message: `正在切换方案：${scheme || "未选择方案"}` }],
+  };
+}
+
+function clearEvaluationResultDisplayForSwitch(filename = state.selectedResultFile) {
+  if (state.pollTimer) {
+    window.clearInterval(state.pollTimer);
+    state.pollTimer = null;
+  }
+  state.isSwitchingResult = true;
+  state.curveDataKey = "";
+  state.planningResultRows = [];
+  state.greenDailyPoints = [];
+  state.safetyDailyPoints = [];
+  state.optimization = defaultOptimizationState(state.currentScheme);
+  state.optimization = renderEvaluationSwitchingState(filename, state.optimization);
+  renderEvaluationPlanningResultTable();
+  renderOptimization(state.optimization);
+  state.evaluationCurveViewer?.clear("正在加载小时级曲线");
+  updateEvaluationResultActions();
+}
+
+function renderEvaluationSwitchingState(filename, base = defaultOptimizationState(state.currentScheme)) {
+  const displayName = resultDisplayName(filename) || "当前结果";
+  return {
+    ...base,
+    status: "切换中",
+    metrics: [
+      { label: "当前状态", value: "切换中", unit: "" },
+      { label: "启动时刻", value: "-", unit: "" },
+      { label: "结束时刻", value: "-", unit: "" },
+      { label: "综合评分", value: "-", unit: "分" },
+      { label: "风险等级", value: "-", unit: "" },
+    ],
+    results: {
+      overview_tables: [
+        { title: "规划结果", rows: [] },
+        { title: "规划年指标", rows: [] },
+      ],
+      overview_disks: defaultOverviewDisks(),
+      green: [],
+      green_table: [],
+      safety: [],
+      safety_table: [],
+      curves: { green: [], green_daily: [], safety: [], safety_daily: [] },
+    },
+    logs: [{ time: "", level: "info", message: `正在切换结果：${displayName}` }],
+  };
 }
 
 async function loadEvaluationResults(selected = state.selectedResultFile) {
@@ -273,7 +365,7 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
   renderEvaluationPlanningResultTable();
-  if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
+  if (state.activeLogView === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
 }
 
 function bindLogViewTabs() {
@@ -525,6 +617,7 @@ function saveEvaluationLogs() {
 async function refreshOptimizationStatus(scheme = state.currentScheme, filename = state.selectedResultFile) {
   const data = await api(optimizationStatusPath(scheme, filename));
   if (scheme !== state.currentScheme || filename !== state.selectedResultFile) return;
+  state.isSwitchingResult = false;
   state.optimization = data;
   renderOptimization(data);
   scheduleOptimizationPolling();
@@ -569,15 +662,16 @@ function bindResultTabs() {
 function renderOptimization(data) {
   updateOptimizationActions(data);
   renderMetrics(data.metrics || []);
+  const allowEmptyResult = data.status === "切换中";
   renderOverviewTables(data.results?.overview_tables || defaultOverviewTables(), data.results?.overview_disks || defaultOverviewDisks());
-  renderGreenResult(data.results?.green_table || defaultGreenTable(), data.results?.curves?.green_daily || []);
-  renderSafetyResult(data.results?.safety_table || defaultSafetyTable(), data.results?.curves?.safety_daily || []);
+  renderGreenResult(data.results?.green_table || [], data.results?.curves?.green_daily || [], { allowEmpty: allowEmptyResult });
+  renderSafetyResult(data.results?.safety_table || [], data.results?.curves?.safety_daily || [], { allowEmpty: allowEmptyResult });
   bindOverviewColumnResizeHandles();
   bindResultColumnResizeHandles();
   bindAdaptiveResultCharts();
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
-  if (state.activeLogView === "curves") loadEvaluationCurveData().catch(showError);
+  if (state.activeLogView === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
 }
 
 async function loadEvaluationCurveData() {
@@ -800,11 +894,11 @@ function renderResultPanel(key, title, rows, points) {
     </div>`;
 }
 
-function renderGreenResult(rows, dailyPoints) {
+function renderGreenResult(rows, dailyPoints, options = {}) {
   const panel = document.getElementById("greenResult");
   if (!panel) return;
   state.greenDailyPoints = Array.isArray(dailyPoints) ? dailyPoints : [];
-  const safeRows = rows.length ? rows : defaultGreenTable();
+  const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultGreenTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
     "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],
@@ -868,11 +962,11 @@ function renderGreenDailyChart(points) {
     <div class="chart-hover-tooltip" data-chart-hover-tooltip="green" hidden></div>`;
 }
 
-function renderSafetyResult(rows, dailyPoints) {
+function renderSafetyResult(rows, dailyPoints, options = {}) {
   const panel = document.getElementById("safetyResult");
   if (!panel) return;
   state.safetyDailyPoints = Array.isArray(dailyPoints) ? dailyPoints : [];
-  const safeRows = rows.length ? rows : defaultSafetyTable();
+  const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultSafetyTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
     "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],

@@ -2521,6 +2521,17 @@ class PowerPlanServerTest(unittest.TestCase):
         scheme_item_css = css.split(".scheme-item {", 1)[1].split("}", 1)[0]
         self.assertIn("cursor: pointer", scheme_item_css)
         self.assertIn("user-select: none", scheme_item_css)
+        self.assertIn("clearPlanningDisplayForSchemeSwitch", planning_script)
+        self.assertIn("renderPlanningSwitchingState", planning_script)
+        planning_scheme_handler = planning_script.split("bindSchemeListItem(item, () =>", 1)[1].split("));", 1)[0]
+        self.assertIn("selectSchemeWithSwitchFeedback(item.dataset.name)", planning_scheme_handler)
+        clear_planning_script = planning_script.split("function clearPlanningDisplayForSchemeSwitch", 1)[1].split("function renderPlanningSwitchingState", 1)[0]
+        for snippet in (
+            "state.payload = renderPlanningSwitchingState(name)",
+            "state.timeSeriesLoading = null",
+            "renderAll()",
+        ):
+            self.assertIn(snippet, clear_planning_script)
 
     def test_optimization_page_has_requested_three_area_layout(self):
         html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
@@ -2611,6 +2622,23 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("scheme=", script)
         self.assertIn("encodeURIComponent(scheme)", script)
         self.assertIn("refreshOptimizationStatus().catch(showError)", script)
+        self.assertIn("clearOptimizationDisplayForSchemeSwitch", script)
+        self.assertIn("renderOptimizationSwitchingState", script)
+        self.assertIn('const allowEmptyResult = data.status === "切换中"', script)
+        self.assertIn("renderGreenResult(data.results?.green_table || [], data.results?.curves?.green_daily || [], { allowEmpty: allowEmptyResult })", script)
+        self.assertIn("renderSafetyResult(data.results?.safety_table || [], data.results?.curves?.safety_daily || [], { allowEmpty: allowEmptyResult })", script)
+        scheme_handler = script.split("bindSchemeListItem(item, () => {", 1)[1].split("});", 1)[0]
+        self.assertIn("clearOptimizationDisplayForSchemeSwitch(state.currentScheme)", scheme_handler)
+        clear_scheme_script = script.split("function clearOptimizationDisplayForSchemeSwitch", 1)[1].split("function renderOptimizationSwitchingState", 1)[0]
+        for snippet in (
+            "window.clearInterval(state.pollTimer)",
+            "state.greenDailyPoints = []",
+            "state.safetyDailyPoints = []",
+            "state.optimization = defaultOptimizationState(scheme)",
+            "renderOptimization(state.optimization)",
+            'state.optimizationCurveViewer?.clear("正在加载小时级曲线")',
+        ):
+            self.assertIn(snippet, clear_scheme_script)
         self.assertIn(".optimization-actions button.is-disabled", css := (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8"))
         self.assertIn(".optimization-actions button.is-active", css)
 
@@ -2694,6 +2722,42 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("暂无小时级曲线", script)
         self.assertIn("请选择小时级曲线", script)
         self.assertIn("正在加载小时级曲线", script)
+        self.assertIn("clearEvaluationResultDisplayForSwitch", script)
+        self.assertIn("clearEvaluationDisplayForSchemeSwitch", script)
+        self.assertIn("renderEvaluationSwitchingState", script)
+        self.assertIn("renderEvaluationSchemeSwitchingState", script)
+        self.assertIn('const allowEmptyResult = data.status === "切换中"', script)
+        self.assertIn("renderGreenResult(data.results?.green_table || [], data.results?.curves?.green_daily || [], { allowEmpty: allowEmptyResult })", script)
+        self.assertIn("renderSafetyResult(data.results?.safety_table || [], data.results?.curves?.safety_daily || [], { allowEmpty: allowEmptyResult })", script)
+        scheme_handler = script.split("bindSchemeListItem(item, () => {", 1)[1].split("});", 1)[0]
+        self.assertIn("clearEvaluationDisplayForSchemeSwitch(state.currentScheme)", scheme_handler)
+        change_handler = script.split('document.getElementById("evaluationResultSelect").addEventListener("change"', 1)[1].split('document.getElementById("deleteEvaluationResult")', 1)[0]
+        self.assertIn("clearEvaluationResultDisplayForSwitch(state.selectedResultFile)", change_handler)
+        clear_switch_script = script.split("function clearEvaluationResultDisplayForSwitch", 1)[1].split("function renderEvaluationSwitchingState", 1)[0]
+        for snippet in (
+            "state.planningResultRows = []",
+            "state.greenDailyPoints = []",
+            "state.safetyDailyPoints = []",
+            "state.optimization = defaultOptimizationState(state.currentScheme)",
+            "renderEvaluationPlanningResultTable()",
+            "renderOptimization(state.optimization",
+            'state.evaluationCurveViewer?.clear("正在加载小时级曲线")',
+        ):
+            self.assertIn(snippet, clear_switch_script)
+        clear_scheme_script = script.split("function clearEvaluationDisplayForSchemeSwitch", 1)[1].split("function renderEvaluationSchemeSwitchingState", 1)[0]
+        for snippet in (
+            "window.clearInterval(state.pollTimer)",
+            "state.resultFiles = []",
+            "state.selectedResultFile = \"\"",
+            "state.planningResultRows = []",
+            "state.greenDailyPoints = []",
+            "state.safetyDailyPoints = []",
+            "renderEvaluationResults()",
+            "renderEvaluationPlanningResultTable()",
+            "renderOptimization(state.optimization)",
+            'state.evaluationCurveViewer?.clear("正在加载小时级曲线")',
+        ):
+            self.assertIn(snippet, clear_scheme_script)
         self.assertIn("bindEvaluationMainResizeHandle", script)
         self.assertIn("--evaluation-result-rail-width", script)
         self.assertIn("ArrowLeft", script)

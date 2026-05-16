@@ -16,6 +16,7 @@ const state = {
   pendingTimeSeriesImport: null,
   pendingLoadCurve: null,
   originalLoadCurve: null,
+  isSwitchingScheme: false,
 };
 
 const AMAP_TILE_SIZE = 256;
@@ -495,7 +496,7 @@ function renderSchemes() {
     .map((scheme) => `<li class="scheme-item ${scheme.name === state.currentScheme ? "active" : ""}" data-name="${escapeHtml(scheme.name)}" role="option" aria-selected="${scheme.name === state.currentScheme ? "true" : "false"}" tabindex="0">${escapeHtml(scheme.name)}</li>`)
     .join("")}</ul>`;
   document.querySelectorAll(".scheme-item").forEach((item) => {
-    bindSchemeListItem(item, () => selectScheme(item.dataset.name).catch(showError));
+    bindSchemeListItem(item, () => selectSchemeWithSwitchFeedback(item.dataset.name).catch(showError));
   });
 }
 
@@ -513,9 +514,38 @@ async function selectScheme(name) {
   state.currentScheme = name;
   state.timeSeriesLoading = null;
   state.payload = normalizePayload(await api(`/api/planning/schemes/${encodeURIComponent(name)}/overview`));
+  state.isSwitchingScheme = false;
   state.month = 0;
   renderAll();
   ensureTimeSeriesForActiveTab();
+}
+
+async function selectSchemeWithSwitchFeedback(name) {
+  clearPlanningDisplayForSchemeSwitch(name);
+  await selectScheme(name);
+}
+
+function clearPlanningDisplayForSchemeSwitch(name) {
+  state.currentScheme = name || "";
+  state.timeSeriesLoading = null;
+  state.isSwitchingScheme = true;
+  state.payload = renderPlanningSwitchingState(name);
+  state.month = 0;
+  state.chartMeta = null;
+  hideChartCursor();
+  renderAll();
+}
+
+function renderPlanningSwitchingState(name) {
+  return {
+    scheme: name || "",
+    time_series: [],
+    time_series_count: 0,
+    timeSeriesLoaded: false,
+    time_series_loaded: false,
+    validation: [{ level: "info", message: `正在切换方案：${name || "未选择方案"}` }],
+    planning_parameters: [defaultPlanningParameterRow()],
+  };
 }
 
 async function createScheme() {
@@ -2283,6 +2313,11 @@ function renderSummary() {
     return;
   }
   if (currentSchemeName) currentSchemeName.textContent = state.currentScheme;
+  if (state.isSwitchingScheme) {
+    box.innerHTML = `<div>当前方案：<strong>${escapeHtml(state.currentScheme || "未选择方案")}</strong></div><div>正在切换方案...</div>`;
+    list.innerHTML = '<div class="validation-item">正在加载方案数据...</div>';
+    return;
+  }
   const timeSeriesCount = isTimeSeriesLoaded() ? (state.payload.time_series || []).length : state.payload.time_series_count || 0;
   box.innerHTML = `<div>当前方案：<strong>${escapeHtml(state.currentScheme)}</strong></div><div>时序行数：${timeSeriesCount}</div><div>设备条目：${deviceSpecs.reduce((sum, [key]) => sum + (state.payload[key] || []).length, 0)}</div>`;
   const localMessages = validateLocal();
