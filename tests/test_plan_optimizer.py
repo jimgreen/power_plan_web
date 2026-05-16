@@ -149,7 +149,7 @@ class PlanOptimizerTest(unittest.TestCase):
 
         self.assertEqual(seen_options["time_limit"], 5400)
 
-    def test_planning_optimization_uses_unit_commitment_binaries(self):
+    def test_planning_optimization_uses_count_commitment_variables_without_unit_binaries(self):
         payload = self._payload()
         payload["photovoltaics"][0].update(
             {
@@ -186,6 +186,7 @@ class PlanOptimizerTest(unittest.TestCase):
 
         def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
             captured["objective"] = c.copy()
+            captured["integrality"] = integrality.copy()
             return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
 
         with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
@@ -199,25 +200,98 @@ class PlanOptimizerTest(unittest.TestCase):
 
         self.assertEqual(objective_cost(("diesel_power", 0, 0)), 0.001)
         self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
-        self.assertEqual(objective_cost(("diesel_on_unit", 0, 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
-        self.assertEqual(objective_cost(("electrolyzer_on_unit", 0, 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
+        self.assertEqual(objective_cost(("diesel_on_count", 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
+        self.assertEqual(objective_cost(("electrolyzer_on_count", 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
         for key in (
             ("wind_curtailed", 0),
             ("pv_curtailed", 0),
             ("storage_charge", 0),
             ("storage_discharge", 0),
-            ("grid_storage_on", 0, 0, 0),
+            ("grid_storage_on_count", 0, 0),
             ("electrolyzer_power", 0, 0),
             ("fuel_cell_power", 0, 0),
         ):
             self.assertEqual(objective_cost(key), 0.0)
+        self.assertIn(("diesel_on_count", 0, 0), variables)
+        self.assertIn(("electrolyzer_on_count", 0, 0), variables)
+        self.assertIn(("grid_storage_on_count", 0, 0), variables)
+        self.assertIn(("grid_storage_up_available_count", 0, 0), variables)
+        self.assertIn(("grid_storage_down_available_count", 0, 0), variables)
+        self.assertEqual(captured["integrality"][variables[("diesel_on_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("electrolyzer_on_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("grid_storage_on_count", 0, 0)]], 1)
         for unit in range(2):
-            self.assertIn(("diesel_on_unit", 0, 0, unit), variables)
-            self.assertIn(("electrolyzer_on_unit", 0, 0, unit), variables)
-            self.assertNotIn(("diesel_on_count", 0, 0), variables)
-            self.assertNotIn(("electrolyzer_on_count", 0, 0), variables)
+            self.assertNotIn(("diesel_on_unit", 0, 0, unit), variables)
+            self.assertNotIn(("electrolyzer_on_unit", 0, 0, unit), variables)
+            self.assertNotIn(("grid_storage_on", 0, 0, unit), variables)
         self.assertIn(("storage_charge_on", 0), variables)
         self.assertIn(("storage_discharge_on", 0), variables)
+
+    def test_planning_model_avoids_unit_level_variables_for_all_equipment_families(self):
+        payload = self._payload()
+        payload["diesel_generators"][0].update(
+            {"capacity": 10, "power_upper": 10, "power_lower": 2, "quantity_lower": 0, "quantity_upper": 3}
+        )
+        payload["wind_turbines"][0].update({"capacity": 10, "quantity_lower": 0, "quantity_upper": 3})
+        payload["photovoltaics"][0].update({"capacity": 8, "quantity_lower": 0, "quantity_upper": 3})
+        payload["storage_pcs"][0].update(
+            {"power_capacity": 10, "quantity_lower": 0, "quantity_upper": 3, "is_grid_forming": 1}
+        )
+        payload["storage_battery_packs"][0].update({"battery_capacity": 20, "quantity_lower": 0, "quantity_upper": 3})
+        payload["hydrogen_electrolyzers"][0].update(
+            {"power_capacity": 5, "power_lower": 1, "quantity_lower": 0, "quantity_upper": 3}
+        )
+        payload["hydrogen_tanks"][0].update({"hydrogen_tank_capacity": 100, "quantity_lower": 0, "quantity_upper": 3})
+        payload["fuel_cells"][0].update({"power_capacity": 4, "quantity_lower": 0, "quantity_upper": 3})
+        payload["time_series"][0]["solar_irradiance"] = 1000
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["integrality"] = integrality.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        forbidden_unit_variables = {
+            "diesel_on_unit",
+            "electrolyzer_on_unit",
+            "grid_storage_on",
+            "grid_storage_up_available",
+            "grid_storage_down_available",
+            "grid_storage_on_unit",
+            "grid_storage_up_available_unit",
+            "grid_storage_down_available_unit",
+            "renewable_unit_built",
+            "fuel_cell_on_unit",
+            "hydrogen_tank_unit",
+            "storage_battery_unit",
+            "storage_pcs_unit",
+        }
+        self.assertFalse(any(key[0] in forbidden_unit_variables for key in variables))
+        for key in (
+            ("diesel_on_count", 0, 0),
+            ("electrolyzer_on_count", 0, 0),
+            ("grid_storage_on_count", 0, 0),
+            ("grid_storage_up_available_count", 0, 0),
+            ("grid_storage_down_available_count", 0, 0),
+            ("renewable_curtailment_product", 0, "wind_turbines", 0),
+            ("renewable_curtailment_product", 0, "photovoltaics", 0),
+            ("fuel_cell_power", 0, 0),
+            ("hydrogen_storage", 0),
+            ("storage_soc", 0),
+        ):
+            self.assertIn(key, variables)
+        for key in (
+            ("fuel_cell_power", 0, 0),
+            ("hydrogen_storage", 0),
+            ("storage_soc", 0),
+            ("storage_charge", 0),
+            ("storage_discharge", 0),
+        ):
+            self.assertEqual(captured["integrality"][variables[key]], 0)
 
     def test_planning_optimization_applies_storage_and_hydrogen_self_discharge(self):
         payload = self._payload()
@@ -385,7 +459,7 @@ class PlanOptimizerTest(unittest.TestCase):
             }
         ))
 
-    def test_planning_optimization_models_each_renewable_unit_for_exact_curtailment_rate(self):
+    def test_planning_optimization_uses_quantity_level_renewable_curtailment(self):
         payload = self._payload()
         payload["wind_turbines"][0].update(
             {"capacity": 10, "quantity_lower": 0, "quantity_upper": 2}
@@ -410,14 +484,15 @@ class PlanOptimizerTest(unittest.TestCase):
 
         variables = model["variables"]
         self.assertIn(("renewable_curtailment_rate", 0), variables)
-        self.assertIn(("renewable_unit_built", "wind_turbines", 0, 0), variables)
-        self.assertIn(("renewable_unit_built", "wind_turbines", 0, 1), variables)
-        self.assertIn(("renewable_unit_built", "photovoltaics", 0, 0), variables)
-        self.assertIn(("renewable_curtailment_product", 0, "wind_turbines", 0, 0), variables)
-        self.assertIn(("renewable_curtailment_product", 0, "wind_turbines", 0, 1), variables)
-        self.assertIn(("renewable_curtailment_product", 0, "photovoltaics", 0, 0), variables)
-        self.assertEqual(captured["integrality"][variables[("renewable_unit_built", "wind_turbines", 0, 0)]], 1)
-        self.assertEqual(captured["integrality"][variables[("renewable_unit_built", "photovoltaics", 0, 0)]], 1)
+        self.assertIn(("renewable_curtailment_product", 0, "wind_turbines", 0), variables)
+        self.assertIn(("renewable_curtailment_product", 0, "photovoltaics", 0), variables)
+        self.assertNotIn(("renewable_unit_built", "wind_turbines", 0, 0), variables)
+        self.assertNotIn(("renewable_unit_built", "wind_turbines", 0, 1), variables)
+        self.assertNotIn(("renewable_unit_built", "photovoltaics", 0, 0), variables)
+        self.assertNotIn(("renewable_curtailment_product", 0, "wind_turbines", 0, 0), variables)
+        self.assertNotIn(("renewable_curtailment_product", 0, "wind_turbines", 0, 1), variables)
+        self.assertEqual(captured["integrality"][variables[("qty", "wind_turbines", 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("qty", "photovoltaics", 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("renewable_curtailment_rate", 0)]], 0)
 
         def has_constraint(expected_terms, expected_lower, expected_upper):
@@ -444,43 +519,33 @@ class PlanOptimizerTest(unittest.TestCase):
 
         self.assertTrue(has_constraint(
             {
-                ("qty", "wind_turbines", 0): 1.0,
-                ("renewable_unit_built", "wind_turbines", 0, 0): -1.0,
-                ("renewable_unit_built", "wind_turbines", 0, 1): -1.0,
-            },
-            0.0,
-            0.0,
-        ))
-        self.assertTrue(has_constraint(
-            {
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 1.0,
-                ("renewable_curtailment_rate", 0): -1.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0): 1.0,
+                ("renewable_curtailment_rate", 0): -2.0,
             },
             -np.inf,
             0.0,
         ))
         self.assertTrue(has_constraint(
             {
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 1.0,
-                ("renewable_unit_built", "wind_turbines", 0, 0): -1.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0): 1.0,
+                ("qty", "wind_turbines", 0): -1.0,
             },
             -np.inf,
             0.0,
         ))
         self.assertTrue(has_constraint(
             {
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 1.0,
-                ("renewable_curtailment_rate", 0): -1.0,
-                ("renewable_unit_built", "wind_turbines", 0, 0): -1.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0): 1.0,
+                ("renewable_curtailment_rate", 0): -2.0,
+                ("qty", "wind_turbines", 0): -1.0,
             },
-            -1.0,
+            -2.0,
             np.inf,
         ))
         self.assertTrue(has_constraint(
             {
                 ("wind_curtailed", 0): 1.0,
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): -10.0,
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 1): -10.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0): -10.0,
             },
             0.0,
             0.0,
@@ -488,10 +553,8 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertTrue(has_constraint(
             {
                 ("wind_power", 0): 1.0,
-                ("renewable_unit_built", "wind_turbines", 0, 0): -10.0,
-                ("renewable_unit_built", "wind_turbines", 0, 1): -10.0,
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 0): 10.0,
-                ("renewable_curtailment_product", 0, "wind_turbines", 0, 1): 10.0,
+                ("qty", "wind_turbines", 0): -10.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0): 10.0,
             },
             0.0,
             0.0,
@@ -521,8 +584,11 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertTrue(model["post_disturbance_power_balance_enabled"])
         self.assertEqual(model["storage_soc_upper_ratio"], 0.8)
         self.assertEqual(model["storage_soc_lower_ratio"], 0.2)
-        self.assertIn(("grid_storage_on", 0, 0, 0), variables)
-        self.assertIn(("grid_storage_on", 0, 0, 1), variables)
+        self.assertIn(("grid_storage_on_count", 0, 0), variables)
+        self.assertIn(("grid_storage_up_available_count", 0, 0), variables)
+        self.assertIn(("grid_storage_down_available_count", 0, 0), variables)
+        self.assertNotIn(("grid_storage_on", 0, 0, 0), variables)
+        self.assertNotIn(("grid_storage_on", 0, 0, 1), variables)
 
     def test_planning_optimization_uses_initial_storage_ratios_from_planning_parameters(self):
         payload = self._payload()

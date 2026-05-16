@@ -587,7 +587,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(capacities["fuel_cell_power_capacity"], 50)
         self.assertEqual(capacities["diesel_capacity"], 0)
 
-    def test_estimate_dispatch_uses_unit_binaries_and_initial_storage_ratios(self):
+    def test_estimate_dispatch_uses_count_variables_and_initial_storage_ratios(self):
         payload = server.planning_store.default_payload("方案A")
         payload["time_series"] = payload["time_series"][:1]
         payload["time_series"][0]["load"] = 0
@@ -632,25 +632,28 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertEqual(objective_cost(("diesel_power", 0)), 1.0)
         self.assertEqual(objective_cost(("unmet_load", 0)), estimate.LOAD_SHED_PENALTY)
-        self.assertEqual(objective_cost(("diesel_on_unit", 0, 0)), estimate.DIESEL_ON_PENALTY)
-        self.assertEqual(objective_cost(("electrolyzer_on_unit", 0, 0)), estimate.ELECTROLYZER_ON_PENALTY)
+        self.assertEqual(objective_cost(("diesel_on_count", 0)), estimate.DIESEL_ON_PENALTY)
+        self.assertEqual(objective_cost(("electrolyzer_on_count", 0)), estimate.ELECTROLYZER_ON_PENALTY)
         for key in (
             ("storage_charge", 0),
             ("storage_discharge", 0),
             ("electrolyzer_power", 0),
             ("fuel_cell_power", 0),
             ("curtailed_power", 0),
-            ("grid_storage_on_unit", 0, 0),
+            ("grid_storage_on_count", 0),
         ):
             self.assertEqual(objective_cost(key), 0.0)
         for unit in range(2):
-            self.assertIn(("diesel_on_unit", 0, unit), variables)
-            self.assertIn(("electrolyzer_on_unit", 0, unit), variables)
-        self.assertNotIn(("diesel_on", 0), variables)
-        self.assertNotIn(("electrolyzer_on", 0), variables)
+            self.assertNotIn(("diesel_on_unit", 0, unit), variables)
+            self.assertNotIn(("electrolyzer_on_unit", 0, unit), variables)
+            self.assertNotIn(("grid_storage_on_unit", 0, unit), variables)
+        self.assertIn(("diesel_on_count", 0), variables)
+        self.assertIn(("electrolyzer_on_count", 0), variables)
+        self.assertIn(("grid_storage_on_count", 0), variables)
+        self.assertIn(("grid_storage_up_available_count", 0), variables)
+        self.assertIn(("grid_storage_down_available_count", 0), variables)
         self.assertIn(("storage_charge_on", 0), variables)
         self.assertIn(("storage_discharge_on", 0), variables)
-        self.assertIn(("grid_storage_on_unit", 0, 0), variables)
         self.assertEqual(model["initial_storage_soc_ratio"], 0.2)
         self.assertEqual(model["initial_hydrogen_storage_ratio"], 0.8)
         self.assertEqual(model["storage_charge_efficiency"], 0.91)

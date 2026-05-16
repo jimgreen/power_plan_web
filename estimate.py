@@ -530,14 +530,14 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
             max(0.0, model["wind_available"][hour] + model["pv_available"][hour]),
         )
         builder.add_var(("unmet_load", hour), 0.0, max(0.0, loads[hour]), cost=LOAD_SHED_PENALTY)
-        for unit in range(model["diesel_units"]):
-            builder.add_var(("diesel_on_unit", hour, unit), 0.0, 1.0, integer=True, cost=DIESEL_ON_PENALTY)
-        for unit in range(model["grid_storage_units"]):
-            builder.add_var(("grid_storage_on_unit", hour, unit), 0.0, 1.0, integer=True)
-            builder.add_var(("grid_storage_up_available_unit", hour, unit), 0.0, 1.0, integer=True)
-            builder.add_var(("grid_storage_down_available_unit", hour, unit), 0.0, 1.0, integer=True)
-        for unit in range(model["electrolyzer_units"]):
-            builder.add_var(("electrolyzer_on_unit", hour, unit), 0.0, 1.0, integer=True, cost=ELECTROLYZER_ON_PENALTY)
+        if model["diesel_units"]:
+            builder.add_var(("diesel_on_count", hour), 0.0, model["diesel_units"], integer=True, cost=DIESEL_ON_PENALTY)
+        if model["grid_storage_units"]:
+            builder.add_var(("grid_storage_on_count", hour), 0.0, model["grid_storage_units"], integer=True)
+            builder.add_var(("grid_storage_up_available_count", hour), 0.0, model["grid_storage_units"], integer=True)
+            builder.add_var(("grid_storage_down_available_count", hour), 0.0, model["grid_storage_units"], integer=True)
+        if model["electrolyzer_units"]:
+            builder.add_var(("electrolyzer_on_count", hour), 0.0, model["electrolyzer_units"], integer=True, cost=ELECTROLYZER_ON_PENALTY)
 
     def var(key: tuple[Any, ...]) -> int:
         return builder.var(key)
@@ -573,43 +573,34 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
             curtailed_index=var(("curtailed_power", hour)),
             fixed_available=model["wind_available"][hour] + model["pv_available"][hour],
         )
-        diesel_on_terms = {
-            var(("diesel_on_unit", hour, unit)): 1.0
-            for unit in range(model["diesel_units"])
-        }
-        dispatch_milp.add_unit_commitment_constraints(
-            builder,
-            power_index=var(("diesel_power", hour)),
-            on_indices=list(diesel_on_terms),
-            power_upper=model["diesel_unit_power_upper"],
-            power_lower=model["diesel_unit_power_lower"],
-        )
-        grid_storage_on_indices = [
-            var(("grid_storage_on_unit", hour, unit))
-            for unit in range(model["grid_storage_units"])
-        ]
-        grid_storage_up_indices = [
-            var(("grid_storage_up_available_unit", hour, unit))
-            for unit in range(model["grid_storage_units"])
-        ]
-        grid_storage_down_indices = [
-            var(("grid_storage_down_available_unit", hour, unit))
-            for unit in range(model["grid_storage_units"])
-        ]
+        diesel_on_indices = [var(("diesel_on_count", hour))] if model["diesel_units"] else []
+        if diesel_on_indices:
+            dispatch_milp.add_unit_commitment_constraints(
+                builder,
+                power_index=var(("diesel_power", hour)),
+                on_indices=diesel_on_indices,
+                power_upper=model["diesel_unit_power_upper"],
+                power_lower=model["diesel_unit_power_lower"],
+            )
+        else:
+            builder.add_constraint({var(("diesel_power", hour)): 1.0}, 0.0, 0.0)
+        grid_storage_on_indices = [var(("grid_storage_on_count", hour))] if model["grid_storage_units"] else []
+        grid_storage_up_indices = [var(("grid_storage_up_available_count", hour))] if model["grid_storage_units"] else []
+        grid_storage_down_indices = [var(("grid_storage_down_available_count", hour))] if model["grid_storage_units"] else []
         for on_index, up_index, down_index in zip(grid_storage_on_indices, grid_storage_up_indices, grid_storage_down_indices):
             builder.add_constraint({up_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
             builder.add_constraint({down_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
-        electrolyzer_on_terms = {
-            var(("electrolyzer_on_unit", hour, unit)): 1.0
-            for unit in range(model["electrolyzer_units"])
-        }
-        dispatch_milp.add_unit_commitment_constraints(
-            builder,
-            power_index=var(("electrolyzer_power", hour)),
-            on_indices=list(electrolyzer_on_terms),
-            power_upper=model["electrolyzer_unit_power_upper"],
-            power_lower=model["electrolyzer_unit_power_lower"],
-        )
+        electrolyzer_on_indices = [var(("electrolyzer_on_count", hour))] if model["electrolyzer_units"] else []
+        if electrolyzer_on_indices:
+            dispatch_milp.add_unit_commitment_constraints(
+                builder,
+                power_index=var(("electrolyzer_power", hour)),
+                on_indices=electrolyzer_on_indices,
+                power_upper=model["electrolyzer_unit_power_upper"],
+                power_lower=model["electrolyzer_unit_power_lower"],
+            )
+        else:
+            builder.add_constraint({var(("electrolyzer_power", hour)): 1.0}, 0.0, 0.0)
         storage_flags = dispatch_milp.add_storage_constraints(
             builder,
             charge_index=var(("storage_charge", hour)),
@@ -629,12 +620,12 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
             self_discharge_rate_per_hour=storage_self_discharge_per_hour,
         )
         for index in grid_storage_up_indices:
-            builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -1.0}, -np.inf, 0.0)
+            builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -float(model["grid_storage_units"])}, -np.inf, 0.0)
         for index in grid_storage_down_indices:
-            builder.add_constraint({index: 1.0, storage_flags["soc_below_upper"]: -1.0}, -np.inf, 0.0)
+            builder.add_constraint({index: 1.0, storage_flags["soc_below_upper"]: -float(model["grid_storage_units"])}, -np.inf, 0.0)
         dispatch_milp.add_grid_support_requirement(
             builder,
-            diesel_on_indices=list(diesel_on_terms),
+            diesel_on_indices=diesel_on_indices,
             grid_storage_on_indices=grid_storage_on_indices,
         )
         if model["post_disturbance_power_balance_enabled"]:
@@ -647,7 +638,7 @@ def solve_dispatch_model(model: dict[str, Any], log: LogSink | None = None) -> l
                 diesel_power_indices=[var(("diesel_power", hour))],
                 diesel_on_terms={
                     index: model["diesel_unit_power_upper"]
-                    for index in diesel_on_terms
+                    for index in diesel_on_indices
                 },
                 grid_storage_charge_index=var(("storage_charge", hour)),
                 grid_storage_discharge_index=var(("storage_discharge", hour)),
@@ -731,11 +722,12 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
             return rounded_solution_from_index(solution, variables[(key, hour)])
         return rounded_solution(solution, hour, key)
 
-    def binary_sum(prefix: str, hour: int, units: int) -> int:
+    def count_value(key: str, hour: int) -> int:
+        if variables and (key, hour) in variables:
+            return int(round(rounded_solution_from_index(solution, variables[(key, hour)])))
         if variables:
-            return int(round(sum(rounded_solution_from_index(solution, variables[(prefix, hour, unit)]) for unit in range(units))))
-        legacy_key = "diesel_on" if prefix == "diesel_on_unit" else "electrolyzer_on"
-        return round_binary_solution(solution, hour, legacy_key)
+            return 0
+        return round_binary_solution(solution, hour, key)
 
     for hour, row in enumerate(model["time_series"]):
         hour_index = int(numeric(row.get("hour_index"), hour + 1) or hour + 1)
@@ -769,9 +761,9 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
             "storage_charge": storage_charge,
             "storage_discharge": storage_discharge,
             "storage_soc": value(hour, "storage_soc"),
-            "diesel_on": binary_sum("diesel_on_unit", hour, model.get("diesel_units", 0)),
+            "diesel_on": count_value("diesel_on_count", hour),
             "hydrogen_production_power": value(hour, "electrolyzer_power"),
-            "electrolyzer_on": binary_sum("electrolyzer_on_unit", hour, model.get("electrolyzer_units", 0)),
+            "electrolyzer_on": count_value("electrolyzer_on_count", hour),
             "fuel_cell_power": value(hour, "fuel_cell_power"),
             "hydrogen_storage": value(hour, "hydrogen_storage"),
             "wind_curtailed_power": wind_curtailed,

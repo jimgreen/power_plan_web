@@ -186,8 +186,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     hydrogen_tank_devices = model["device_rows"]["hydrogen_tanks"]
     fuel_cell_devices = active_devices(model, "fuel_cells")
 
-    add_renewable_unit_build_variables(builder, renewable_devices)
-
     for hour in range(n):
         wind_upper = sum(model["wind_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in wind_devices)
         pv_upper = sum(model["pv_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in pv_devices)
@@ -215,27 +213,30 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 device["power_upper"] * device["quantity_upper"],
                 cost=device["fuel_rate"] * model["diesel_price"] / 1000,
             )
-            for unit in range(device["quantity_upper"]):
-                builder.add_var(("diesel_on_unit", hour, device["index"], unit), 0.0, 1.0, integer=True, cost=DIESEL_ON_COUNT_PENALTY)
+            builder.add_var(
+                ("diesel_on_count", hour, device["index"]),
+                0.0,
+                device["quantity_upper"],
+                integer=True,
+                cost=DIESEL_ON_COUNT_PENALTY,
+            )
         for device in grid_storage_pcs_devices:
-            for unit in range(device["quantity_upper"]):
-                builder.add_var(("grid_storage_on", hour, device["index"], unit), 0.0, 1.0, integer=True)
-                builder.add_var(("grid_storage_up_available", hour, device["index"], unit), 0.0, 1.0, integer=True)
-                builder.add_var(("grid_storage_down_available", hour, device["index"], unit), 0.0, 1.0, integer=True)
+            builder.add_var(("grid_storage_on_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
+            builder.add_var(("grid_storage_up_available_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
+            builder.add_var(("grid_storage_down_available_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
         for device in electrolyzer_devices:
             builder.add_var(
                 ("electrolyzer_power", hour, device["index"]),
                 0.0,
                 device["capacity"] * device["quantity_upper"],
             )
-            for unit in range(device["quantity_upper"]):
-                builder.add_var(
-                    ("electrolyzer_on_unit", hour, device["index"], unit),
-                    0.0,
-                    1.0,
-                    integer=True,
-                    cost=ELECTROLYZER_ON_COUNT_PENALTY,
-                )
+            builder.add_var(
+                ("electrolyzer_on_count", hour, device["index"]),
+                0.0,
+                device["quantity_upper"],
+                integer=True,
+                cost=ELECTROLYZER_ON_COUNT_PENALTY,
+            )
         for device in fuel_cell_devices:
             builder.add_var(
                 ("fuel_cell_power", hour, device["index"]),
@@ -291,14 +292,11 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         for device in diesel_devices:
             qty_index = var(("qty", device["key"], device["index"]))
             power_index = var(("diesel_power", hour, device["index"]))
-            on_terms = {
-                var(("diesel_on_unit", hour, device["index"], unit)): 1.0
-                for unit in range(device["quantity_upper"])
-            }
+            on_index = var(("diesel_on_count", hour, device["index"]))
             dispatch_milp.add_unit_commitment_constraints(
                 builder,
                 power_index=power_index,
-                on_indices=list(on_terms),
+                on_indices=[on_index],
                 power_upper=device["power_upper"],
                 power_lower=device["power_lower"],
                 quantity_index=qty_index,
@@ -309,43 +307,32 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         grid_storage_down_indices = []
         grid_storage_up_on_terms = {}
         grid_storage_down_on_terms = {}
+        grid_storage_up_soc_limits = {}
+        grid_storage_down_soc_limits = {}
         for device in grid_storage_pcs_devices:
             qty_index = var(("qty", device["key"], device["index"]))
-            on_indices = [
-                var(("grid_storage_on", hour, device["index"], unit))
-                for unit in range(device["quantity_upper"])
-            ]
-            up_indices = [
-                var(("grid_storage_up_available", hour, device["index"], unit))
-                for unit in range(device["quantity_upper"])
-            ]
-            down_indices = [
-                var(("grid_storage_down_available", hour, device["index"], unit))
-                for unit in range(device["quantity_upper"])
-            ]
-            dispatch_milp.add_grid_storage_on_constraints(builder, on_indices=on_indices, quantity_index=qty_index)
-            grid_storage_on_indices.extend(on_indices)
-            grid_storage_up_indices.extend(up_indices)
-            grid_storage_down_indices.extend(down_indices)
-            for index in up_indices:
-                grid_storage_up_on_terms[index] = device["capacity"]
-            for index in down_indices:
-                grid_storage_down_on_terms[index] = device["capacity"]
-            for on_index, up_index, down_index in zip(on_indices, up_indices, down_indices):
-                builder.add_constraint({up_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
-                builder.add_constraint({down_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
+            on_index = var(("grid_storage_on_count", hour, device["index"]))
+            up_index = var(("grid_storage_up_available_count", hour, device["index"]))
+            down_index = var(("grid_storage_down_available_count", hour, device["index"]))
+            dispatch_milp.add_grid_storage_on_constraints(builder, on_indices=[on_index], quantity_index=qty_index)
+            grid_storage_on_indices.append(on_index)
+            grid_storage_up_indices.append(up_index)
+            grid_storage_down_indices.append(down_index)
+            grid_storage_up_on_terms[up_index] = device["capacity"]
+            grid_storage_down_on_terms[down_index] = device["capacity"]
+            grid_storage_up_soc_limits[up_index] = device["quantity_upper"]
+            grid_storage_down_soc_limits[down_index] = device["quantity_upper"]
+            builder.add_constraint({up_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
+            builder.add_constraint({down_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
 
         for device in electrolyzer_devices:
             qty_index = var(("qty", device["key"], device["index"]))
             power_index = var(("electrolyzer_power", hour, device["index"]))
-            on_terms = {
-                var(("electrolyzer_on_unit", hour, device["index"], unit)): 1.0
-                for unit in range(device["quantity_upper"])
-            }
+            on_index = var(("electrolyzer_on_count", hour, device["index"]))
             dispatch_milp.add_unit_commitment_constraints(
                 builder,
                 power_index=power_index,
-                on_indices=list(on_terms),
+                on_indices=[on_index],
                 power_upper=device["capacity"],
                 power_lower=device["power_lower"],
                 quantity_index=qty_index,
@@ -379,15 +366,14 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             soc_upper_ratio=model["storage_soc_upper_ratio"],
             self_discharge_rate_per_hour=storage_self_discharge_per_hour,
         )
-        for index in grid_storage_up_indices:
-            builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -1.0}, -np.inf, 0.0)
-        for index in grid_storage_down_indices:
-            builder.add_constraint({index: 1.0, storage_flags["soc_below_upper"]: -1.0}, -np.inf, 0.0)
+        for index, upper_count in grid_storage_up_soc_limits.items():
+            builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -float(upper_count)}, -np.inf, 0.0)
+        for index, upper_count in grid_storage_down_soc_limits.items():
+            builder.add_constraint({index: 1.0, storage_flags["soc_below_upper"]: -float(upper_count)}, -np.inf, 0.0)
 
         all_diesel_on_indices = [
-            var(("diesel_on_unit", hour, device["index"], unit))
+            var(("diesel_on_count", hour, device["index"]))
             for device in diesel_devices
-            for unit in range(device["quantity_upper"])
         ]
         dispatch_milp.add_grid_support_requirement(
             builder,
@@ -403,9 +389,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 renewable_down_factor=model["renewable_down_disturbance_factor"],
                 diesel_power_indices=[var(("diesel_power", hour, device["index"])) for device in diesel_devices],
                 diesel_on_terms={
-                    var(("diesel_on_unit", hour, device["index"], unit)): device["power_upper"]
+                    var(("diesel_on_count", hour, device["index"])): device["power_upper"]
                     for device in diesel_devices
-                    for unit in range(device["quantity_upper"])
                 },
                 grid_storage_charge_index=var(("storage_charge", hour)),
                 grid_storage_discharge_index=var(("storage_discharge", hour)),
@@ -665,48 +650,23 @@ def renewable_candidate_devices(model: dict[str, Any], key: str) -> list[dict[st
     ]
 
 
-def add_renewable_unit_build_variables(
-    builder: dispatch_milp.MilpModelBuilder,
-    devices: list[dict[str, Any]],
-) -> None:
-    # q_i is still the construction-cost variable. The binary slot variables
-    # let the optimizer express products between "built" and hourly curtailment
-    # rate without leaving linear MILP form.
-    for device in devices:
-        qty_index = builder.var(("qty", device["key"], device["index"]))
-        build_indices = []
-        for unit in range(device["quantity_upper"]):
-            build_indices.append(builder.add_var(
-                ("renewable_unit_built", device["key"], device["index"], unit),
-                0.0,
-                1.0,
-                integer=True,
-            ))
-        if build_indices:
-            builder.add_constraint(
-                {qty_index: 1.0, **{index: -1.0 for index in build_indices}},
-                0.0,
-                0.0,
-            )
-
-
 def add_renewable_hour_variables(
     builder: dispatch_milp.MilpModelBuilder,
     hour: int,
     devices: list[dict[str, Any]],
 ) -> None:
-    # One common rate per hour enforces equal curtailment percentage across all
-    # built wind and PV slots. z_{t,i,u} below represents built_{i,u} * rate_t.
+    # One common rate per hour enforces equal curtailment percentage across
+    # wind/PV rows. z_{t,i} represents built_quantity_i * rate_t, so the model
+    # avoids expanding a binary for every candidate unit.
     if not devices:
         return
     builder.add_var(("renewable_curtailment_rate", hour), 0.0, 1.0)
     for device in devices:
-        for unit in range(device["quantity_upper"]):
-            builder.add_var(
-                ("renewable_curtailment_product", hour, device["key"], device["index"], unit),
-                0.0,
-                1.0,
-            )
+        builder.add_var(
+            ("renewable_curtailment_product", hour, device["key"], device["index"]),
+            0.0,
+            device["quantity_upper"],
+        )
 
 
 def add_renewable_curtailment_linearization(
@@ -718,12 +678,12 @@ def add_renewable_curtailment_linearization(
         return
     rate_index = builder.var(("renewable_curtailment_rate", hour))
     for device in devices:
-        for unit in range(device["quantity_upper"]):
-            built_index = builder.var(("renewable_unit_built", device["key"], device["index"], unit))
-            product_index = builder.var(("renewable_curtailment_product", hour, device["key"], device["index"], unit))
-            builder.add_constraint({product_index: 1.0, rate_index: -1.0}, -np.inf, 0.0)
-            builder.add_constraint({product_index: 1.0, built_index: -1.0}, -np.inf, 0.0)
-            builder.add_constraint({product_index: 1.0, rate_index: -1.0, built_index: -1.0}, -1.0, np.inf)
+        qty_index = builder.var(("qty", device["key"], device["index"]))
+        product_index = builder.var(("renewable_curtailment_product", hour, device["key"], device["index"]))
+        quantity_upper = float(device["quantity_upper"])
+        builder.add_constraint({product_index: 1.0, rate_index: -quantity_upper}, -np.inf, 0.0)
+        builder.add_constraint({product_index: 1.0, qty_index: -1.0}, -np.inf, 0.0)
+        builder.add_constraint({product_index: 1.0, rate_index: -quantity_upper, qty_index: -1.0}, -quantity_upper, np.inf)
 
 
 def add_exact_renewable_aggregate_constraints(
@@ -737,18 +697,17 @@ def add_exact_renewable_aggregate_constraints(
 ) -> None:
     # Aggregate variables remain the public interface for power balance,
     # reports and existing safety constraints. The equalities below bind them
-    # to exact per-slot output/curtailment under the shared hourly rate.
+    # to exact row-level output/curtailment under the shared hourly rate.
     power_terms: dict[int, float] = {builder.var((power_key, hour)): 1.0}
     curtailed_terms: dict[int, float] = {builder.var((curtailed_key, hour)): 1.0}
     availability_map_key = "wind_available_per_unit" if power_key == "wind_power" else "pv_available_per_unit"
     for device in devices:
         availability = float(model[availability_map_key][device["id"]][hour])
-        for unit in range(device["quantity_upper"]):
-            built_index = builder.var(("renewable_unit_built", device["key"], device["index"], unit))
-            product_index = builder.var(("renewable_curtailment_product", hour, device["key"], device["index"], unit))
-            power_terms[built_index] = power_terms.get(built_index, 0.0) - availability
-            power_terms[product_index] = power_terms.get(product_index, 0.0) + availability
-            curtailed_terms[product_index] = curtailed_terms.get(product_index, 0.0) - availability
+        qty_index = builder.var(("qty", device["key"], device["index"]))
+        product_index = builder.var(("renewable_curtailment_product", hour, device["key"], device["index"]))
+        power_terms[qty_index] = power_terms.get(qty_index, 0.0) - availability
+        power_terms[product_index] = power_terms.get(product_index, 0.0) + availability
+        curtailed_terms[product_index] = curtailed_terms.get(product_index, 0.0) - availability
     builder.add_constraint(power_terms, 0.0, 0.0)
     builder.add_constraint(curtailed_terms, 0.0, 0.0)
 
@@ -1064,16 +1023,14 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "storage_discharge": round(value(("storage_discharge", hour)), 4),
                 "storage_soc": round(value(("storage_soc", hour)), 4),
                 "diesel_on": int(round(sum(
-                    value(("diesel_on_unit", hour, device["index"], unit))
+                    value(("diesel_on_count", hour, device["index"]))
                     for device in diesel_devices
-                    for unit in range(device["quantity_upper"])
                 ))),
                 "hydrogen_production_power": round(electrolyzer_power, 4),
                 "hydrogen_production": round(hydrogen_production, 4),
                 "electrolyzer_on": int(round(sum(
-                    value(("electrolyzer_on_unit", hour, device["index"], unit))
+                    value(("electrolyzer_on_count", hour, device["index"]))
                     for device in electrolyzer_devices
-                    for unit in range(device["quantity_upper"])
                 ))),
                 "fuel_cell_power": round(fuel_cell_power, 4),
                 "hydrogen_storage": round(value(("hydrogen_storage", hour)), 4),
