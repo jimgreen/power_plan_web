@@ -235,17 +235,12 @@ function syncTaskSectionHeights() {
   const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - handleHeight - rowGap * 2);
 
   const optimizationDesiredHeight = measureTaskSectionHeight(optimizationSection);
-  const evaluationDesiredHeight = measureTaskSectionHeight(evaluationSection);
-  const totalDesiredHeight = Math.max(optimizationDesiredHeight + evaluationDesiredHeight, 1);
 
   let optimizationHeight;
   if (Number.isFinite(taskState.manualOptimizationTaskHeight)) {
     optimizationHeight = taskState.manualOptimizationTaskHeight;
-  } else if (totalDesiredHeight <= availableHeight) {
-    const remainingHeight = availableHeight - totalDesiredHeight;
-    optimizationHeight = optimizationDesiredHeight + remainingHeight * (optimizationDesiredHeight / totalDesiredHeight);
   } else {
-    optimizationHeight = (availableHeight * optimizationDesiredHeight) / totalDesiredHeight;
+    optimizationHeight = optimizationDesiredHeight;
   }
   optimizationHeight = clamp(optimizationHeight, TASK_SECTION_MIN_HEIGHT, availableHeight - TASK_SECTION_MIN_HEIGHT);
   const evaluationHeight = Math.max(TASK_SECTION_MIN_HEIGHT, availableHeight - optimizationHeight);
