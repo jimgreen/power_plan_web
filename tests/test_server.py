@@ -223,7 +223,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260516-comparison-fill", page_html)
+            self.assertIn("assets/planning.css?v=20260517-stat-fill", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -4517,6 +4517,29 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("width: 100%", comparison_curve_svg_css)
         self.assertIn("height: 100%", comparison_curve_svg_css)
         self.assertIn("grid-template-rows: auto minmax(0, 1fr)", comparison_curve_chart_css)
+        comparison_curve_chart_panel_css = css.split(".comparison-curve-chart-panel {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-rows: minmax(0, 1fr)", comparison_curve_chart_panel_css)
+        comparison_chart_frame_css = css.split(".comparison-chart-frame {", 1)[1].split("}", 1)[0]
+        self.assertIn("height: 100%", comparison_chart_frame_css)
+        self.assertIn(".comparison-curve-chart > .comparison-chart-frame:only-child", css)
+        self.assertIn(".optimization-curve-chart > .comparison-chart-frame:only-child", css)
+        monthly_chart_frame_fill_css = css.split(".optimization-curve-chart > .comparison-chart-frame:only-child {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-row: 1 / -1", monthly_chart_frame_fill_css)
+        self.assertIn("height: 100%", monthly_chart_frame_fill_css)
+        optimization_curve_panel_active_css = css.split(".optimization-curve-panel.active {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-rows: minmax(0, 1fr)", optimization_curve_panel_active_css)
+        self.assertIn("height: 100%", optimization_curve_panel_active_css)
+        self.assertIn(".comparison-curve-chart > .annual-stat-table", css)
+        self.assertIn(".optimization-curve-chart > .annual-stat-table", css)
+        annual_stat_table_fill_css = css.split(".optimization-curve-chart > .annual-stat-table {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-row: 1 / -1", annual_stat_table_fill_css)
+        self.assertIn("width: 100%", annual_stat_table_fill_css)
+        self.assertIn("max-height: none", annual_stat_table_fill_css)
+        self.assertIn(".comparison-curve-chart > .empty-summary", css)
+        self.assertIn(".optimization-curve-chart > .empty-summary", css)
+        curve_empty_summary_css = css.split(".optimization-curve-chart > .empty-summary {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-row: 1 / -1", curve_empty_summary_css)
+        self.assertIn("align-items: center", curve_empty_summary_css)
         self.assertIn(".comparison-chart-hover-line", css)
         self.assertIn(".comparison-chart-hover-capture", css)
         self.assertIn(".comparison-chart-tooltip", css)
@@ -4537,6 +4560,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".curve-group-tabs", css)
         self.assertIn(".curve-group-tab", css)
         self.assertIn(".annual-stat-table", css)
+        annual_stat_table_css = css.split(".annual-stat-table table {", 1)[1].split("}", 1)[0]
+        self.assertIn("width: 100%", annual_stat_table_css)
+        self.assertIn("height: 100%", annual_stat_table_css)
         curve_group_tabs_css = css.split(".curve-group-tabs {", 1)[1].split("}", 1)[0]
         self.assertIn("position: sticky", curve_group_tabs_css)
         self.assertIn("top: 0", curve_group_tabs_css)
@@ -5652,6 +5678,22 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".weather-import-status.error", css)
         self.assertIn(".map-picker-modal", css)
         self.assertIn(".map-picker-canvas", css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-modal', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-dialog', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .load-generator-dialog', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-dialog', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tabs', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-toolbar', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head button', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid input', css)
+        theme_modal_dialog_css = css.split('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-dialog {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-panel-bg)", theme_modal_dialog_css)
+        self.assertIn("color: var(--theme-text)", theme_modal_dialog_css)
+        theme_modal_button_css = css.split('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot button {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-control-bg)", theme_modal_button_css)
+        self.assertIn("color: var(--theme-control-text)", theme_modal_button_css)
 
     def test_planning_time_series_table_uses_month_tabs(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
