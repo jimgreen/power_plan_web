@@ -223,7 +223,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260517-stat-fill", page_html)
+            self.assertIn("assets/planning.css?v=20260518-composition-align", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -234,6 +234,44 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".optimization-command-card,", css)
         self.assertIn("background: var(--hud-panel)", css)
         self.assertIn("color: var(--hud-text)", css)
+        self.assertIn(".composition-bar-summary span,", css)
+        self.assertIn(".composition-bar-legend div {", css)
+        self.assertIn("color: var(--hud-muted-strong)", css)
+        self.assertIn(".time-series-import-chart text,", css)
+        self.assertIn(".load-generator-preview text,", css)
+        self.assertIn("#timeChart text,", css)
+        self.assertIn(".histogram-svg text {", css)
+        self.assertIn("fill: var(--hud-muted-strong)", css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-chart text,', css)
+        self.assertIn("fill: var(--theme-control-text)", css)
+        self.assertIn("--hud-muted-strong: var(--theme-text)", css)
+        self.assertIn("--control-bg: var(--theme-control-bg)", css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .tab,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .curve-button,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .optimization-actions .queue-action', css)
+        self.assertIn("Theme contrast guard", css)
+        self.assertIn("body[data-home-theme]:not([data-home-theme=\"default\"]) .main-nav a", css)
+        self.assertIn("background: var(--theme-control-bg) !important", css)
+        self.assertIn("color: var(--theme-control-text) !important", css)
+        theme_queue_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .secondary,\nbody[data-home-theme]:not([data-home-theme="default"]) .optimization-actions .queue-action {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-panel-bg) !important", theme_queue_css)
+        self.assertIn("color: var(--theme-text) !important", theme_queue_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter label,', css)
+        curve_filter_label_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter label,', 1)[1].split("}", 1)[0]
+        self.assertIn("color: var(--theme-control-text) !important", curve_filter_label_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,', css)
+        curve_scope_active_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-active-bg) !important", curve_scope_active_css)
+        self.assertIn("color: var(--theme-active-text) !important", curve_scope_active_css)
+        theme_language_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .language-switch,', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-control-bg) !important", theme_language_css)
+        self.assertIn("color: var(--theme-control-text) !important", theme_language_css)
+        theme_status_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.completed {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: #c9f4dc !important", theme_status_css)
+        self.assertIn("color: #0d5e3f !important", theme_status_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .auth-card label,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .task-table,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-chart text,', css)
         self.assertIn("--control-bg:", css)
         self.assertIn("--control-primary-bg:", css)
         self.assertIn("--control-danger-bg:", css)
@@ -296,6 +334,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Result Comparison", i18n_script)
         self.assertIn("Task Concurrency", i18n_script)
         self.assertIn("Refresh Status", i18n_script)
+        self.assertIn("Fetch Weather", i18n_script)
+        self.assertIn('"年份": "Year"', i18n_script)
         self.assertIn("Calculation End Time", i18n_script)
         self.assertIn("Start Now", i18n_script)
         self.assertIn("Queued", i18n_script)
@@ -355,6 +395,12 @@ class PowerPlanServerTest(unittest.TestCase):
             '"名称": "Name"',
             '"设备类型": "Device Type"',
             '"成本构成": "Cost Composition"',
+            '"容量构成": "Capacity Composition"',
+            '"柴发容量": "Diesel Capacity"',
+            '"风电容量": "Wind Capacity"',
+            '"光伏容量": "PV Capacity"',
+            '"电储能容量": "Battery Storage Capacity"',
+            '"燃料电池容量": "Fuel Cell Capacity"',
             '"柴发总容量": "Total Diesel Capacity"',
             '"风电总容量": "Total Wind Capacity"',
             '"光伏总容量": "Total PV Capacity"',
@@ -410,9 +456,28 @@ class PowerPlanServerTest(unittest.TestCase):
             '"氢储总发电量": "Hydrogen Storage Generation"',
             '"电储总发电量": "Battery Storage Generation"',
             '"年均建设成本": "Annualized Construction Cost"',
+            '"年均总成本": "Annualized Total Cost"',
+            '"年运行成本": "Annual Operating Cost"',
             '"柴发电量": "Diesel Generation"',
             '"绿电电量": "Green Energy"',
             '"电量构成": "Energy Composition"',
+            '"表格显示": "Table View"',
+            '"柱图对比": "Bar Comparison"',
+            '"文件导入": "Import File"',
+            '"气象获取": "Fetch Weather"',
+            '"成本对比": "Cost Comparison"',
+            '"电量对比": "Energy Comparison"',
+            '"新能源利用对比": "Renewable Utilization Comparison"',
+            '"储能氢能发电对比": "Storage and Hydrogen Generation Comparison"',
+            '"负荷用电量": "Load Consumption"',
+            '"柴油发电量": "Diesel Generation"',
+            '"新能源总发电量": "Total Renewable Generation"',
+            '"新能源实际电量": "Actual Renewable Energy"',
+            '"储能发电量": "Storage Generation"',
+            '"暂无柱图对比数据": "No bar comparison data"',
+            '"调整年度柱图左右宽度": "Resize annual bar chart columns"',
+            '"调整年度柱图上下高度": "Resize annual bar chart rows"',
+            '"对比项": "Comparison Item"',
             '"负荷上扰动功率": "Load Up Disturbance Power"',
             '"负荷下扰动功率": "Load Down Disturbance Power"',
             '"新能源下扰动功率": "Renewable Down Disturbance Power"',
@@ -961,6 +1026,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(script.index('<col class="task-col-actions">'), script.index('<col class="task-col-status">'))
         self.assertLess(script.index("<th>操作</th>"), script.index("<th>任务状态</th>"))
         self.assertLess(script.index('<div class="task-actions">'), script.index('<td><span class="task-status-pill'))
+        self.assertIn(">启动</button>", script)
+        self.assertIn(">排队</button>", script)
+        self.assertIn('label: "退队"', script)
+        self.assertIn('label: "停止"', script)
+        self.assertNotIn(">立刻启动</button>", script)
+        self.assertNotIn(">加入排队</button>", script)
+        self.assertNotIn('label: "退出队列"', script)
+        self.assertNotIn('label: "停止计算"', script)
         self.assertIn("syncTaskSectionHeights", script)
         self.assertIn("startTaskTableResize", script)
         self.assertIn("manualOptimizationTaskHeight", script)
@@ -986,6 +1059,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("grid-row: 1", css)
         self.assertIn(".task-section-evaluation", css)
         self.assertIn("grid-row: 3", css)
+        self.assertIn(".task-section-evaluation .task-section-head", css)
+        evaluation_head_css = css.split(".task-section-evaluation .task-section-head {", 1)[1].split("}", 1)[0]
+        self.assertIn("justify-content: flex-start", evaluation_head_css)
         self.assertIn(".tasks-panel .task-table", css)
         task_table_panel_css = css.split(".tasks-panel .task-table {", 1)[1].split("}", 1)[0]
         self.assertIn("overflow-x: hidden", task_table_panel_css)
@@ -1940,11 +2016,18 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertNotIn("规划年效益", [table["title"] for table in tables])
 
             disks = payload["results"]["overview_disks"]
-            self.assertEqual([disk["title"] for disk in disks], ["成本构成", "电量构成"])
+            self.assertEqual([disk["title"] for disk in disks], ["成本构成", "容量构成", "电量构成"])
             self.assertEqual(disks[0]["left_label"], "年柴油成本")
             self.assertEqual(disks[0]["right_label"], "年均建设成本")
-            self.assertEqual(disks[1]["left_label"], "柴发电量")
-            self.assertEqual(disks[1]["right_label"], "绿电电量")
+            capacity_segments = disks[1]["segments"]
+            self.assertEqual(
+                [segment["label"] for segment in capacity_segments],
+                ["柴发容量", "风电容量", "光伏容量", "电储能容量", "燃料电池容量"],
+            )
+            self.assertEqual(capacity_segments[0]["unit"], "kW")
+            self.assertEqual(capacity_segments[3]["unit"], "kWh")
+            self.assertEqual(disks[2]["left_label"], "柴发电量")
+            self.assertEqual(disks[2]["right_label"], "绿电电量")
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -3883,6 +3966,58 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(data["longitude"], 116.4074)
         self.assertEqual(data["source"], "OpenStreetMap Nominatim")
 
+    def test_planning_reverse_geocode_endpoint_returns_place_from_coordinates(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+        def fake_urlopen(url, timeout):
+            self.assertIn("restapi.amap.com/v3/geocode/regeo", url)
+            self.assertIn("location=116.407%2C39.904", url)
+            return FakeResponse(
+                {
+                    "status": "1",
+                    "regeocode": {
+                        "formatted_address": "北京市东城区天安门",
+                        "addressComponent": {
+                            "province": "北京市",
+                            "city": [],
+                            "district": "东城区",
+                            "township": "东华门街道",
+                        },
+                    },
+                }
+            )
+
+        original_key = server.AMAP_WEB_SERVICE_KEY
+        server.AMAP_WEB_SERVICE_KEY = "test-key"
+        try:
+            with patch.object(server, "urlopen_with_user_agent", side_effect=fake_urlopen):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/reverse-geocode",
+                    "POST",
+                    json.dumps({"latitude": 39.904, "longitude": 116.407}).encode("utf-8"),
+                )
+        finally:
+            server.AMAP_WEB_SERVICE_KEY = original_key
+
+        data = json.loads(body.decode("utf-8"))
+        self.assertEqual(status, 200)
+        self.assertEqual(data["place"], "北京市东城区天安门")
+        self.assertEqual(data["display_name"], "北京市东城区天安门")
+        self.assertEqual(data["latitude"], 39.904)
+        self.assertEqual(data["longitude"], 116.407)
+        self.assertEqual(data["source"], "高德地图 Web 服务逆地理编码 API")
+
     def test_planning_geocode_uses_chinese_alias_when_original_query_fails(self):
         class FakeResponse:
             def __init__(self, payload):
@@ -4425,7 +4560,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("年度统计", html)
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
-        self.assertIn("assets/comparison.js?v=20260516-simplified-layout", html)
+        self.assertIn("assets/comparison.js?v=20260518-annual-bars", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
@@ -4453,6 +4588,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("curveNameList", script)
         self.assertIn("comparisonCurveViewer", script)
         self.assertIn("ResultCurveViewer.create", script)
+        self.assertIn("enableAnnualBarComparison: true", script)
         self.assertIn("curve_groups", script)
         self.assertIn("annual_table", script)
         self.assertIn("setData", script)
@@ -4560,6 +4696,31 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".curve-group-tabs", css)
         self.assertIn(".curve-group-tab", css)
         self.assertIn(".annual-stat-table", css)
+        self.assertIn(".annual-view-switch", css)
+        self.assertIn(".annual-view-toggle", css)
+        self.assertIn(".annual-comparison-grid", css)
+        self.assertIn(".annual-comparison-card", css)
+        self.assertIn(".annual-comparison-chart", css)
+        self.assertIn(".annual-chart-axis-label", css)
+        self.assertIn(".annual-chart-x-axis", css)
+        annual_comparison_grid_css = css.split(".annual-comparison-grid {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-columns: minmax(0, var(--annual-grid-left", annual_comparison_grid_css)
+        self.assertIn("grid-template-rows: minmax(0, var(--annual-grid-top", annual_comparison_grid_css)
+        self.assertIn("height: 100%", annual_comparison_grid_css)
+        self.assertIn("overflow: hidden", annual_comparison_grid_css)
+        self.assertIn(".annual-grid-resizer", css)
+        self.assertIn(".annual-grid-resizer-col", css)
+        self.assertIn(".annual-grid-resizer-row", css)
+        self.assertIn(".annual-chart-tooltip", css)
+        self.assertIn(".annual-line-point", css)
+        annual_line_point_css = css.split(".annual-line-point {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: absolute", annual_line_point_css)
+        self.assertIn("border-radius: 50%", annual_line_point_css)
+        self.assertIn("width: 8px", annual_line_point_css)
+        self.assertIn("height: 8px", annual_line_point_css)
+        annual_comparison_fill_css = css.split(".comparison-curve-chart > .annual-comparison-grid,", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-row: 1 / -1", annual_comparison_fill_css)
+        self.assertIn("height: 100%", annual_comparison_fill_css)
         annual_stat_table_css = css.split(".annual-stat-table table {", 1)[1].split("}", 1)[0]
         self.assertIn("width: 100%", annual_stat_table_css)
         self.assertIn("height: 100%", annual_stat_table_css)
@@ -4584,6 +4745,42 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("年度统计", result_curve_script)
         self.assertIn("data-curve-group", result_curve_script)
         self.assertIn("renderAnnualTable", result_curve_script)
+        self.assertIn("enableAnnualBarComparison", result_curve_script)
+        self.assertIn("annualViewMode", result_curve_script)
+        self.assertIn("data-annual-view-mode", result_curve_script)
+        self.assertIn("表格显示", result_curve_script)
+        self.assertIn("柱图对比", result_curve_script)
+        self.assertIn("renderAnnualBarComparison", result_curve_script)
+        self.assertIn("annual-comparison-grid", result_curve_script)
+        self.assertIn("renderAnnualChartLabels", result_curve_script)
+        self.assertIn("annual-chart-axis-label", result_curve_script)
+        self.assertIn("annual-chart-x-axis", result_curve_script)
+        self.assertIn("bindAnnualGridResizers", result_curve_script)
+        self.assertIn("data-annual-grid-resizer", result_curve_script)
+        self.assertIn("setPointerCapture", result_curve_script)
+        self.assertIn("renderAnnualLinePoints", result_curve_script)
+        self.assertIn("bindAnnualChartHover", result_curve_script)
+        self.assertIn("renderAnnualChartHover", result_curve_script)
+        self.assertIn("data-annual-chart-hit", result_curve_script)
+        self.assertIn("data-annual-chart-tooltip", result_curve_script)
+        self.assertIn("formatAnnualMetricValue", result_curve_script)
+        self.assertNotIn('<text class="annual-axis-label', result_curve_script)
+        self.assertNotIn('<text class="annual-x-label', result_curve_script)
+        self.assertNotIn('<circle class="annual-line-point', result_curve_script)
+        self.assertIn("成本对比", result_curve_script)
+        self.assertIn("年均总成本", result_curve_script)
+        self.assertIn("年均建设成本", result_curve_script)
+        self.assertIn("年运行成本", result_curve_script)
+        self.assertIn("度电成本", result_curve_script)
+        self.assertIn("负荷用电量", result_curve_script)
+        self.assertIn("柴油发电量", result_curve_script)
+        self.assertIn("新能源总发电量", result_curve_script)
+        self.assertIn("新能源占比", result_curve_script)
+        self.assertIn("新能源最大可发", result_curve_script)
+        self.assertIn("新能源实际电量", result_curve_script)
+        self.assertIn("新能源弃电率", result_curve_script)
+        self.assertIn("储能发电量", result_curve_script)
+        self.assertIn("燃料电池发电量", result_curve_script)
         self.assertIn("isMultiCurveSelectionEvent", result_curve_script)
         self.assertIn("event?.ctrlKey || event?.shiftKey", result_curve_script)
         self.assertIn("curveRangeFilter", result_curve_script)
@@ -4692,6 +4889,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("overview_tables", script)
         self.assertIn("renderOverviewCompositionBars", script)
         self.assertIn("renderOverviewCompositionBar", script)
+        self.assertIn("normalizeOverviewCompositionSegments", script)
         self.assertIn("bindOverviewColumnResizeHandles", script)
         self.assertIn('data-overview-column-resize="left-middle"', script)
         self.assertIn('data-overview-column-resize="middle-right"', script)
@@ -4708,12 +4906,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("formatOverviewTableForDisplay", evaluation_script)
         self.assertIn("formatOverviewPlanningRows", evaluation_script)
         self.assertIn("renderOverviewCompositionBars", evaluation_script)
+        self.assertIn("normalizeOverviewCompositionSegments", evaluation_script)
         self.assertIn("composition-bar-track", evaluation_script)
         self.assertIn("optimization-overview-grid", script)
         for title in ("规划结果", "规划年指标"):
             self.assertIn(title, script)
         self.assertNotIn("规划年效益", script)
-        for label in ("运行成本", "建设成本", "柴发电量", "新能源电量"):
+        for label in ("运行成本", "建设成本", "容量构成", "柴发容量", "风电容量", "光伏容量", "电储能容量", "燃料电池容量", "柴发电量", "新能源电量"):
             self.assertIn(label, script)
         self.assertIn('{ "名称": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }', script)
         self.assertIn('{ "名称": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }', evaluation_script)
@@ -4737,8 +4936,19 @@ class PowerPlanServerTest(unittest.TestCase):
         composition_track_css = css.split(".composition-bar-track {", 1)[1].split("}", 1)[0]
         self.assertIn("display: flex", composition_track_css)
         self.assertIn("height: 24px", composition_track_css)
+        composition_segment_label_css = css.split(".composition-bar-segment span {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: absolute", composition_segment_label_css)
+        self.assertIn("top: 50%", composition_segment_label_css)
+        self.assertIn("left: 50%", composition_segment_label_css)
+        self.assertIn("display: inline-flex", composition_segment_label_css)
+        self.assertIn("align-items: center", composition_segment_label_css)
+        self.assertIn("justify-content: center", composition_segment_label_css)
+        self.assertIn("line-height: 1", composition_segment_label_css)
+        self.assertIn("transform: translate(-50%, -50%)", composition_segment_label_css)
         self.assertIn(".composition-bar-segment.primary", css)
         self.assertIn(".composition-bar-segment.secondary", css)
+        self.assertIn("--composition-segment-color", css)
+        self.assertIn(".composition-bar-card.multi-segment", css)
         self.assertNotIn(".ratio-disk", css)
         self.assertNotIn("conic-gradient", css)
 
@@ -4978,9 +5188,6 @@ class PowerPlanServerTest(unittest.TestCase):
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
 
         self.assertIn("const COLLAPSED_PANEL_SIZE = 0", planning_script)
-        self.assertIn("const minHeight = COLLAPSED_PANEL_SIZE", planning_script)
-        self.assertIn("Math.max(COLLAPSED_PANEL_SIZE, previousStart + delta)", planning_script)
-        self.assertIn("Math.max(COLLAPSED_PANEL_SIZE, nextStart - delta)", planning_script)
         self.assertIn("Math.max(Number(height) || 240, COLLAPSED_PANEL_SIZE)", planning_script)
         self.assertIn('aria-valuemin="0"', planning_html)
 
@@ -5022,7 +5229,20 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(rail.index('id="schemeList"'), rail.index('id="renameScheme"'))
         self.assertLess(rail.index('id="schemeList"'), rail.index('id="copyScheme"'))
         self.assertIn(".planning-scheme-rail-layout", css)
+        self.assertIn("--planning-scheme-rail-height", css)
+        planning_script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        self.assertIn("applyAdaptiveSchemeRailLayout", planning_script)
+        self.assertIn("scheduleSchemeRailLayout", planning_script)
+        self.assertIn("const workspaceContentHeight", planning_script)
+        self.assertIn("summaryMinimumHeight = Math.max(280", planning_script)
+        self.assertIn("workspaceContentHeight - rowGap - summaryMinimumHeight", planning_script)
+        self.assertIn("grid-template-rows: minmax(150px, var(--planning-scheme-rail-height, auto)) minmax(0, 1fr)", css)
+        self.assertIn("grid-template-rows: auto auto auto auto", css)
+        self.assertIn(".scheme-rail.scheme-list-capped .planning-scheme-rail-layout", css)
         self.assertIn("grid-template-rows: auto auto minmax(0, 1fr) auto", css)
+        self.assertIn(".scheme-rail.scheme-list-capped .scheme-list", css)
+        self.assertIn("overflow: visible", css.split(".planning-scheme-rail-layout .scheme-list {", 1)[1].split("}", 1)[0])
+        self.assertIn("overflow: auto", css.split(".scheme-rail.scheme-list-capped .scheme-list {", 1)[1].split("}", 1)[0])
         self.assertIn(".scheme-actions-rail", css)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", css)
         self.assertIn(".scheme-list-title", css)
@@ -5030,7 +5250,6 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("font-size: 18px", css)
         self.assertIn("font-weight: 900", css)
         self.assertIn("grid-template-columns: 280px minmax(0, 1fr)", css)
-        self.assertIn("grid-template-rows: minmax(150px, 34vh) minmax(220px, 1fr)", css)
         self.assertIn(".workspace > .summary-rail {\n  grid-column: 1;\n  grid-row: 2;", css)
         self.assertIn(".workspace > .editor-panel {\n  grid-column: 2;\n  grid-row: 1 / 3;", css)
 
@@ -5112,10 +5331,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="planningSummary"', html)
         self.assertIn("planningParameterSpecs", script)
         self.assertIn("planningParameterGroups", script)
+        self.assertIn("activePlanningParameterGroup", script)
+        self.assertIn("renderPlanningParameterTabs", script)
+        self.assertIn("selectPlanningParameterGroup", script)
         self.assertIn("planningGroupToggle", script)
         self.assertIn("isPlanningGroupEnabled", script)
-        self.assertIn("bindPlanningParameterResizeHandles", script)
-        self.assertIn("planning-parameter-resize-handle", script)
+        self.assertNotIn("bindPlanningParameterResizeHandles", script)
+        self.assertNotIn("planning-parameter-resize-handle", script)
         self.assertIn("renderPlanningParameterGroupTable", script)
         self.assertIn("planning-parameter-name-col", script)
         self.assertIn("planning-parameter-value-col", script)
@@ -5129,16 +5351,23 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".planning-parameters-card", css)
         self.assertIn("#planningTab #planningParametersTable", css)
         self.assertIn(".planning-parameter-grid", css)
+        self.assertIn(".planning-parameter-tabs", css)
+        self.assertIn(".planning-parameter-tab.active", css)
+        self.assertIn(".planning-parameter-panel", css)
         self.assertIn(".planning-parameter-group", css)
         self.assertIn(".planning-parameter-switch", css)
         self.assertIn(".planning-parameter-group.disabled", css)
-        self.assertIn(".planning-parameter-resize-handle", css)
+        self.assertNotIn(".planning-parameter-resize-handle", css)
         self.assertIn("table-layout: fixed", css)
+        self.assertIn("height: 100%", css)
         self.assertIn(".planning-parameter-name-col", css)
         self.assertIn(".planning-parameter-value-col", css)
         self.assertIn(".planning-parameter-range-col", css)
         self.assertIn("overflow-wrap: anywhere", css)
         for label in (
+            "常规参数",
+            "扰动后安全参数",
+            "频率安全参数",
             "柴油价格(万元/吨)",
             "绿色电量占比下限(0.0-1.0)",
             "规划求解时间上限(分钟)",
@@ -5424,11 +5653,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("height: var(--time-table-height", css)
         self.assertIn("max-height: var(--panel-table-max-height", css)
         self.assertIn("#timeTab.tab-panel.active", css)
+        time_tab_active_css = css.split("#timeTab.tab-panel.active {", 1)[1].split("}", 1)[0]
+        self.assertIn("overflow: hidden", time_tab_active_css)
+        time_table_card_css = css.split("#timeTab .table-card {", 1)[1].split("}", 1)[0]
+        self.assertIn("flex: 1 1 0", time_table_card_css)
         self.assertIn("syncAdaptiveLayout", script)
         self.assertIn("applyAdaptiveTimeSeriesLayout", script)
         self.assertIn("ResizeObserver", script)
         self.assertIn("timeChartManualHeight", script)
         self.assertIn("Math.round(tableHeight)", script)
+        self.assertIn("Math.max(COLLAPSED_PANEL_SIZE, available - chartHeight)", script)
+        self.assertNotIn("Math.min(620, Math.max(COLLAPSED_PANEL_SIZE, available - chartHeight))", script)
 
     def test_planning_frontend_defers_time_series_loading(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
@@ -5486,7 +5721,6 @@ class PowerPlanServerTest(unittest.TestCase):
             "timeSeriesImportPreview",
             "timeSeriesImportSummary",
             "confirmTimeSeriesImport",
-            "cancelTimeSeriesImport",
             "closeTimeSeriesImport",
             "openLoadGenerator",
             "loadGeneratorModal",
@@ -5499,7 +5733,6 @@ class PowerPlanServerTest(unittest.TestCase):
             "saveLoadTemplate",
             "loadGeneratorPreview",
             "confirmLoadGenerator",
-            "cancelLoadGenerator",
             "closeLoadGenerator",
             "weatherPlace",
             "geocodePlace",
@@ -5511,32 +5744,49 @@ class PowerPlanServerTest(unittest.TestCase):
             "weatherImportStatus",
             "mapPickerModal",
             "mapPickerCanvas",
+            "weatherPreviewResizeHandle",
+            "weatherPreviewStats",
             "closeMapPicker",
             "confirmMapPoint",
         ):
             self.assertIn(f'id="{element_id}"', html)
+        self.assertIn('id="weatherLatitude" type="number" min="-90" max="90" step="0.001"', html)
+        self.assertIn('id="weatherLongitude" type="number" min="-180" max="180" step="0.001"', html)
         self.assertIn('id="weatherYear" type="number" min="2001" step="1" value="2024"', html)
+        self.assertIn('class="time-chart-toolbar"', html)
+        time_chart_toolbar = html.split('<div class="time-chart-toolbar">', 1)[1].split('<svg id="timeChart"', 1)[0]
+        self.assertLess(time_chart_toolbar.index('class="weather-import-bar"'), time_chart_toolbar.index('class="curve-switch-row"'))
         self.assertIn('accept=".csv,.xlsx"', html)
         weather_bar = html.split('<div class="weather-import-bar"', 1)[1].split("</div>", 1)[0]
         modal = html.split('<div id="mapPickerModal"', 1)[1].split('<div id="timeResizeHandle"', 1)[0]
         import_modal = html.split('<div id="timeSeriesImportModal"', 1)[1].split('<div id="loadGeneratorModal"', 1)[0]
-        self.assertIn(">导入曲线<", weather_bar)
+        self.assertIn(">文件导入<", weather_bar)
+        self.assertNotIn(">气象获取<", weather_bar)
+        self.assertNotIn(">年份<", weather_bar)
+        self.assertNotIn('id="weatherLatitude"', weather_bar)
+        self.assertNotIn('id="weatherLongitude"', weather_bar)
+        self.assertNotIn('id="weatherYear"', weather_bar)
+        self.assertNotIn('id="fetchWeatherHistory"', weather_bar)
+        self.assertNotIn('id="weatherImportStatus"', weather_bar)
+        self.assertNotIn(">历史数据年<", weather_bar)
         self.assertIn(">负荷生成<", weather_bar)
         self.assertIn(">坐标选择<", weather_bar)
-        self.assertLess(weather_bar.index(">导入曲线<"), weather_bar.index(">负荷生成<"))
+        self.assertLess(weather_bar.index(">文件导入<"), weather_bar.index(">负荷生成<"))
         self.assertLess(weather_bar.index(">负荷生成<"), weather_bar.index(">坐标选择<"))
-        for label in ("打开文件", "曲线预览", "风速", "太阳辐射", "环境温度", "负荷", "确定", "取消"):
+        for label in ("打开文件", "曲线预览", "风速", "太阳辐射", "环境温度", "负荷", "确认", "取消"):
             self.assertIn(label, import_modal)
+        self.assertNotIn('id="cancelTimeSeriesImport"', import_modal)
         self.assertLess(import_modal.index('id="timeSeriesImportChart"'), import_modal.index('id="timeSeriesImportResizeHandle"'))
         self.assertLess(import_modal.index('id="timeSeriesImportResizeHandle"'), import_modal.index('id="timeSeriesImportPreview"'))
         for curve_key in ("wind_speed", "solar_irradiance", "temperature", "load"):
             self.assertIn(f'data-import-curve="{curve_key}"', import_modal)
-        for label in ("随机曲线", "负荷最大值", "负荷最小值", "负荷平均值", "文件导入", "保存模板", "确定", "取消"):
+        for label in ("随机曲线", "负荷最大值", "负荷最小值", "负荷平均值", "文件导入", "保存模板", "确认", "取消"):
             self.assertIn(label, html)
         load_generator_modal = html.split('<div id="loadGeneratorModal"', 1)[1].split('<div id="mapPickerModal"', 1)[0]
         self.assertIn('<option value="file">文件导入</option>', load_generator_modal)
         self.assertIn('id="loadCurveImportFile"', load_generator_modal)
         self.assertNotIn('id="importLoadCurveFile"', load_generator_modal)
+        self.assertNotIn('id="cancelLoadGenerator"', load_generator_modal)
         self.assertNotIn(">文件导入</button>", load_generator_modal)
         for label in ("模式1", "模式2", "模式3"):
             self.assertNotIn(label, load_generator_modal)
@@ -5551,9 +5801,41 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn(">地图选点</button>", weather_bar)
         self.assertIn('id="weatherPlace"', modal)
         self.assertIn('id="geocodePlace"', modal)
+        self.assertIn(">定位<", modal)
+        self.assertNotIn(">获取坐标<", modal)
+        self.assertIn('class="coordinate-weather-row"', modal)
+        self.assertIn('id="weatherLatitude"', modal)
+        self.assertIn('id="weatherLongitude"', modal)
+        self.assertIn('id="weatherYear"', modal)
+        self.assertIn('id="fetchWeatherHistory"', modal)
+        self.assertIn('id="weatherImportStatus"', modal)
+        self.assertIn(">年份<", modal)
+        self.assertIn(">气象获取<", modal)
+        self.assertIn('class="coordinate-control-row"', modal)
+        self.assertLess(modal.index('id="weatherPlace"'), modal.index('id="weatherLatitude"'))
+        self.assertLess(modal.index('id="weatherLatitude"'), modal.index('id="mapPickerCanvas"'))
+        self.assertNotIn('class="map-picker-foot"', modal)
+        self.assertIn('class="coordinate-map-hint"', modal)
+        self.assertIn('class="weather-preview-panel"', modal)
+        self.assertIn('class="weather-preview-legend"', modal)
+        self.assertIn('id="weatherPreviewChart"', modal)
+        self.assertIn('id="weatherPreviewResizeHandle"', modal)
+        self.assertIn('id="weatherPreviewStats"', modal)
+        self.assertNotIn('id="cancelMapPoint"', modal)
+        self.assertIn('class="coordinate-header-actions"', modal)
+        self.assertIn(">确认<", modal)
+        self.assertIn(">取消<", modal)
+        self.assertLess(modal.index('id="mapPickerCanvas"'), modal.index('id="weatherPreviewChart"'))
+        self.assertLess(modal.index('id="mapPickerCanvas"'), modal.index('id="weatherPreviewResizeHandle"'))
+        self.assertLess(modal.index('id="weatherPreviewResizeHandle"'), modal.index('id="weatherPreviewChart"'))
+        self.assertLess(modal.index('id="confirmMapPoint"'), modal.index('id="closeMapPicker"'))
+        self.assertLess(modal.index('id="closeMapPicker"'), modal.index('class="coordinate-control-row"'))
+        for curve_key in ("wind_speed", "solar_irradiance", "temperature"):
+            self.assertIn(f'data-weather-preview-curve="{curve_key}"', modal)
         self.assertIn("根据地名查找坐标", modal)
         self.assertIn("/api/planning/map-config", script)
         self.assertIn("/api/planning/geocode", script)
+        self.assertIn("/api/planning/reverse-geocode", script)
         self.assertIn("/api/planning/weather-history", script)
         self.assertIn("/api/planning/time-series/import", script)
         self.assertIn("/api/planning/load-curve/generate", script)
@@ -5637,17 +5919,47 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("lngLatToWebMercatorPixel", script)
         self.assertIn("webMercatorPixelToLngLat", script)
         self.assertIn("setMapPoint", script)
+        self.assertIn("reverseGeocodePoint", script)
+        self.assertIn("setWeatherPlaceFromReverseGeocode", script)
+        self.assertIn("mapReverseGeocodeToken", script)
+        self.assertIn("syncMapPointFromInputs", script)
+        self.assertIn("pendingWeatherRows", script)
+        self.assertIn("weatherPreviewVisibleCurves", script)
+        self.assertIn("renderWeatherPreviewChart", script)
+        self.assertIn("renderWeatherPreviewStats", script)
+        self.assertIn("calculateSeriesStats(rows, key)", script)
+        self.assertIn("toggleWeatherPreviewCurve", script)
+        self.assertIn("applyPendingWeatherHistory", script)
+        self.assertIn("bindWeatherPreviewResizeHandle", script)
+        self.assertIn("weatherPreviewManualHeight", script)
+        self.assertIn("--weather-preview-panel-height", script)
+        self.assertIn("WEATHER_COORDINATE_STORAGE_KEY", script)
+        self.assertIn("powerPlanWeatherCoordinate", script)
+        self.assertIn("rememberWeatherCoordinate", script)
+        self.assertIn("restoreWeatherCoordinate", script)
+        self.assertIn("place: cleanPlace", script)
+        self.assertIn('document.getElementById("weatherPlace").value = place', script)
+        self.assertIn("localStorage.setItem(WEATHER_COORDINATE_STORAGE_KEY", script)
+        self.assertIn("localStorage.getItem(WEATHER_COORDINATE_STORAGE_KEY", script)
+        self.assertIn("formatCoordinate", script)
+        self.assertIn("number.toFixed(3)", script)
+        self.assertNotIn("toFixed(6)", script)
         self.assertIn('setMapPoint(result.latitude, result.longitude, "geocode", result)', script)
         self.assertIn("geocodeHintLabel", script)
         self.assertIn("高德定位", script)
         self.assertIn('state.mapInstance.setZoom(11)', script)
         self.assertIn("未配置${mapProviderLabel(state.mapProvider)} Key", script)
         self.assertIn("geocodePlace", script)
+        self.assertIn("正在定位...", script)
+        self.assertIn("正在解析地点...", script)
+        self.assertIn("地点已更新", script)
+        self.assertNotIn("正在获取坐标...", script)
         self.assertIn("fetchWeatherHistory", script)
         self.assertIn("validateWeatherInputs", script)
         self.assertIn("历史数据年必须", script)
         self.assertIn("rows.length !== 8760", script)
-        self.assertIn("未更新数据", script)
+        self.assertIn("气象数据已预览，请确认后更新主页面", script)
+        self.assertIn("保存气象坐标失败", (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8"))
         self.assertIn("wind_speed: weather.wind_speed", script)
         self.assertIn("solar_irradiance: weather.solar_irradiance", script)
         self.assertIn("temperature: weather.temperature", script)
@@ -5658,7 +5970,27 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("latitude.toFixed(3)", script)
         self.assertIn("longitude.toFixed(3)", script)
         self.assertNotIn("风速、太阳辐照和温度数据", script)
+        self.assertIn(".time-chart-toolbar", css)
+        time_chart_toolbar_css = css.split(".time-chart-toolbar {", 1)[1].split("}", 1)[0]
+        self.assertIn("justify-content: space-between", time_chart_toolbar_css)
+        self.assertIn("overflow-x: auto", time_chart_toolbar_css)
         self.assertIn(".weather-import-bar", css)
+        weather_import_bar_css = css.split(".weather-import-bar {", 1)[1].split("}", 1)[0]
+        self.assertIn("justify-content: flex-start", weather_import_bar_css)
+        self.assertIn("flex-wrap: nowrap", weather_import_bar_css)
+        self.assertIn("flex: 1 1 auto", weather_import_bar_css)
+        self.assertIn("overflow-x: auto", weather_import_bar_css)
+        compact_weather_input_css = css.split("#weatherLatitude,", 1)[1].split("}", 1)[0]
+        self.assertIn("#weatherLongitude", compact_weather_input_css)
+        self.assertIn("#weatherYear", compact_weather_input_css)
+        self.assertIn("width: 94px", compact_weather_input_css)
+        curve_switch_row_css = css.split(".curve-switch-row {", 1)[1].split("}", 1)[0]
+        self.assertIn("justify-content: flex-end", curve_switch_row_css)
+        self.assertIn("margin: 0 0 0 auto", curve_switch_row_css)
+        self.assertIn(".curve-switch-row .curve-buttons", css)
+        self.assertIn(".curve-switch-row #timeChartRange", css)
+        curve_switch_nowrap_css = css.split(".curve-switch-row .curve-buttons,", 1)[1].split("}", 1)[0]
+        self.assertIn("flex-wrap: nowrap", curve_switch_nowrap_css)
         self.assertIn(".time-series-import-dialog", css)
         self.assertIn(".time-series-import-toolbar", css)
         self.assertIn(".time-series-import-chart-panel", css)
@@ -5675,6 +6007,16 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("border-color: rgba(20, 190, 255, 0.42)", css)
         self.assertIn("linear-gradient(rgba(33, 213, 255, 0.07)", css)
         self.assertIn(".coordinate-search-row", css)
+        self.assertIn(".coordinate-control-row", css)
+        self.assertIn(".coordinate-weather-row", css)
+        self.assertIn(".coordinate-map-hint", css)
+        self.assertIn(".weather-preview-panel", css)
+        self.assertIn(".weather-preview-chart", css)
+        self.assertIn(".weather-preview-legend", css)
+        self.assertIn(".weather-preview-resize-handle", css)
+        self.assertIn(".weather-preview-stats", css)
+        self.assertIn(".weather-preview-stat-item", css)
+        self.assertIn(".coordinate-header-actions", css)
         self.assertIn(".weather-import-status.error", css)
         self.assertIn(".map-picker-modal", css)
         self.assertIn(".map-picker-canvas", css)
@@ -5683,11 +6025,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .load-generator-dialog', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-dialog', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .coordinate-control-row', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-panel', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tabs', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-toolbar', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head button', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .coordinate-header-actions button', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row button', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid input', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row input', css)
         theme_modal_dialog_css = css.split('body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-dialog {', 1)[1].split("}", 1)[0]
         self.assertIn("background: var(--theme-panel-bg)", theme_modal_dialog_css)
         self.assertIn("color: var(--theme-text)", theme_modal_dialog_css)

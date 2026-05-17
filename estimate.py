@@ -334,7 +334,7 @@ def capacities_from_planning_rows(rows: list[dict[str, Any]]) -> dict[str, float
         "fuel_cell_power_capacity": 0.0,
     }
     for row in rows or []:
-        device_type = str(row.get("设备类型", ""))
+        device_type = str(row.get("设备类型") or row.get("名称") or "")
         total = planning_row_total_capacity(row)
         if "柴" in device_type:
             capacities["diesel_capacity"] += total

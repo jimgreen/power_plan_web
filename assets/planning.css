@@ -2,6 +2,7 @@
 
 :root {
   --panel-table-max-height: min(62vh, 680px);
+  --planning-scheme-rail-height: auto;
   --time-table-height: clamp(220px, 38vh, 520px);
   --summary-panel-height: min(72vh, 960px);
   --summary-table-height: min(72vh, 960px);
@@ -111,7 +112,7 @@ button:disabled {
 .workspace {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  grid-template-rows: minmax(150px, 34vh) minmax(220px, 1fr);
+  grid-template-rows: minmax(150px, var(--planning-scheme-rail-height, auto)) minmax(0, 1fr);
   gap: 18px;
   padding: 18px;
   min-height: 0;
@@ -121,6 +122,7 @@ button:disabled {
 .workspace > .scheme-rail {
   grid-column: 1;
   grid-row: 1;
+  overflow: hidden;
 }
 
 .workspace > .summary-rail {
@@ -185,10 +187,10 @@ button:disabled {
 }
 
 .planning-scheme-rail-layout {
-  height: 100%;
+  height: auto;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto;
   gap: 12px;
 }
 
@@ -198,6 +200,15 @@ button:disabled {
 
 .planning-scheme-rail-layout .scheme-list {
   min-height: 0;
+  overflow: visible;
+}
+
+.scheme-rail.scheme-list-capped .planning-scheme-rail-layout {
+  height: 100%;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+
+.scheme-rail.scheme-list-capped .scheme-list {
   overflow: auto;
 }
 
@@ -578,6 +589,11 @@ button:disabled {
 .task-section-head h2 {
   margin: 0;
   font-size: 16px;
+}
+
+.task-section-evaluation .task-section-head {
+  justify-content: flex-start;
+  gap: 14px;
 }
 
 .task-scheme-filter {
@@ -1085,12 +1101,317 @@ button:disabled {
   table-layout: fixed;
 }
 
+.annual-view-switch {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  align-content: start;
+}
+
+.annual-view-toggle {
+  width: 100%;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #d7e4e0;
+  border-radius: 8px;
+  background: #edf4f2;
+  color: #24413d;
+  font-size: 13px;
+  font-weight: 900;
+  text-align: center;
+}
+
+.annual-view-toggle.active {
+  border-color: #0d5c59;
+  background: #0d5c59;
+  color: #ffffff;
+}
+
+.annual-view-toggle:hover,
+.annual-view-toggle:focus-visible {
+  outline: none;
+  border-color: #0d5c59;
+  background: rgba(13, 92, 89, 0.14);
+  color: #102b2a;
+}
+
+.annual-comparison-grid {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, var(--annual-grid-left, 1fr)) minmax(0, var(--annual-grid-right, 1fr));
+  grid-template-rows: minmax(0, var(--annual-grid-top, 1fr)) minmax(0, var(--annual-grid-bottom, 1fr));
+  gap: 10px;
+  overflow: hidden;
+}
+
+.annual-grid-resizer {
+  position: absolute;
+  z-index: 8;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  touch-action: none;
+}
+
+.annual-grid-resizer::before {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(13, 92, 89, 0.34);
+  opacity: 0.78;
+  transition: background 0.16s ease, opacity 0.16s ease, box-shadow 0.16s ease;
+}
+
+.annual-grid-resizer-col {
+  top: 0;
+  bottom: 0;
+  left: calc(var(--annual-grid-col-position, 50%) - 5px);
+  width: 10px;
+  cursor: col-resize;
+}
+
+.annual-grid-resizer-col::before {
+  top: 8px;
+  bottom: 8px;
+  left: 4px;
+  width: 2px;
+}
+
+.annual-grid-resizer-row {
+  left: 0;
+  right: 0;
+  top: calc(var(--annual-grid-row-position, 50%) - 5px);
+  height: 10px;
+  cursor: row-resize;
+}
+
+.annual-grid-resizer-row::before {
+  left: 8px;
+  right: 8px;
+  top: 4px;
+  height: 2px;
+}
+
+.annual-grid-resizer:hover::before,
+.annual-grid-resizer:focus-visible::before,
+.annual-grid-resizer.dragging::before {
+  background: #0d5c59;
+  opacity: 1;
+  box-shadow: 0 0 0 3px rgba(13, 92, 89, 0.12);
+}
+
+.annual-grid-resizer:focus-visible {
+  outline: none;
+}
+
+.annual-comparison-card {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #d7e4e0;
+  border-radius: 12px;
+  background: #f8fbfa;
+}
+
+.annual-comparison-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.annual-comparison-head h3 {
+  margin: 0;
+  color: #102b2a;
+  font-size: 14px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.annual-comparison-head span {
+  min-width: 0;
+  color: #5a716e;
+  font-size: 11px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annual-comparison-chart {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.annual-comparison-chart svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: block;
+}
+
+.annual-axis-line {
+  stroke: #224048;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.annual-grid-line {
+  stroke: #c8d8d3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.annual-bar {
+  opacity: 0.82;
+  cursor: pointer;
+}
+
+.annual-bar:hover {
+  opacity: 1;
+}
+
+.annual-line {
+  fill: none;
+  stroke: #ff6bcb;
+  stroke-width: 2.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.annual-line-points {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.annual-line-point {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid #ffffff;
+  border-radius: 50%;
+  background: #ff6bcb;
+  box-shadow: 0 0 0 2px rgba(255, 107, 203, 0.22);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+}
+
+.annual-line-point:hover {
+  box-shadow: 0 0 0 4px rgba(255, 107, 203, 0.28);
+  transform: translate(-50%, -50%) scale(1.14);
+}
+
+.annual-chart-axis-labels,
+.annual-chart-x-axis {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.annual-chart-axis-label,
+.annual-chart-x-axis span {
+  position: absolute;
+  color: #5a716e;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.annual-chart-axis-label {
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.annual-chart-axis-label-left {
+  text-align: right;
+  transform: translate(calc(-100% - 8px), -50%);
+}
+
+.annual-chart-axis-label-right {
+  text-align: left;
+  transform: translate(8px, -50%);
+}
+
+.annual-chart-x-axis span {
+  max-width: var(--annual-x-label-width, 12%);
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  transform: translate(-50%, -50%);
+}
+
+.annual-comparison-legend {
+  position: absolute;
+  top: 4px;
+  left: 74px;
+  right: 66px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px 10px;
+  flex-wrap: wrap;
+  color: #405b58;
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.annual-comparison-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.annual-comparison-legend i {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 2px;
+}
+
+.annual-comparison-legend i.line {
+  height: 3px;
+  border-radius: 999px;
+}
+
+.annual-chart-tooltip {
+  z-index: 12;
+}
+
 .comparison-curve-chart > .annual-stat-table,
 .optimization-curve-chart > .annual-stat-table {
   grid-row: 1 / -1;
   width: 100%;
   height: 100%;
   max-height: none;
+  align-self: stretch;
+  justify-self: stretch;
+}
+
+.comparison-curve-chart > .annual-comparison-grid,
+.optimization-curve-chart > .annual-comparison-grid {
+  grid-row: 1 / -1;
+  width: 100%;
+  height: 100%;
   align-self: stretch;
   justify-self: stretch;
 }
@@ -1658,8 +1979,16 @@ button:disabled {
 
 .composition-bar-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
   gap: 8px;
+}
+
+.composition-bar-card.multi-segment {
+  gap: 10px;
+}
+
+.composition-bar-card.multi-segment .composition-bar-summary {
+  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
 }
 
 .composition-bar-summary span {
@@ -1691,10 +2020,13 @@ button:disabled {
 }
 
 .composition-bar-segment {
+  position: relative;
   min-width: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  height: 100%;
+  background: var(--composition-segment-color, #0d5c59);
   transition: width 0.2s ease;
 }
 
@@ -1707,10 +2039,23 @@ button:disabled {
 }
 
 .composition-bar-segment span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
   color: #fff;
   font-size: 12px;
   font-weight: 900;
-  text-shadow: 0 1px 2px rgba(16, 43, 42, 0.32);
+  line-height: 1;
+  text-shadow: none;
+  transform: translate(-50%, -50%);
   white-space: nowrap;
 }
 
@@ -2437,6 +2782,31 @@ button:disabled {
   border-bottom: 1px solid rgba(34, 64, 72, 0.12);
 }
 
+.planning-command-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: nowrap;
+  padding: 12px 14px;
+  border-radius: 14px;
+}
+
+.planning-command-card .current-scheme-panel {
+  flex: 0 1 auto;
+}
+
+.planning-command-card .tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+
+.planning-command-card .scheme-actions {
+  flex: 0 0 auto;
+}
+
 .tabs {
   display: flex;
   gap: 10px;
@@ -2652,15 +3022,29 @@ h2 { font-size: 19px; }
   box-shadow: 0 8px 18px rgba(13, 92, 89, 0.18);
 }
 
+.time-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  margin: 0 0 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
 .weather-import-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
+  flex: 1 1 auto;
   flex-wrap: nowrap;
   min-width: 0;
+  margin: 0;
   overflow-x: auto;
-  margin: 0 0 10px;
-  padding-bottom: 2px;
+  overflow-y: hidden;
 }
 
 .weather-import-bar label {
@@ -2682,6 +3066,12 @@ h2 { font-size: 19px; }
   color: #172033;
 }
 
+#weatherLatitude,
+#weatherLongitude,
+#weatherYear {
+  width: 94px;
+}
+
 #weatherPlace {
   width: 150px;
 }
@@ -2697,10 +3087,14 @@ h2 { font-size: 19px; }
 
 .weather-import-status {
   flex: 0 0 auto;
-  min-width: 120px;
+  min-width: 86px;
+  max-width: 150px;
   color: #5a716e;
   font-size: 13px;
   font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .weather-import-status.error {
@@ -2714,10 +3108,17 @@ h2 { font-size: 19px; }
 .curve-switch-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
-  flex-wrap: wrap;
-  margin: 0 0 10px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  min-width: max-content;
+  margin: 0 0 0 auto;
+}
+
+.curve-switch-row .curve-buttons,
+.curve-switch-row #timeChartRange {
+  flex-wrap: nowrap;
 }
 
 .curve-range-filter,
@@ -2833,6 +3234,11 @@ body.modal-open {
   box-shadow: 0 24px 70px rgba(13, 32, 38, 0.28);
 }
 
+.coordinate-picker-dialog {
+  width: min(1120px, 96vw);
+  height: min(820px, calc(100vh - 40px));
+}
+
 .load-generator-dialog {
   width: min(980px, 94vw);
   height: min(620px, calc(100vh - 48px));
@@ -2868,7 +3274,10 @@ body.modal-open {
 }
 
 .map-picker-head,
+.coordinate-control-row,
 .coordinate-search-row,
+.coordinate-weather-row,
+.coordinate-map-hint,
 .map-picker-foot {
   display: flex;
   align-items: center;
@@ -2876,6 +3285,29 @@ body.modal-open {
   gap: 12px;
   padding: 12px 14px;
   border-bottom: 1px solid #e5eeeb;
+}
+
+.coordinate-control-row {
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  align-items: center;
+  overflow-x: auto;
+}
+
+.coordinate-control-row .coordinate-search-row,
+.coordinate-control-row .coordinate-weather-row {
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
+}
+
+.coordinate-control-row .coordinate-search-row {
+  flex: 0 0 auto;
+}
+
+.coordinate-control-row .coordinate-weather-row {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .map-provider-tabs {
@@ -2913,7 +3345,10 @@ body.modal-open {
 }
 
 .map-picker-head button,
+.coordinate-header-actions button,
 .coordinate-search-row button,
+.coordinate-weather-row button,
+.weather-preview-legend button,
 .map-picker-foot button {
   padding: 8px 12px;
   border-radius: 10px;
@@ -2925,6 +3360,13 @@ body.modal-open {
 .coordinate-search-row {
   justify-content: flex-start;
   flex-wrap: nowrap;
+}
+
+.coordinate-weather-row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  row-gap: 10px;
+  background: #fbfdfc;
 }
 
 .load-generator-grid {
@@ -3047,7 +3489,8 @@ body.modal-open {
   outline-offset: 2px;
 }
 
-.coordinate-search-row label {
+.coordinate-search-row label,
+.coordinate-weather-row label {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -3071,6 +3514,178 @@ body.modal-open {
   padding: 7px 8px;
   background: #f8fbfa;
   color: #172033;
+}
+
+.coordinate-weather-row input {
+  width: 94px;
+  border: 1px solid #d7e4e0;
+  border-radius: 10px;
+  padding: 7px 8px;
+  background: #f8fbfa;
+  color: #172033;
+}
+
+.coordinate-weather-row .weather-import-status {
+  flex: 1 1 160px;
+  min-width: 140px;
+  max-width: none;
+}
+
+.coordinate-map-hint {
+  justify-content: flex-start;
+  padding-block: 8px;
+  color: #5a716e;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.coordinate-picker-dialog .map-picker-canvas {
+  flex: 1 1 42%;
+  min-height: 180px;
+}
+
+.weather-preview-panel {
+  flex: 0 0 var(--weather-preview-panel-height, clamp(190px, 25vh, 280px));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid #e5eeeb;
+  background: #fbfdfc;
+}
+
+.weather-preview-resize-handle {
+  flex: 0 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.weather-preview-resize-handle::before {
+  content: "";
+  width: 96px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(120, 154, 148, 0.58);
+}
+
+.weather-preview-resize-handle:hover::before,
+.weather-preview-resize-handle.dragging::before,
+.weather-preview-resize-handle:focus-visible::before {
+  background: #0d5c59;
+}
+
+.weather-preview-resize-handle:focus-visible {
+  outline: 2px solid #21a8c7;
+  outline-offset: 2px;
+}
+
+.weather-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.weather-preview-head strong {
+  color: #102b2a;
+  font-size: 14px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.weather-preview-legend {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.weather-preview-legend button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.weather-preview-legend button span {
+  width: 16px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--curve-color, #21d5ff);
+}
+
+.weather-preview-legend button.active,
+.weather-preview-legend button[aria-pressed="true"] {
+  border-color: #0d5c59;
+  background: #0d5c59;
+  color: #ffffff;
+}
+
+.weather-preview-chart {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 120px;
+  border: 1px solid #d7e4e0;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f9fcfb, #edf6f3);
+}
+
+.weather-preview-stats {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  min-height: 34px;
+  color: #405b58;
+}
+
+.weather-preview-stat-empty {
+  grid-column: 1 / -1;
+  align-self: center;
+  color: #5a716e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.weather-preview-stat-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid #d7e4e0;
+  border-left: 4px solid var(--curve-color, #21d5ff);
+  border-radius: 10px;
+  background: rgba(248, 251, 250, 0.88);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.weather-preview-stat-item strong,
+.weather-preview-stat-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weather-preview-stat-item strong {
+  color: #102b2a;
+}
+
+.coordinate-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 .load-generator-grid input,
@@ -3393,12 +4008,13 @@ body.modal-open {
 }
 
 #timeTab.tab-panel.active {
-  overflow: auto;
+  overflow: hidden;
 }
 
 #timeTab .table-card {
-  flex: 0 0 auto;
+  flex: 1 1 0;
   min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   margin-bottom: 0;
@@ -3431,10 +4047,9 @@ body.modal-open {
 }
 
 .planning-parameter-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-auto-rows: minmax(0, auto);
-  gap: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -3446,10 +4061,47 @@ body.modal-open {
   align-items: start;
 }
 
+.planning-parameter-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px;
+  border-bottom: 1px solid #d7e6e2;
+}
+
+.planning-parameter-tab {
+  min-width: 132px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid #cadeda;
+  border-radius: 8px 8px 0 0;
+  background: #eef6f4;
+  color: #335b56;
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.planning-parameter-tab.active {
+  border-color: #0d5c59;
+  background: #0d5c59;
+  color: #fff;
+}
+
+.planning-parameter-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
 .planning-parameter-group {
   min-width: 0;
   min-height: 0;
-  height: auto;
+  height: 100%;
+  flex: 1 1 auto;
   overflow: auto;
   border: 1px solid #d7e6e2;
   border-radius: 8px;
@@ -3537,29 +4189,6 @@ body.modal-open {
 
 .planning-parameter-switch input:checked + span::before {
   transform: translateX(20px);
-}
-
-.planning-parameter-resize-handle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 14px;
-  cursor: row-resize;
-  touch-action: none;
-}
-
-.planning-parameter-resize-handle::before {
-  content: "";
-  width: 96px;
-  height: 4px;
-  border-radius: 999px;
-  background: #9db4ae;
-}
-
-.planning-parameter-resize-handle:hover::before,
-.planning-parameter-resize-handle.dragging::before,
-.planning-parameter-resize-handle:focus-visible::before {
-  background: #0d5c59;
 }
 
 .planning-parameter-group table {
@@ -3655,10 +4284,6 @@ td input[type="checkbox"] {
 
 .planning-parameters-table .planning-parameter-group table {
   min-width: 0;
-}
-
-.planning-parameter-grid.summary .planning-parameter-resize-handle {
-  display: none;
 }
 
 .switch-cell {
@@ -3899,6 +4524,17 @@ td input[type="checkbox"] {
     align-items: flex-start;
     flex-direction: column;
   }
+  .planning-command-card {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .planning-command-card .tabs {
+    width: 100%;
+  }
+  .planning-command-card .scheme-actions {
+    width: auto;
+    margin-left: auto;
+  }
   .optimization-current-scheme {
     margin-left: 0;
     text-align: left;
@@ -3907,11 +4543,19 @@ td input[type="checkbox"] {
     min-height: 70vh;
   }
   .overview-grid,
-  .histogram-grid { grid-template-columns: 1fr; }
+  .histogram-grid,
+  .annual-comparison-grid { grid-template-columns: 1fr; }
   .histogram-grid {
     grid-template-rows: none;
     height: auto;
     max-height: none;
+  }
+  .annual-comparison-grid {
+    grid-template-rows: none;
+    height: auto;
+  }
+  .annual-grid-resizer {
+    display: none;
   }
   .scheme-rail,
   .summary-rail { max-height: none; }
@@ -4004,7 +4648,11 @@ body {
 .time-series-import-toolbar button,
 .map-picker-head button,
 .coordinate-search-row button,
+.coordinate-weather-row button,
+.weather-preview-legend button,
+.coordinate-weather-actions button,
 .map-picker-foot button,
+.annual-view-toggle,
 .task-actions button:not(.primary):not(.danger) {
   border: 1px solid rgba(21, 211, 255, 0.48);
   border-radius: 8px;
@@ -4024,7 +4672,8 @@ body {
 .tab.active,
 .comparison-tab.active,
 .curve-button.active,
-.curve-button[aria-pressed="true"] {
+.curve-button[aria-pressed="true"],
+.annual-view-toggle.active {
   border-color: rgba(108, 238, 255, 0.94);
   background:
     radial-gradient(circle at 50% 0%, rgba(44, 225, 255, 0.28), transparent 48%),
@@ -4054,8 +4703,13 @@ body {
 .weather-import-bar button:hover,
 .time-series-import-toolbar button:hover,
 .map-picker-head button:hover,
+.coordinate-header-actions button:hover,
 .coordinate-search-row button:hover,
-.map-picker-foot button:hover {
+.coordinate-weather-row button:hover,
+.weather-preview-legend button:hover,
+.map-picker-foot button:hover,
+.annual-view-toggle:hover,
+.annual-view-toggle:focus-visible {
   border-color: rgba(108, 238, 255, 0.94);
   color: #ffffff;
   box-shadow:
@@ -4108,6 +4762,7 @@ body {
 .composition-bar-card,
 .green-chart-card,
 .safety-chart-card,
+.annual-comparison-card,
 .mini-bar-chart,
 .overview-item,
 .histogram-panel,
@@ -4134,6 +4789,7 @@ body {
 .comparison-table-card h2,
 .comparison-curve-title,
 .comparison-curve-stats strong,
+.annual-comparison-head h3,
 .panel-heading h1,
 .panel-heading h2,
 h1,
@@ -4152,11 +4808,15 @@ h2,
 .weather-import-bar label,
 .load-generator-grid label,
 .coordinate-search-row label,
+.coordinate-weather-row label,
 .weather-import-status,
+.coordinate-map-hint,
 .filter-hint,
 .overview-item span,
 .histogram-head span,
 .histogram-meta,
+.annual-comparison-head span,
+.annual-comparison-legend,
 .tasks-toolbar p,
 .task-empty,
 .composition-bar-summary,
@@ -4169,6 +4829,11 @@ h2,
   color: var(--hud-muted);
 }
 
+.composition-bar-summary span,
+.composition-bar-legend div {
+  color: var(--hud-muted-strong);
+}
+
 .current-scheme strong,
 .weather-import-status.ok,
 .status-ok,
@@ -4178,6 +4843,19 @@ h2,
 .composition-bar-summary strong,
 .composition-bar-legend strong {
   color: var(--hud-cyan);
+}
+
+.composition-bar-segment.secondary span,
+.composition-bar-segment.segment-2 span {
+  color: #ffffff;
+  text-shadow: none;
+}
+
+.time-series-import-chart text,
+.load-generator-preview text,
+#timeChart text,
+.histogram-svg text {
+  fill: var(--hud-muted-strong);
 }
 
 .task-status-pill.running {
@@ -4338,7 +5016,8 @@ td select,
 .load-generator-grid select,
 .evaluation-result-actions select,
 .comparison-tab-selectors select,
-.coordinate-search-row input {
+.coordinate-search-row input,
+.coordinate-weather-row input {
   border-color: rgba(20, 190, 255, 0.32);
   background: rgba(1, 14, 42, 0.82);
   color: var(--hud-text);
@@ -4352,7 +5031,8 @@ td select:focus,
 .load-generator-grid select:focus,
 .evaluation-result-actions select:focus,
 .comparison-tab-selectors select:focus,
-.coordinate-search-row input:focus {
+.coordinate-search-row input:focus,
+.coordinate-weather-row input:focus {
   outline: 2px solid rgba(33, 213, 255, 0.66);
   background: rgba(3, 28, 68, 0.94);
 }
@@ -4362,7 +5042,8 @@ td input::placeholder,
 .load-generator-grid input::placeholder,
 .evaluation-result-actions select::placeholder,
 .comparison-tab-selectors select::placeholder,
-.coordinate-search-row input::placeholder {
+.coordinate-search-row input::placeholder,
+.coordinate-weather-row input::placeholder {
   color: rgba(189, 234, 255, 0.52);
 }
 
@@ -4373,6 +5054,7 @@ td input::placeholder,
 .time-chart,
 .map-picker-canvas,
 .load-generator-preview,
+.weather-preview-chart,
 .comparison-curve-chart svg {
   background:
     linear-gradient(rgba(33, 213, 255, 0.07) 1px, transparent 1px),
@@ -4493,6 +5175,22 @@ td input::placeholder,
   box-shadow: none;
 }
 
+.planning-parameter-tabs {
+  border-bottom-color: rgba(20, 190, 255, 0.22);
+}
+
+.planning-parameter-tab {
+  border-color: rgba(20, 190, 255, 0.24);
+  background: rgba(2, 20, 48, 0.72);
+  color: var(--hud-muted-strong);
+}
+
+.planning-parameter-tab.active {
+  border-color: rgba(108, 238, 255, 0.72);
+  background: rgba(6, 62, 108, 0.78);
+  color: var(--hud-text);
+}
+
 .planning-parameter-group h3 {
   border-bottom-color: rgba(20, 190, 255, 0.16);
   background: rgba(5, 34, 70, 0.36);
@@ -4591,9 +5289,38 @@ td input::placeholder,
 }
 
 .map-picker-head,
+.coordinate-control-row,
 .coordinate-search-row,
+.coordinate-weather-row,
+.coordinate-map-hint,
 .map-picker-foot {
   border-color: rgba(20, 190, 255, 0.26);
+  background: rgba(2, 18, 50, 0.72);
+  color: var(--hud-text);
+}
+
+.weather-preview-panel {
+  border-color: rgba(20, 190, 255, 0.26);
+  background: rgba(2, 18, 50, 0.72);
+  color: var(--hud-text);
+}
+
+.weather-preview-head strong {
+  color: var(--hud-text);
+}
+
+.weather-preview-stat-item {
+  border-color: rgba(20, 190, 255, 0.24);
+  background: rgba(4, 20, 48, 0.48);
+  color: var(--hud-muted-strong);
+}
+
+.weather-preview-stat-item strong {
+  color: var(--hud-text);
+}
+
+.weather-preview-stat-empty {
+  color: var(--hud-muted);
 }
 
 .time-resize-handle::before,
@@ -4601,7 +5328,7 @@ td input::placeholder,
 .result-column-resize-handle::before,
 .overview-column-resize-handle::before,
 .evaluation-main-resize-handle::before,
-.planning-parameter-resize-handle::before,
+.weather-preview-resize-handle::before,
 .comparison-table-column-resize-handle::before,
 .comparison-table-curve-resize-handle::before {
   background: rgba(33, 213, 255, 0.52);
@@ -4623,9 +5350,9 @@ td input::placeholder,
 .evaluation-main-resize-handle:hover::before,
 .evaluation-main-resize-handle.dragging::before,
 .evaluation-main-resize-handle:focus-visible::before,
-.planning-parameter-resize-handle:hover::before,
-.planning-parameter-resize-handle.dragging::before,
-.planning-parameter-resize-handle:focus-visible::before,
+.weather-preview-resize-handle:hover::before,
+.weather-preview-resize-handle.dragging::before,
+.weather-preview-resize-handle:focus-visible::before,
 .comparison-table-column-resize-handle:hover::before,
 .comparison-table-column-resize-handle.dragging::before,
 .comparison-table-column-resize-handle:focus-visible::before,
@@ -4734,6 +5461,7 @@ td {
 .status-tile span,
 .weather-import-bar label,
 .coordinate-search-row label,
+.coordinate-weather-row label,
 .green-chart-legend,
 .safety-chart-legend,
 .histogram-meta,
@@ -4930,11 +5658,15 @@ td {
 .time-series-import-toolbar button,
 .map-picker-head button,
 .coordinate-search-row button,
+.coordinate-weather-row button,
+.weather-preview-legend button,
+.coordinate-weather-actions button,
 .map-picker-foot button,
 .map-provider-tab,
 .time-series-import-curve-toggle,
 .amap-map-controls button,
 .user-status button,
+.annual-view-toggle,
 .task-actions button {
   min-height: 34px;
   border: 1px solid var(--control-border);
@@ -4959,7 +5691,8 @@ td {
 .curve-button[aria-pressed="true"],
 .map-provider-tab.active,
 .time-series-import-curve-toggle.active,
-.time-series-import-curve-toggle[aria-pressed="true"] {
+.time-series-import-curve-toggle[aria-pressed="true"],
+.annual-view-toggle.active {
   border-color: rgba(108, 238, 255, 0.94);
   background: var(--control-primary-bg);
   color: #ffffff;
@@ -5005,12 +5738,17 @@ td {
 .time-series-import-toolbar button:hover,
 .map-picker-head button:hover,
 .coordinate-search-row button:hover,
+.coordinate-weather-row button:hover,
+.weather-preview-legend button:hover,
+.coordinate-weather-actions button:hover,
 .map-picker-foot button:hover,
 .map-provider-tab:hover,
 .time-series-import-curve-toggle:hover,
 .time-series-import-curve-toggle:focus-visible,
 .amap-map-controls button:hover,
 .user-status button:hover:not(:disabled),
+.annual-view-toggle:hover,
+.annual-view-toggle:focus-visible,
 .task-actions button:hover:not(:disabled) {
   border-color: var(--control-border-hover);
   background: var(--control-bg-hover);
@@ -5040,7 +5778,8 @@ td select,
 .load-generator-grid select,
 .evaluation-result-actions select,
 .comparison-tab-selectors select,
-.coordinate-search-row input {
+.coordinate-search-row input,
+.coordinate-weather-row input {
   border-color: rgba(20, 190, 255, 0.32);
   background: var(--input-bg);
   color: var(--hud-text);
@@ -5059,7 +5798,8 @@ td select:focus,
 .load-generator-grid select:focus,
 .evaluation-result-actions select:focus,
 .comparison-tab-selectors select:focus,
-.coordinate-search-row input:focus {
+.coordinate-search-row input:focus,
+.coordinate-weather-row input:focus {
   border-color: rgba(108, 238, 255, 0.74);
   outline: 2px solid rgba(33, 213, 255, 0.42);
   outline-offset: 1px;
@@ -5111,9 +5851,11 @@ body[data-home-theme="fresh"] {
   --theme-accent: #55f0c8;
   --theme-accent-2: #b6ffda;
   --theme-page-bg: radial-gradient(circle at 20% 12%, rgba(85, 240, 200, 0.22), transparent 28%), linear-gradient(135deg, #042b37, #064b59 55%, #021d2a);
-  --theme-panel-bg: rgba(4, 68, 83, 0.62);
+  --theme-panel-bg: rgba(2, 43, 55, 0.9);
   --theme-panel-line: rgba(80, 238, 201, 0.36);
-  --theme-control-bg: rgba(5, 82, 92, 0.76);
+  --theme-control-bg: rgba(3, 65, 75, 0.92);
+  --theme-text: #ffffff;
+  --theme-active-bg: #0b686b;
 }
 
 body[data-home-theme="bright"] {
@@ -5180,9 +5922,11 @@ body[data-home-theme="flat"] {
   --theme-accent: #1b998b;
   --theme-accent-2: #f4d35e;
   --theme-page-bg: linear-gradient(135deg, #0b3142, #126782 55%, #315f72);
-  --theme-panel-bg: #126782;
+  --theme-panel-bg: #0b3142;
   --theme-panel-line: transparent;
-  --theme-control-bg: #0b3142;
+  --theme-control-bg: #082936;
+  --theme-text: #ffffff;
+  --theme-active-bg: #0b5f58;
 }
 
 body[data-home-theme="neon-future"] {
@@ -5210,9 +5954,11 @@ body[data-home-theme="material"] {
   --theme-accent: #42a5f5;
   --theme-accent-2: #26a69a;
   --theme-page-bg: linear-gradient(135deg, #0d47a1, #1565c0 55%, #00897b);
-  --theme-panel-bg: rgba(21, 101, 192, 0.76);
+  --theme-panel-bg: rgba(8, 55, 124, 0.9);
   --theme-panel-line: transparent;
-  --theme-control-bg: #0d47a1;
+  --theme-control-bg: #0b3d91;
+  --theme-text: #ffffff;
+  --theme-active-bg: #0b3d91;
 }
 
 body[data-home-theme="magazine"] {
@@ -5237,6 +5983,25 @@ body[data-home-theme="dynamic"] {
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) {
+  --hud-text: var(--theme-text);
+  --hud-muted: color-mix(in srgb, var(--theme-text) 78%, var(--theme-panel-bg));
+  --hud-muted-strong: var(--theme-text);
+  --hud-cyan: var(--theme-accent);
+  --hud-cyan-border: color-mix(in srgb, var(--theme-accent) 46%, transparent);
+  --hud-line: var(--theme-panel-line);
+  --hud-line-bright: color-mix(in srgb, var(--theme-accent) 64%, transparent);
+  --hud-inner-line: var(--theme-panel-line);
+  --hud-inner-surface: color-mix(in srgb, var(--theme-panel-bg) 76%, transparent);
+  --hud-surface: color-mix(in srgb, var(--theme-panel-bg) 86%, transparent);
+  --hud-surface-soft: color-mix(in srgb, var(--theme-panel-bg) 68%, transparent);
+  --control-border: color-mix(in srgb, var(--theme-accent) 42%, transparent);
+  --control-border-hover: color-mix(in srgb, var(--theme-accent) 64%, transparent);
+  --control-bg: var(--theme-control-bg);
+  --control-bg-hover: color-mix(in srgb, var(--theme-accent) 14%, var(--theme-control-bg));
+  --control-primary-bg: var(--theme-active-bg);
+  --control-danger-bg: #a42738;
+  --control-muted-bg: color-mix(in srgb, var(--theme-control-bg) 74%, transparent);
+  --input-bg: var(--theme-control-bg);
   color: var(--theme-text);
   background: var(--theme-page-bg);
 }
@@ -5283,7 +6048,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .scheme-actions button,
 body[data-home-theme]:not([data-home-theme="default"]) .task-actions button,
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab,
-body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab {
+body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle {
   border-color: color-mix(in srgb, var(--theme-accent) 46%, transparent);
   background: var(--theme-control-bg);
   color: var(--theme-control-text);
@@ -5319,7 +6085,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .main-nav .active,
 body[data-home-theme]:not([data-home-theme="default"]) .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
-body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab.active {
+body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle.active {
   background: var(--theme-active-bg);
   color: var(--theme-active-text);
 }
@@ -5349,7 +6116,11 @@ body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-dialo
 
 body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head,
 body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-control-row,
 body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-map-hint,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-panel,
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tabs,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-toolbar,
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid,
@@ -5360,6 +6131,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-chart
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head h2,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-head strong,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-chart-head strong,
 body[data-home-theme]:not([data-home-theme="default"]) #mapPickerHint,
 body[data-home-theme]:not([data-home-theme="default"]) #loadGeneratorHint,
@@ -5371,7 +6143,10 @@ body[data-home-theme]:not([data-home-theme="default"]) .weather-import-status {
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head button,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-header-actions button,
 body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row button,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row button,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button,
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-toolbar button,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle,
@@ -5385,6 +6160,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot button {
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button.active,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button[aria-pressed="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle.active,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle[aria-pressed="true"] {
   border-color: var(--theme-accent);
@@ -5400,7 +6177,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot button.p
 
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid input,
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid select,
-body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row input {
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row input,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row input {
   border-color: color-mix(in srgb, var(--theme-accent) 36%, transparent);
   background: color-mix(in srgb, var(--theme-control-bg) 76%, transparent);
   color: var(--theme-control-text);
@@ -5408,12 +6186,14 @@ body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row in
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid input::placeholder,
-body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row input::placeholder {
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row input::placeholder,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row input::placeholder {
   color: color-mix(in srgb, var(--theme-control-text) 58%, transparent);
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid label,
-body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row label {
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row label,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row label {
   color: var(--theme-text);
 }
 
@@ -5435,6 +6215,7 @@ body[data-home-theme]:not([data-home-theme="default"]) #timeSeriesImportHint.war
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .map-picker-canvas,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-chart,
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-preview,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-chart,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-preview {
@@ -5454,6 +6235,17 @@ body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-previ
   color: var(--theme-control-text);
 }
 
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-stat-item {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+  background: color-mix(in srgb, var(--theme-control-bg) 72%, transparent);
+  color: var(--theme-control-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-stat-item strong,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-stat-empty {
+  color: var(--theme-text);
+}
+
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-preview th {
   background: var(--theme-control-bg);
 }
@@ -5466,7 +6258,18 @@ body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-previ
   color: var(--theme-control-text);
 }
 
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-chart text,
+body[data-home-theme]:not([data-home-theme="default"]) .load-generator-preview text,
+body[data-home-theme]:not([data-home-theme="default"]) #timeChart text,
+body[data-home-theme]:not([data-home-theme="default"]) .histogram-svg text {
+  fill: var(--theme-control-text);
+}
+
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-resize-handle::before {
+  background: color-mix(in srgb, var(--theme-accent) 62%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-resize-handle::before {
   background: color-mix(in srgb, var(--theme-accent) 62%, transparent);
 }
 
@@ -5494,6 +6297,356 @@ body[data-home-theme]:not([data-home-theme="default"]) .log-context-menu button:
   color: var(--theme-active-text);
 }
 
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-card {
+  border-color: var(--theme-panel-line);
+  background: color-mix(in srgb, var(--theme-control-bg) 50%, transparent);
+  color: var(--theme-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-head h3,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-head span,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-legend {
+  color: var(--theme-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-axis-line,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-grid-line {
+  stroke: color-mix(in srgb, var(--theme-accent) 34%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-grid-resizer::before {
+  background: color-mix(in srgb, var(--theme-accent) 52%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-grid-resizer:hover::before,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-grid-resizer:focus-visible::before,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-grid-resizer.dragging::before {
+  background: var(--theme-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent) 18%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-chart-axis-label,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-chart-x-axis span {
+  color: var(--theme-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .language-switch,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status {
+  border-color: color-mix(in srgb, var(--theme-accent) 38%, transparent);
+  background: var(--theme-control-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .language-switch span,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status span,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status strong,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status em {
+  color: var(--theme-control-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .language-switch select,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status button {
+  color: var(--theme-control-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .tab,
+body[data-home-theme]:not([data-home-theme="default"]) .summary-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-button,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-import-bar button,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-actions button,
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-action-buttons button,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-add-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-head button,
+body[data-home-theme]:not([data-home-theme="default"]) .pager button,
+body[data-home-theme]:not([data-home-theme="default"]) .add-row,
+body[data-home-theme]:not([data-home-theme="default"]) .device-jump a,
+body[data-home-theme]:not([data-home-theme="default"]) .secondary {
+  border-color: color-mix(in srgb, var(--theme-accent) 42%, transparent);
+  background: var(--theme-control-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .secondary,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-actions .queue-action {
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, transparent) !important;
+  background: var(--control-muted-bg) !important;
+  color: var(--theme-control-text) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .summary-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-button.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-button[aria-pressed="true"],
+body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle.active,
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle[aria-pressed="true"] {
+  border-color: var(--theme-accent);
+  background: var(--theme-active-bg);
+  color: var(--theme-active-text);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .danger,
+body[data-home-theme]:not([data-home-theme="default"]) .delete-row {
+  border-color: color-mix(in srgb, #ff8f9b 56%, transparent) !important;
+  background: var(--control-danger-bg) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-actions button.is-disabled,
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-action-buttons button.is-disabled,
+body[data-home-theme]:not([data-home-theme="default"]) button:disabled {
+  opacity: 0.72;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-rail,
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-planning-result-panel,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats section,
+body[data-home-theme]:not([data-home-theme="default"]) .summary-section,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-table-card,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-card,
+body[data-home-theme]:not([data-home-theme="default"]) .green-chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .mini-bar-chart,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-item,
+body[data-home-theme]:not([data-home-theme="default"]) .histogram-panel,
+body[data-home-theme]:not([data-home-theme="default"]) .status-tile,
+body[data-home-theme]:not([data-home-theme="default"]) .planning-parameter-group {
+  border-color: var(--theme-panel-line);
+  background: var(--theme-panel-bg);
+  color: var(--theme-text);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .planning-parameter-tabs {
+  border-bottom-color: var(--theme-panel-line);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .planning-parameter-tab {
+  border-color: var(--theme-panel-line);
+  background: var(--theme-control-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .planning-parameter-tab.active {
+  border-color: var(--theme-accent);
+  background: var(--theme-control-primary-bg);
+  color: var(--theme-control-primary-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .current-scheme,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-current-scheme,
+body[data-home-theme]:not([data-home-theme="default"]) .page-info,
+body[data-home-theme]:not([data-home-theme="default"]) .pager,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-import-bar label,
+body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid label,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row label,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row label,
+body[data-home-theme]:not([data-home-theme="default"]) .filter-hint,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-item span,
+body[data-home-theme]:not([data-home-theme="default"]) .histogram-head span,
+body[data-home-theme]:not([data-home-theme="default"]) .histogram-meta,
+body[data-home-theme]:not([data-home-theme="default"]) .tasks-toolbar p,
+body[data-home-theme]:not([data-home-theme="default"]) .task-empty,
+body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter,
+body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter span,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary span,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend div,
+body[data-home-theme]:not([data-home-theme="default"]) .status-tile span,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-head strong,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-table-card h2,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-title,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats span,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats strong {
+  color: var(--theme-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .current-scheme strong,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-import-status.ok,
+body[data-home-theme]:not([data-home-theme="default"]) .status-ok,
+body[data-home-theme]:not([data-home-theme="default"]) .status-tile strong,
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.running,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-item strong,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary strong,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend strong {
+  color: var(--theme-accent);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary strong,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend strong {
+  color: var(--theme-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .auth-card label,
+body[data-home-theme]:not([data-home-theme="default"]) .auth-status {
+  color: var(--theme-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .auth-links a {
+  color: var(--theme-accent);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .data-table,
+body[data-home-theme]:not([data-home-theme="default"]) .task-table,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-table,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-stat-table,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-overview-table,
+body[data-home-theme]:not([data-home-theme="default"]) .green-result-table,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-result-table,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-result-table {
+  border-color: var(--theme-panel-line);
+  background: color-mix(in srgb, var(--theme-panel-bg) 78%, transparent);
+  color: var(--theme-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) table,
+body[data-home-theme]:not([data-home-theme="default"]) td {
+  color: var(--theme-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) th {
+  border-bottom-color: color-mix(in srgb, var(--theme-accent) 24%, transparent);
+  background: var(--theme-control-bg);
+  color: var(--theme-control-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) td {
+  border-bottom-color: color-mix(in srgb, var(--theme-accent) 18%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) td input,
+body[data-home-theme]:not([data-home-theme="default"]) td select,
+body[data-home-theme]:not([data-home-theme="default"]) .auth-card input,
+body[data-home-theme]:not([data-home-theme="default"]) .users-table select,
+body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter select,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-import-bar input,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row input,
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-actions select,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-selectors select {
+  border-color: color-mix(in srgb, var(--theme-accent) 36%, transparent);
+  background: var(--input-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter select,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range select {
+  border-color: color-mix(in srgb, var(--theme-accent) 36%, transparent);
+  background: var(--input-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-chart-frame {
+  background: var(--theme-control-bg);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-chart svg,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-curve-chart svg,
+body[data-home-theme]:not([data-home-theme="default"]) .green-chart-svg,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-chart-svg,
+body[data-home-theme]:not([data-home-theme="default"]) .histogram-svg {
+  border-color: color-mix(in srgb, var(--theme-accent) 32%, transparent);
+  background-color: var(--theme-control-bg);
+  background:
+    linear-gradient(color-mix(in srgb, var(--theme-accent) 8%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--theme-accent) 8%, transparent) 1px, transparent 1px),
+    var(--theme-control-bg);
+  background-size: 36px 36px, 36px 36px, 100% 100%;
+  color: var(--theme-control-text);
+  box-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart text,
+body[data-home-theme]:not([data-home-theme="default"]) .green-chart-svg text,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-chart-svg text,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-chart text,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-curve-chart text,
+body[data-home-theme]:not([data-home-theme="default"]) .green-chart-legend,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-chart-legend,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-chart-x-axis,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-chart-y-axis {
+  color: var(--theme-control-text);
+  fill: var(--theme-control-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.idle {
+  border-color: color-mix(in srgb, var(--theme-accent) 24%, transparent);
+  background: color-mix(in srgb, var(--theme-control-bg) 58%, transparent);
+  color: var(--theme-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .result-curve-legend button,
+body[data-home-theme]:not([data-home-theme="default"]) .result-curve-empty-overlay {
+  border-color: color-mix(in srgb, var(--theme-accent) 32%, transparent);
+  background: color-mix(in srgb, var(--theme-control-bg) 92%, transparent);
+  color: var(--theme-control-text);
+  box-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .result-curve-legend-stat {
+  color: color-mix(in srgb, var(--theme-control-text) 76%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent);
+  background: var(--theme-control-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope button,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter label,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range label {
+  color: var(--theme-control-text);
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope button.active {
+  border-color: var(--theme-accent);
+  background: var(--theme-active-bg);
+  color: var(--theme-active-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-segment span {
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #ffffff;
+  text-shadow: none;
+}
+
 body[data-home-theme="glassmorphism"] .topbar,
 body[data-home-theme="glassmorphism"] .scheme-rail,
 body[data-home-theme="glassmorphism"] .summary-rail,
@@ -5505,4 +6658,273 @@ body[data-home-theme="glassmorphism"] .tasks-panel {
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.18),
     0 22px 54px rgba(0, 18, 38, 0.26);
+}
+
+/* Theme contrast guard: keep non-default themes readable across pages. */
+body[data-home-theme]:not([data-home-theme="default"]) .topbar,
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-rail,
+body[data-home-theme]:not([data-home-theme="default"]) .summary-rail,
+body[data-home-theme]:not([data-home-theme="default"]) .editor-panel,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-panel,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-panel,
+body[data-home-theme]:not([data-home-theme="default"]) .tasks-panel,
+body[data-home-theme]:not([data-home-theme="default"]) .auth-card,
+body[data-home-theme]:not([data-home-theme="default"]) .map-picker-dialog,
+body[data-home-theme]:not([data-home-theme="default"]) .load-generator-dialog,
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-dialog,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-command-card,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-result-card,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-log-card,
+body[data-home-theme]:not([data-home-theme="default"]) .planning-parameters-card,
+body[data-home-theme]:not([data-home-theme="default"]) .device-card,
+body[data-home-theme]:not([data-home-theme="default"]) .table-card,
+body[data-home-theme]:not([data-home-theme="default"]) .chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-table-card,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-card,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-table-card,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-board,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-bar,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-card,
+body[data-home-theme]:not([data-home-theme="default"]) .green-chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .status-tile {
+  border-color: var(--theme-panel-line) !important;
+  background: var(--theme-panel-bg) !important;
+  color: var(--theme-text) !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .brand,
+body[data-home-theme]:not([data-home-theme="default"]) h1,
+body[data-home-theme]:not([data-home-theme="default"]) h2,
+body[data-home-theme]:not([data-home-theme="default"]) h3,
+body[data-home-theme]:not([data-home-theme="default"]) label,
+body[data-home-theme]:not([data-home-theme="default"]) .rail-title,
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-list-title,
+body[data-home-theme]:not([data-home-theme="default"]) .current-scheme,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-current-scheme,
+body[data-home-theme]:not([data-home-theme="default"]) .page-info,
+body[data-home-theme]:not([data-home-theme="default"]) .filter-hint,
+body[data-home-theme]:not([data-home-theme="default"]) .task-empty,
+body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-item,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-item span,
+body[data-home-theme]:not([data-home-theme="default"]) .overview-item strong,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary span,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary strong,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend div,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend strong,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-head strong,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-table-card h2,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-title,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-head h3,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-head span,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-legend,
+body[data-home-theme]:not([data-home-theme="default"]) .auth-card label,
+body[data-home-theme]:not([data-home-theme="default"]) .auth-status {
+  color: var(--theme-text) !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .main-nav a,
+body[data-home-theme]:not([data-home-theme="default"]) .main-nav button,
+body[data-home-theme]:not([data-home-theme="default"]) .tab,
+body[data-home-theme]:not([data-home-theme="default"]) .summary-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .result-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-button,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .month-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-import-bar button,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-actions button,
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-action-buttons button,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-add-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-head button,
+body[data-home-theme]:not([data-home-theme="default"]) .pager button,
+body[data-home-theme]:not([data-home-theme="default"]) .add-row,
+body[data-home-theme]:not([data-home-theme="default"]) .device-jump a,
+body[data-home-theme]:not([data-home-theme="default"]) .map-picker-head button,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-header-actions button,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row button,
+body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row button,
+body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button,
+body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot button,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle,
+body[data-home-theme]:not([data-home-theme="default"]) .task-actions button {
+  border-color: color-mix(in srgb, var(--theme-accent) 46%, transparent) !important;
+  background: var(--theme-control-bg) !important;
+  color: var(--theme-control-text) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .secondary,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-actions .queue-action {
+  border-color: color-mix(in srgb, var(--theme-accent) 34%, transparent) !important;
+  background: var(--theme-panel-bg) !important;
+  color: var(--theme-text) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .main-nav .active,
+body[data-home-theme]:not([data-home-theme="default"]) .primary,
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-actions .primary,
+body[data-home-theme]:not([data-home-theme="default"]) .tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .summary-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-button.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-button[aria-pressed="true"],
+body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .month-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle.active,
+body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle[aria-pressed="true"],
+body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle.active {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-active-bg) !important;
+  color: var(--theme-active-text) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-item,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-name-item,
+body[data-home-theme]:not([data-home-theme="default"]) .device-filter,
+body[data-home-theme]:not([data-home-theme="default"]) .validation-item,
+body[data-home-theme]:not([data-home-theme="default"]) .empty-summary {
+  border-color: color-mix(in srgb, var(--theme-accent) 28%, transparent) !important;
+  background: transparent !important;
+  color: var(--theme-text) !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-item.active,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-name-item.active,
+body[data-home-theme]:not([data-home-theme="default"]) .device-filter.active {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-active-bg) !important;
+  color: var(--theme-active-text) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) input,
+body[data-home-theme]:not([data-home-theme="default"]) select,
+body[data-home-theme]:not([data-home-theme="default"]) textarea,
+body[data-home-theme]:not([data-home-theme="default"]) td input,
+body[data-home-theme]:not([data-home-theme="default"]) td select,
+body[data-home-theme]:not([data-home-theme="default"]) .users-table select,
+body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter select,
+body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-actions select,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab-selectors select {
+  border-color: color-mix(in srgb, var(--theme-accent) 36%, transparent) !important;
+  background: var(--theme-control-bg) !important;
+  color: var(--theme-control-text) !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .data-table,
+body[data-home-theme]:not([data-home-theme="default"]) .task-table,
+body[data-home-theme]:not([data-home-theme="default"]) .comparison-table,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-stat-table,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-overview-table,
+body[data-home-theme]:not([data-home-theme="default"]) .green-result-table,
+body[data-home-theme]:not([data-home-theme="default"]) .safety-result-table,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-result-table,
+body[data-home-theme]:not([data-home-theme="default"]) table,
+body[data-home-theme]:not([data-home-theme="default"]) td {
+  border-color: var(--theme-panel-line) !important;
+  color: var(--theme-text) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) th {
+  border-color: var(--theme-panel-line) !important;
+  background: var(--theme-control-bg) !important;
+  color: var(--theme-control-text) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter label,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range label,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope button {
+  color: var(--theme-control-text) !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,
+body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope button.active {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-active-bg) !important;
+  color: var(--theme-active-text) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .language-switch,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status {
+  border-color: color-mix(in srgb, var(--theme-accent) 38%, transparent) !important;
+  background: var(--theme-control-bg) !important;
+  color: var(--theme-control-text) !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .language-switch span,
+body[data-home-theme]:not([data-home-theme="default"]) .language-switch select,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status span,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status strong,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status em,
+body[data-home-theme]:not([data-home-theme="default"]) .user-status button {
+  color: var(--theme-control-text) !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill {
+  border: 1px solid transparent !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.running {
+  border-color: #72cfbc !important;
+  background: #d0f4ea !important;
+  color: #064f45 !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.queued {
+  border-color: #e7b85b !important;
+  background: #ffe7b0 !important;
+  color: #684600 !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.completed {
+  border-color: #70d8a5 !important;
+  background: #c9f4dc !important;
+  color: #0d5e3f !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.interrupted {
+  border-color: #e8a171 !important;
+  background: #ffd8bf !important;
+  color: #793507 !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.failed {
+  border-color: #ed8b9b !important;
+  background: #ffd6dd !important;
+  color: #8f1830 !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.timeout {
+  border-color: #c9a6ed !important;
+  background: #eadbff !important;
+  color: #5f338a !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.idle {
+  border-color: #96bad2 !important;
+  background: #dcecf6 !important;
+  color: #27485c !important;
 }

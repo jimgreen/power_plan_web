@@ -143,8 +143,8 @@ function renderTaskRow(task) {
       <td>${escapeHtml(task.result || "-")}</td>
       <td class="task-actions-cell">
         <div class="task-actions">
-          <button class="primary" type="button" data-task-action="start" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_start ? "" : "disabled"}>立刻启动</button>
-          <button type="button" data-task-action="queue" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_queue ? "" : "disabled"}>加入排队</button>
+          <button class="primary" type="button" data-task-action="start" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_start ? "" : "disabled"}>启动</button>
+          <button type="button" data-task-action="queue" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_queue ? "" : "disabled"}>排队</button>
           <button class="danger" type="button" data-task-action="${escapeHtml(terminalAction.action)}" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${terminalAction.enabled ? "" : "disabled"}>${escapeHtml(terminalAction.label)}</button>
         </div>
       </td>
@@ -159,9 +159,9 @@ function renderTaskRow(task) {
 }
 
 function taskTerminalAction(task) {
-  if (task.queued) return { action: "cancel_queue", label: "退出队列", enabled: true };
-  if (task.can_stop) return { action: "stop", label: "停止计算", enabled: true };
-  return { action: "stop", label: "停止计算", enabled: false };
+  if (task.queued) return { action: "cancel_queue", label: "退队", enabled: true };
+  if (task.can_stop) return { action: "stop", label: "停止", enabled: true };
+  return { action: "stop", label: "停止", enabled: false };
 }
 
 function taskStatusClass(status) {

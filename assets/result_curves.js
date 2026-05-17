@@ -7,6 +7,52 @@
     { key: "monthly", title: "月度统计" },
     { key: "annual", title: "年度统计" },
   ];
+  const ANNUAL_META_HEADERS = new Set(["指标", "单位", "数值", "说明"]);
+  const ANNUAL_BAR_COLORS = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90"];
+  const ANNUAL_LINE_COLOR = "#ff6bcb";
+  const ANNUAL_GRID_SPLIT_MIN = 3;
+  const ANNUAL_COMPARISON_DEFINITIONS = [
+    {
+      title: "成本对比",
+      bars: [
+        { label: "年均总成本", aliases: ["年均总成本", "年总成本", "总成本"] },
+        { label: "年均建设成本", aliases: ["年均建设成本"] },
+        { label: "年运行成本", aliases: ["年运行成本", "年柴油成本", "运行成本"] },
+      ],
+      line: { label: "度电成本", aliases: ["度电成本"] },
+    },
+    {
+      title: "电量对比",
+      bars: [
+        { label: "负荷用电量", aliases: ["负荷用电量", "负荷总电量", "负荷电量"] },
+        { label: "柴油发电量", aliases: ["柴油发电量", "柴发总发电量", "柴发总电量", "柴发电量"] },
+        {
+          label: "新能源总发电量",
+          sum: [
+            ["风机总发电量", "风电总发电量", "风机总电量", "风电总电量"],
+            ["光伏总发电量", "光伏总电量"],
+          ],
+          fallbackAliases: ["新能源总发电量", "新能源实发电量", "新能源实际电量"],
+        },
+      ],
+      line: { label: "新能源占比", aliases: ["新能源占比", "绿电占比", "绿色电量占比"] },
+    },
+    {
+      title: "新能源利用对比",
+      bars: [
+        { label: "新能源最大可发", aliases: ["新能源最大可发", "新能源最大可发电量"] },
+        { label: "新能源实际电量", aliases: ["新能源实际电量", "新能源实发电量", "新能源总发电量"] },
+      ],
+      line: { label: "新能源弃电率", aliases: ["新能源弃电率", "弃电率"] },
+    },
+    {
+      title: "储能氢能发电对比",
+      bars: [
+        { label: "储能发电量", aliases: ["储能发电量", "电储能总放电量", "电储总发电量", "储能放电量"] },
+        { label: "燃料电池发电量", aliases: ["燃料电池发电量", "燃料电池总发电量", "氢储总发电量"] },
+      ],
+    },
+  ];
   const MONTH_RANGES = [
     ["1月", 0, 744, 1, 31],
     ["2月", 744, 1416, 32, 59],
@@ -30,6 +76,8 @@
       hiddenSeriesByGroup: { hourly: [], daily: [], monthly: [] },
       curveRangeFilter: defaultCurveRangeFilter(),
       activeGroup: "hourly",
+      annualViewMode: "table",
+      annualGridSplit: { column: 50, row: 50 },
       hoverIndex: null,
       emptyText: options.emptyText || "暂无小时级曲线",
       promptText: options.promptText || "请选择小时级曲线",
@@ -61,6 +109,8 @@
       state.hiddenSeriesByGroup = { hourly: [], daily: [], monthly: [] };
       state.curveRangeFilter = defaultCurveRangeFilter();
       state.activeGroup = "hourly";
+      state.annualViewMode = "table";
+      state.annualGridSplit = { column: 50, row: 50 };
       state.hoverIndex = null;
       render(message || state.emptyText);
     }
@@ -76,8 +126,11 @@
       const group = activeCurveGroup();
       const tabs = renderGroupTabs();
       if (state.activeGroup === "annual") {
-        target.innerHTML = `${tabs}<div class="empty-summary">${state.annualTable.length ? "年度统计以表格显示" : escapeHtml(message || "暂无年度统计")}</div>`;
+        target.innerHTML = state.annualTable.length && options.enableAnnualBarComparison
+          ? `${tabs}${renderAnnualModeSwitch()}`
+          : `${tabs}<div class="empty-summary">${state.annualTable.length ? "年度统计以表格显示" : escapeHtml(message || "暂无年度统计")}</div>`;
         bindGroupTabs(target);
+        bindAnnualModeSwitch(target);
         return;
       }
       if (!group.curves.length) {
@@ -110,12 +163,33 @@
       }).join("")}</div>`;
     }
 
+    function renderAnnualModeSwitch() {
+      return `<div class="empty-summary annual-view-switch" role="group" aria-label="年度统计显示方式">
+        ${["table", "bar"].map((mode) => {
+          const active = state.annualViewMode === mode;
+          const label = mode === "table" ? "表格显示" : "柱图对比";
+          return `<button type="button" class="annual-view-toggle${active ? " active" : ""}" data-annual-view-mode="${mode}" aria-pressed="${active ? "true" : "false"}">${label}</button>`;
+        }).join("")}
+      </div>`;
+    }
+
     function bindGroupTabs(target) {
       target.querySelectorAll("[data-curve-group]").forEach((button) => {
         button.addEventListener("click", () => {
           state.activeGroup = button.dataset.curveGroup || "hourly";
           state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
           state.hoverIndex = null;
+          render();
+        });
+      });
+    }
+
+    function bindAnnualModeSwitch(target) {
+      target.querySelectorAll("[data-annual-view-mode]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const mode = button.dataset.annualViewMode === "bar" ? "bar" : "table";
+          if (state.annualViewMode === mode) return;
+          state.annualViewMode = mode;
           render();
         });
       });
@@ -168,7 +242,8 @@
       const target = document.getElementById(options.chartId);
       if (!target) return;
       if (state.activeGroup === "annual") {
-        renderAnnualTable(target, message);
+        if (options.enableAnnualBarComparison && state.annualViewMode === "bar") renderAnnualBarComparison(target, message);
+        else renderAnnualTable(target, message);
         return;
       }
       const curveNames = selectedCurveNames();
@@ -283,6 +358,307 @@
               .join("")}</tbody>
           </table>
         </div>`;
+    }
+
+    function renderAnnualBarComparison(target, message) {
+      if (!state.annualTable.length) {
+        target.innerHTML = `<div class="empty-summary">${escapeHtml(message || "暂无年度统计")}</div>`;
+        return;
+      }
+      const caseHeaders = annualCaseHeaders();
+      if (!caseHeaders.length) {
+        target.innerHTML = `<div class="empty-summary">${escapeHtml(message || "暂无柱图对比数据")}</div>`;
+        return;
+      }
+      const charts = ANNUAL_COMPARISON_DEFINITIONS.map((definition) => renderAnnualComparisonChart(definition, caseHeaders)).join("");
+      target.innerHTML = charts
+        ? `<div class="annual-comparison-grid" style="${annualGridStyle()}">${charts}${renderAnnualGridResizers()}</div>`
+        : `<div class="empty-summary">${escapeHtml(message || "暂无柱图对比数据")}</div>`;
+      bindAnnualGridResizers(target);
+      bindAnnualChartHover(target);
+    }
+
+    function renderAnnualComparisonChart(definition, caseHeaders) {
+      const barMetrics = (definition.bars || []).map((item) => annualMetricFromDefinition(item, caseHeaders)).filter(Boolean);
+      const lineMetric = definition.line ? annualMetricFromDefinition(definition.line, caseHeaders) : null;
+      if (!barMetrics.length && !lineMetric) {
+        return `<section class="annual-comparison-card"><h3>${escapeHtml(definition.title)}</h3><div class="empty-summary">暂无柱图对比数据</div></section>`;
+      }
+
+      const width = 920;
+      const height = 220;
+      const margin = { top: 18, right: lineMetric ? 64 : 24, bottom: 44, left: 68 };
+      const plotWidth = width - margin.left - margin.right;
+      const plotHeight = height - margin.top - margin.bottom;
+      const leftValues = barMetrics.flatMap((metric) => metric.values).filter(Number.isFinite);
+      const rightValues = lineMetric ? lineMetric.values.filter(Number.isFinite) : [];
+      const leftMax = Math.max(...leftValues, 1);
+      const rightMax = Math.max(...rightValues, 1);
+      const groupWidth = plotWidth / Math.max(caseHeaders.length, 1);
+      const gap = Math.min(8, Math.max(3, groupWidth * 0.04));
+      const barWidth = Math.max(5, Math.min(26, (groupWidth - 22) / Math.max(barMetrics.length + 0.5, 1)));
+      const groupedWidth = barMetrics.length * barWidth + Math.max(barMetrics.length - 1, 0) * gap;
+      const xCenter = (index) => margin.left + groupWidth * index + groupWidth / 2;
+      const yLeft = (value) => margin.top + plotHeight - (Math.max(Number(value) || 0, 0) / leftMax) * plotHeight;
+      const yRight = (value) => margin.top + plotHeight - (Math.max(Number(value) || 0, 0) / rightMax) * plotHeight;
+      const linePoints = lineMetric
+        ? lineMetric.values.map((value, index) => `${xCenter(index).toFixed(2)},${yRight(value).toFixed(2)}`)
+        : [];
+      const linePointOverlays = lineMetric ? renderAnnualLinePoints({ width, height, xCenter, yRight, lineMetric, caseHeaders }) : "";
+      const overlays = renderAnnualChartLabels({
+        width,
+        height,
+        margin,
+        groupWidth,
+        xCenter,
+        caseHeaders,
+        leftMax,
+        rightMax,
+        lineMetric,
+      });
+
+      return `<section class="annual-comparison-card">
+        <div class="annual-comparison-head">
+          <h3>${escapeHtml(definition.title)}</h3>
+          <span>${escapeHtml(translateDisplay("左轴"))} ${escapeHtml(barMetrics[0]?.unit || "")}${lineMetric ? ` / ${escapeHtml(translateDisplay("右轴"))} ${escapeHtml(lineMetric.unit || "")}` : ""}</span>
+        </div>
+        <div class="annual-comparison-chart">
+          <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(definition.title)}">
+            <line class="annual-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
+            <line class="annual-axis-line" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
+            ${lineMetric ? `<line class="annual-axis-line" x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>` : ""}
+            ${[0, 0.5, 1].map((ratio) => {
+              const y = margin.top + plotHeight - ratio * plotHeight;
+              return `<line class="annual-grid-line" x1="${margin.left}" y1="${y.toFixed(2)}" x2="${width - margin.right}" y2="${y.toFixed(2)}"></line>`;
+            }).join("")}
+            ${barMetrics.map((metric, metricIndex) =>
+              metric.values
+                .map((value, caseIndex) => {
+                  const safeValue = Math.max(Number(value) || 0, 0);
+                  const x = xCenter(caseIndex) - groupedWidth / 2 + metricIndex * (barWidth + gap);
+                  const y = yLeft(safeValue);
+                  const h = Math.max(height - margin.bottom - y, 0);
+                  return `<rect class="annual-bar" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${ANNUAL_BAR_COLORS[metricIndex % ANNUAL_BAR_COLORS.length]}" data-annual-chart-hit="bar" data-annual-chart-title="${escapeHtml(definition.title)}" data-annual-chart-case="${escapeHtml(caseHeaders[caseIndex])}" data-annual-chart-metric="${escapeHtml(metric.label)}" data-annual-chart-value="${escapeHtml(formatAnnualMetricValue(safeValue, metric))}" data-annual-chart-unit="${escapeHtml(metric.unit || "")}"></rect>`;
+                })
+                .join(""),
+            ).join("")}
+            ${lineMetric ? `<polyline class="annual-line" points="${linePoints.join(" ")}"></polyline>` : ""}
+          </svg>
+          ${overlays}
+          ${linePointOverlays}
+          ${renderAnnualComparisonLegend(barMetrics, lineMetric)}
+          <div class="comparison-chart-tooltip annual-chart-tooltip" data-annual-chart-tooltip hidden></div>
+        </div>
+      </section>`;
+    }
+
+    function renderAnnualChartLabels({ width, height, margin, groupWidth, xCenter, caseHeaders, leftMax, rightMax, lineMetric }) {
+      const pctX = (value) => ((value / Math.max(width, 1)) * 100).toFixed(2);
+      const pctY = (value) => ((value / Math.max(height, 1)) * 100).toFixed(2);
+      const leftX = pctX(margin.left);
+      const rightX = pctX(width - margin.right);
+      const topY = pctY(margin.top + 2);
+      const bottomY = pctY(height - margin.bottom);
+      const xLabelY = pctY(height - 14);
+      const xLabelWidth = Math.max(6, Math.min(18, (groupWidth / Math.max(width, 1)) * 82)).toFixed(2);
+      const leftLabelStyle = `left:4px; width:max(0px, calc(${leftX}% - 12px));`;
+      const rightLabelStyle = `left:calc(${rightX}% + 8px); width:max(0px, calc(100% - ${rightX}% - 12px));`;
+      const rightAxisLabels = lineMetric
+        ? `<span class="annual-chart-axis-label annual-chart-axis-label-right" style="${rightLabelStyle} top:${topY}%">${escapeHtml(formatAnnualAxisValue(rightMax, lineMetric))}</span>
+          <span class="annual-chart-axis-label annual-chart-axis-label-right" style="${rightLabelStyle} top:${bottomY}%">0</span>`
+        : "";
+      return `<div class="annual-chart-axis-labels" aria-hidden="true">
+          <span class="annual-chart-axis-label annual-chart-axis-label-left" style="${leftLabelStyle} top:${topY}%">${escapeHtml(formatAxis(leftMax))}</span>
+          <span class="annual-chart-axis-label annual-chart-axis-label-left" style="${leftLabelStyle} top:${bottomY}%">0</span>
+          ${rightAxisLabels}
+        </div>
+        <div class="annual-chart-x-axis" aria-hidden="true" style="--annual-x-label-width:${xLabelWidth}%">${caseHeaders
+          .map((label, index) => `<span title="${escapeHtml(label)}" style="left:${pctX(xCenter(index))}%; top:${xLabelY}%">${escapeHtml(shortCaseLabel(label))}</span>`)
+          .join("")}</div>`;
+    }
+
+    function renderAnnualLinePoints({ width, height, xCenter, yRight, lineMetric, caseHeaders }) {
+      const pctX = (value) => ((value / Math.max(width, 1)) * 100).toFixed(2);
+      const pctY = (value) => ((value / Math.max(height, 1)) * 100).toFixed(2);
+      return `<div class="annual-line-points" aria-hidden="true">${lineMetric.values
+        .map((value, index) => {
+          const safeValue = Math.max(Number(value) || 0, 0);
+          return `<span class="annual-line-point" style="left:${pctX(xCenter(index))}%; top:${pctY(yRight(safeValue))}%" data-annual-chart-hit="line" data-annual-chart-title="${escapeHtml(lineMetric.label)}" data-annual-chart-case="${escapeHtml(caseHeaders[index])}" data-annual-chart-metric="${escapeHtml(lineMetric.label)}" data-annual-chart-value="${escapeHtml(formatAnnualMetricValue(safeValue, lineMetric))}" data-annual-chart-unit="${escapeHtml(lineMetric.unit || "")}"></span>`;
+        })
+        .join("")}</div>`;
+    }
+
+    function renderAnnualComparisonLegend(barMetrics, lineMetric) {
+      const barLegends = barMetrics
+        .map((metric, index) => `<span><i style="background:${ANNUAL_BAR_COLORS[index % ANNUAL_BAR_COLORS.length]}"></i>${escapeHtml(metric.label)}</span>`)
+        .join("");
+      const lineLegend = lineMetric ? `<span><i class="line" style="background:${ANNUAL_LINE_COLOR}"></i>${escapeHtml(lineMetric.label)}</span>` : "";
+      return `<div class="annual-comparison-legend">${barLegends}${lineLegend}</div>`;
+    }
+
+    function renderAnnualGridResizers() {
+      return `<div class="annual-grid-resizer annual-grid-resizer-col" data-annual-grid-resizer="column" role="separator" tabindex="0" aria-label="调整年度柱图左右宽度" aria-orientation="vertical" aria-valuemin="${ANNUAL_GRID_SPLIT_MIN}" aria-valuemax="${100 - ANNUAL_GRID_SPLIT_MIN}" aria-valuenow="${Math.round(state.annualGridSplit.column)}"></div>
+        <div class="annual-grid-resizer annual-grid-resizer-row" data-annual-grid-resizer="row" role="separator" tabindex="0" aria-label="调整年度柱图上下高度" aria-orientation="horizontal" aria-valuemin="${ANNUAL_GRID_SPLIT_MIN}" aria-valuemax="${100 - ANNUAL_GRID_SPLIT_MIN}" aria-valuenow="${Math.round(state.annualGridSplit.row)}"></div>`;
+    }
+
+    function bindAnnualGridResizers(target) {
+      target.querySelectorAll("[data-annual-grid-resizer]").forEach((handle) => {
+        handle.addEventListener("pointerdown", (event) => {
+          const grid = handle.closest(".annual-comparison-grid");
+          if (!grid) return;
+          event.preventDefault();
+          handle.setPointerCapture?.(event.pointerId);
+          handle.classList.add("dragging");
+          const axis = handle.dataset.annualGridResizer === "row" ? "row" : "column";
+          const onMove = (moveEvent) => updateAnnualGridSplitFromPointer(grid, axis, moveEvent);
+          const onEnd = () => {
+            handle.classList.remove("dragging");
+            handle.removeEventListener("pointermove", onMove);
+            handle.removeEventListener("pointerup", onEnd);
+            handle.removeEventListener("pointercancel", onEnd);
+          };
+          handle.addEventListener("pointermove", onMove);
+          handle.addEventListener("pointerup", onEnd);
+          handle.addEventListener("pointercancel", onEnd);
+          updateAnnualGridSplitFromPointer(grid, axis, event);
+        });
+        handle.addEventListener("keydown", (event) => {
+          const axis = handle.dataset.annualGridResizer === "row" ? "row" : "column";
+          const keyDelta = event.shiftKey ? 8 : 3;
+          const deltaMap = axis === "row"
+            ? { ArrowUp: -keyDelta, ArrowDown: keyDelta }
+            : { ArrowLeft: -keyDelta, ArrowRight: keyDelta };
+          if (!(event.key in deltaMap)) return;
+          event.preventDefault();
+          const grid = handle.closest(".annual-comparison-grid");
+          if (!grid) return;
+          setAnnualGridSplit(grid, axis, state.annualGridSplit[axis] + deltaMap[event.key]);
+        });
+      });
+    }
+
+    function updateAnnualGridSplitFromPointer(grid, axis, event) {
+      const rect = grid.getBoundingClientRect();
+      const ratio = axis === "row"
+        ? ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 100
+        : ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 100;
+      setAnnualGridSplit(grid, axis, ratio);
+    }
+
+    function setAnnualGridSplit(grid, axis, value) {
+      const next = Math.min(Math.max(Number(value) || 50, ANNUAL_GRID_SPLIT_MIN), 100 - ANNUAL_GRID_SPLIT_MIN);
+      state.annualGridSplit[axis] = next;
+      applyAnnualGridStyle(grid);
+    }
+
+    function annualGridStyle() {
+      const column = Math.min(Math.max(Number(state.annualGridSplit.column) || 50, ANNUAL_GRID_SPLIT_MIN), 100 - ANNUAL_GRID_SPLIT_MIN);
+      const row = Math.min(Math.max(Number(state.annualGridSplit.row) || 50, ANNUAL_GRID_SPLIT_MIN), 100 - ANNUAL_GRID_SPLIT_MIN);
+      return [
+        `--annual-grid-left:${column.toFixed(3)}fr`,
+        `--annual-grid-right:${(100 - column).toFixed(3)}fr`,
+        `--annual-grid-top:${row.toFixed(3)}fr`,
+        `--annual-grid-bottom:${(100 - row).toFixed(3)}fr`,
+        `--annual-grid-col-position:${column.toFixed(3)}%`,
+        `--annual-grid-row-position:${row.toFixed(3)}%`,
+      ].join("; ");
+    }
+
+    function applyAnnualGridStyle(grid) {
+      grid.setAttribute("style", annualGridStyle());
+      grid.querySelector('[data-annual-grid-resizer="column"]')?.setAttribute("aria-valuenow", String(Math.round(state.annualGridSplit.column)));
+      grid.querySelector('[data-annual-grid-resizer="row"]')?.setAttribute("aria-valuenow", String(Math.round(state.annualGridSplit.row)));
+    }
+
+    function bindAnnualChartHover(target) {
+      target.querySelectorAll("[data-annual-chart-hit]").forEach((hit) => {
+        hit.addEventListener("pointerenter", (event) => renderAnnualChartHover(hit, event));
+        hit.addEventListener("pointermove", (event) => renderAnnualChartHover(hit, event));
+        hit.addEventListener("pointerleave", () => {
+          const tooltip = hit.closest(".annual-comparison-chart")?.querySelector("[data-annual-chart-tooltip]");
+          if (tooltip) tooltip.hidden = true;
+        });
+      });
+    }
+
+    function renderAnnualChartHover(hit, event) {
+      const chart = hit.closest(".annual-comparison-chart");
+      const tooltip = chart?.querySelector("[data-annual-chart-tooltip]");
+      if (!chart || !tooltip) return;
+      const unit = hit.dataset.annualChartUnit || "";
+      tooltip.innerHTML = `
+        <h3>${escapeHtml(translateDisplay(hit.dataset.annualChartTitle || ""))}</h3>
+        <div><span>${escapeHtml(translateDisplay("对比项"))}</span><strong>${escapeHtml(hit.dataset.annualChartCase || "")}</strong></div>
+        <div><span>${escapeHtml(translateDisplay("指标"))}</span><strong>${escapeHtml(translateDisplay(hit.dataset.annualChartMetric || ""))}</strong></div>
+        <div><span>${escapeHtml(translateDisplay("数值"))}</span><strong>${escapeHtml(hit.dataset.annualChartValue || "")}${unit ? ` ${escapeHtml(unit)}` : ""}</strong></div>`;
+      tooltip.hidden = false;
+      const bounds = chart.getBoundingClientRect();
+      const tooltipX = Math.min(Math.max(event.clientX - bounds.left + 14, 8), Math.max(bounds.width - tooltip.offsetWidth - 8, 8));
+      const tooltipY = Math.min(Math.max(event.clientY - bounds.top + 14, 8), Math.max(bounds.height - tooltip.offsetHeight - 8, 8));
+      tooltip.style.left = `${Math.round(tooltipX)}px`;
+      tooltip.style.top = `${Math.round(tooltipY)}px`;
+    }
+
+    function annualCaseHeaders() {
+      const headers = [];
+      state.annualTable.forEach((row) => {
+        Object.keys(row || {}).forEach((key) => {
+          if (ANNUAL_META_HEADERS.has(key) || headers.includes(key)) return;
+          if (state.annualTable.some((item) => Number.isFinite(toNumber(item?.[key])))) headers.push(key);
+        });
+      });
+      return headers;
+    }
+
+    function annualMetricFromDefinition(definition, caseHeaders) {
+      if (definition.sum) {
+        const summed = sumAnnualMetric(definition.label, definition.sum, caseHeaders);
+        if (summed) return summed;
+        return readAnnualMetric(definition.fallbackAliases || [], definition.label, caseHeaders);
+      }
+      return readAnnualMetric(definition.aliases || [definition.label], definition.label, caseHeaders);
+    }
+
+    function sumAnnualMetric(label, aliasGroups, caseHeaders) {
+      const metrics = aliasGroups.map((aliases) => readAnnualMetric(aliases, aliases[0], caseHeaders)).filter(Boolean);
+      if (!metrics.length) return null;
+      return {
+        label,
+        unit: metrics.find((metric) => metric.unit)?.unit || "",
+        values: caseHeaders.map((_, index) => metrics.reduce((sum, metric) => sum + (Number(metric.values[index]) || 0), 0)),
+      };
+    }
+
+    function readAnnualMetric(aliases, label, caseHeaders) {
+      const row = annualMetricRow(aliases);
+      if (!row) return null;
+      const values = caseHeaders.map((header) => {
+        const value = toNumber(row[header]);
+        return Number.isFinite(value) ? value : 0;
+      });
+      if (!values.some(Number.isFinite)) return null;
+      return { label, unit: row["单位"] || "", values };
+    }
+
+    function annualMetricRow(aliases) {
+      const names = aliases.map((item) => String(item || "").trim()).filter(Boolean);
+      return (
+        state.annualTable.find((row) => names.includes(String(row?.["指标"] || "").trim())) ||
+        state.annualTable.find((row) => names.some((name) => String(row?.["指标"] || "").includes(name)))
+      );
+    }
+
+    function toNumber(value) {
+      if (typeof value === "number") return value;
+      const normalized = String(value ?? "").replace(/,/g, "").replace(/%/g, "").trim();
+      if (!normalized) return NaN;
+      const number = Number(normalized);
+      return Number.isFinite(number) ? number : NaN;
+    }
+
+    function shortCaseLabel(label) {
+      const text = String(label || "");
+      return text.length > 12 ? `${text.slice(0, 10)}…` : text;
     }
 
     function renderYAxisGrid(y, left, right) {
@@ -583,6 +959,19 @@
     const number = Number(value);
     if (!Number.isFinite(number)) return value ?? "";
     return number.toLocaleString("zh-CN", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+  }
+
+  function formatAnnualAxisValue(value, metric) {
+    if (metric?.label === "度电成本") return formatLevelizedCostValue(value);
+    return formatAxis(value);
+  }
+
+  function formatAnnualMetricValue(value, metric) {
+    return formatAnnualAxisValue(value, metric);
+  }
+
+  function translateDisplay(value) {
+    return window.PowerPlanI18n?.translate ? window.PowerPlanI18n.translate(value) : value;
   }
 
   function escapeHtml(value) {

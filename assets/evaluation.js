@@ -807,6 +807,17 @@ function defaultOverviewTables() {
 function defaultOverviewDisks() {
   return [
     { title: "成本构成", left_label: "运行成本", left_value: 0, right_label: "建设成本", right_value: 0, unit: "万元" },
+    {
+      title: "容量构成",
+      unit: "kW/kWh",
+      segments: [
+        { label: "柴发容量", value: 0, unit: "kW" },
+        { label: "风电容量", value: 0, unit: "kW" },
+        { label: "光伏容量", value: 0, unit: "kW" },
+        { label: "电储能容量", value: 0, unit: "kWh" },
+        { label: "燃料电池容量", value: 0, unit: "kW" },
+      ],
+    },
     { title: "电量构成", left_label: "柴发电量", left_value: 0, right_label: "新能源电量", right_value: 0, unit: "MWh" },
   ];
 }
@@ -879,30 +890,82 @@ function renderOverviewCompositionBars(disks) {
   return `<section class="overview-composition-stack">${disks.map(renderOverviewCompositionBar).join("")}</section>`;
 }
 
+const overviewCompositionColors = ["#0d5c59", "#d8b35d", "#3d7fc2", "#7b61a8", "#c76f45", "#2e9f78"];
+
 function renderOverviewCompositionBar(disk) {
-  const leftValue = Number(disk.left_value) || 0;
-  const rightValue = Number(disk.right_value) || 0;
-  const total = Math.max(leftValue + rightValue, 0.0001);
-  const leftPercent = Math.max(0, Math.min(100, (leftValue / total) * 100));
-  const rightPercent = Math.max(0, 100 - leftPercent);
-  const unit = disk.unit || "";
+  const segments = normalizeOverviewCompositionSegments(disk);
+  const positiveTotal = segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0);
+  const summarySegments = buildOverviewCompositionSummary(segments);
+  const multiClass = segments.length > 2 ? " multi-segment" : "";
   return `
-    <div class="composition-bar-card">
+    <div class="composition-bar-card${multiClass}">
       <h2>${escapeHtml(disk.title || "")}</h2>
       <div class="composition-bar-summary">
-        <span>${escapeHtml(disk.left_label || "")}<strong>${escapeHtml(formatNumber(leftValue))}${escapeHtml(unit)}</strong></span>
-        <span>${escapeHtml(disk.right_label || "")}<strong>${escapeHtml(formatNumber(rightValue))}${escapeHtml(unit)}</strong></span>
-        <span>合计<strong>${escapeHtml(formatNumber(leftValue + rightValue))}${escapeHtml(unit)}</strong></span>
+        ${summarySegments
+          .map((segment) => `<span>${escapeHtml(segment.label)}<strong>${escapeHtml(formatNumber(segment.value))}${escapeHtml(segment.unit)}</strong></span>`)
+          .join("")}
       </div>
       <div class="composition-bar-track" aria-label="${escapeHtml(disk.title || "")}">
-        <div class="composition-bar-segment primary" style="width:${leftPercent.toFixed(2)}%"><span>${Math.round(leftPercent)}%</span></div>
-        <div class="composition-bar-segment secondary" style="width:${rightPercent.toFixed(2)}%"><span>${Math.round(rightPercent)}%</span></div>
+        ${segments
+          .map((segment) => {
+            const percent = positiveTotal > 0 ? Math.max(0, (segment.value / positiveTotal) * 100) : 100 / segments.length;
+            return `<div class="composition-bar-segment ${escapeHtml(segment.className)}" style="width:${percent.toFixed(2)}%;--composition-segment-color:${escapeHtml(segment.color)}"><span>${Math.round(percent)}%</span></div>`;
+          })
+          .join("")}
       </div>
       <div class="composition-bar-legend">
-        <div><span class="legend-dot primary-dot"></span><span>${escapeHtml(disk.left_label || "")}</span><strong>${Math.round(leftPercent)}%</strong></div>
-        <div><span class="legend-dot secondary-dot"></span><span>${escapeHtml(disk.right_label || "")}</span><strong>${Math.round(rightPercent)}%</strong></div>
+        ${segments
+          .map((segment) => {
+            const percent = positiveTotal > 0 ? Math.max(0, (segment.value / positiveTotal) * 100) : 100 / segments.length;
+            return `<div><span class="legend-dot ${escapeHtml(segment.dotClass)}" style="background:${escapeHtml(segment.color)}"></span><span>${escapeHtml(segment.label)}</span><strong>${Math.round(percent)}%</strong></div>`;
+          })
+          .join("")}
       </div>
     </div>`;
+}
+
+function normalizeOverviewCompositionSegments(disk = {}) {
+  if (Array.isArray(disk.segments) && disk.segments.length) {
+    return disk.segments.map((segment, index) => ({
+      label: segment.label ?? segment.name ?? "",
+      value: Number(segment.value) || 0,
+      unit: segment.unit ?? disk.unit ?? "",
+      color: overviewCompositionColors[index % overviewCompositionColors.length],
+      className: `segment-${index + 1}`,
+      dotClass: `segment-dot-${index + 1}`,
+    }));
+  }
+  return [
+    {
+      label: disk.left_label || "",
+      value: Number(disk.left_value) || 0,
+      unit: disk.unit || "",
+      color: overviewCompositionColors[0],
+      className: "primary",
+      dotClass: "primary-dot",
+    },
+    {
+      label: disk.right_label || "",
+      value: Number(disk.right_value) || 0,
+      unit: disk.unit || "",
+      color: overviewCompositionColors[1],
+      className: "secondary",
+      dotClass: "secondary-dot",
+    },
+  ];
+}
+
+function buildOverviewCompositionSummary(segments) {
+  const usedUnits = [...new Set(segments.map((segment) => segment.unit).filter(Boolean))];
+  const summary = [...segments];
+  if (usedUnits.length <= 1 && segments.length <= 2) {
+    summary.push({
+      label: "合计",
+      value: segments.reduce((sum, segment) => sum + segment.value, 0),
+      unit: usedUnits[0] || "",
+    });
+  }
+  return summary;
 }
 
 function renderResultPanel(key, title, rows, points) {

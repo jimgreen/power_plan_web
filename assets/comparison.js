@@ -24,6 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
         chartId: "comparisonCurveChart",
         emptyText: "暂无小时级曲线",
         promptText: "请选择小时级曲线",
+        enableAnnualBarComparison: true,
       })
     : null;
   bindAddTab();

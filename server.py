@@ -58,9 +58,11 @@ SESSION_COOKIE_NAME = "power_plan_session"
 SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 NASA_POWER_HOURLY_URL = "https://power.larc.nasa.gov/api/temporal/hourly/point"
 AMAP_GEOCODING_URL = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_REVERSE_GEOCODING_URL = "https://restapi.amap.com/v3/geocode/regeo"
 DEFAULT_AMAP_WEB_SERVICE_KEY = "21db26646aac8fed4620eaa36f210018"
 OPEN_METEO_GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
+NOMINATIM_REVERSE_URL = "https://nominatim.openstreetmap.org/reverse"
 PHOTON_GEOCODING_URL = "https://photon.komoot.io/api/"
 CHINESE_PLACE_ALIASES = {
     "上海": "shanghai",
@@ -787,19 +789,20 @@ class OptimizationRuntime:
         upward_disturbance = round(max(860.0, 1480.0 - self.progress * 5.8), 1)
         downward_disturbance = round(max(720.0, 1310.0 - self.progress * 5.1), 1)
         frequency_risk_hours = max(0, int(round(68 - self.progress * 0.55)))
+        planning_rows = [
+            {"设备类型": "柴发", "设计台数": 2, "单台容量": 320, "总容量": 640, "单位": "kW"},
+            {"设备类型": "风机", "设计台数": 6, "单台容量": 120, "总容量": 720, "单位": "kW"},
+            {"设备类型": "光伏", "设计台数": 18, "单台容量": 55, "总容量": 990, "单位": "kW"},
+            {"设备类型": "储能", "设计台数": 4, "单台容量": 250, "总容量": 1000, "单位": "kWh"},
+            {"设备类型": "电制氢", "设计台数": 2, "单台容量": 180, "总容量": 360, "单位": "kW"},
+            {"设备类型": "储氢罐", "设计台数": 3, "单台容量": 420, "总容量": 1260, "单位": "Nm3"},
+            {"设备类型": "燃料电池", "设计台数": 2, "单台容量": 160, "总容量": 320, "单位": "kW"},
+        ]
         return {
             "overview_tables": [
                 {
                     "title": "规划结果",
-                    "rows": [
-                        {"设备类型": "柴发", "设计台数": 2, "单台容量": 320, "总容量": 640, "单位": "kW"},
-                        {"设备类型": "风机", "设计台数": 6, "单台容量": 120, "总容量": 720, "单位": "kW"},
-                        {"设备类型": "光伏", "设计台数": 18, "单台容量": 55, "总容量": 990, "单位": "kW"},
-                        {"设备类型": "储能", "设计台数": 4, "单台容量": 250, "总容量": 1000, "单位": "kWh"},
-                        {"设备类型": "电制氢", "设计台数": 2, "单台容量": 180, "总容量": 360, "单位": "kW"},
-                        {"设备类型": "储氢罐", "设计台数": 3, "单台容量": 420, "总容量": 1260, "单位": "Nm3"},
-                        {"设备类型": "燃料电池", "设计台数": 2, "单台容量": 160, "总容量": 320, "单位": "kW"},
-                    ],
+                    "rows": planning_rows,
                 },
                 {
                     "title": "规划年指标",
@@ -833,6 +836,7 @@ class OptimizationRuntime:
                     "right_value": construction_cost,
                     "unit": "万元",
                 },
+                plan_optimizer.capacity_composition_disk(planning_rows),
                 {
                     "title": "电量构成",
                     "left_label": "柴发电量",
@@ -1717,6 +1721,7 @@ def result_workbook_header_to_field(header: str) -> str:
 def build_overview_composition_from_workbook(workbook) -> list[dict]:
     annual_rows = read_annual_comparison_rows(workbook)
     energy_rows = read_named_sheet_rows(workbook, "供能分析")
+    planning_rows = read_named_sheet_rows(workbook, PLANNING_RESULT_SHEET_NAME)
     metrics = rows_by_metric([*annual_rows, *energy_rows])
     construction_cost = metric_value(metrics, "年均建设成本")
     diesel_cost = metric_value(metrics, "年柴油成本")
@@ -1742,6 +1747,7 @@ def build_overview_composition_from_workbook(workbook) -> list[dict]:
             "right_value": construction_cost,
             "unit": "万元",
         },
+        capacity_composition_disk_from_workbook_rows(planning_rows, metrics),
         {
             "title": "电量构成",
             "left_label": "柴发电量",
@@ -1751,6 +1757,24 @@ def build_overview_composition_from_workbook(workbook) -> list[dict]:
             "unit": energy_unit(metrics, ["柴发总发电量", "柴发总电量", "绿电年发电量", "新能源实发电量"]) or "kWh",
         },
     ]
+
+
+def capacity_composition_disk_from_workbook_rows(planning_rows: list[dict], metrics: dict[str, dict]) -> dict:
+    capacity_disk = plan_optimizer.capacity_composition_disk(planning_rows)
+    if any(metric_number(segment.get("value")) > 0 for segment in capacity_disk["segments"]):
+        return capacity_disk
+    return plan_optimizer.capacity_composition_disk_from_values(
+        diesel_capacity=metric_value(metrics, "柴发总容量"),
+        wind_capacity=metric_value(metrics, "风电总容量"),
+        pv_capacity=metric_value(metrics, "光伏总容量"),
+        storage_energy_capacity=metric_value(metrics, "储能总容量"),
+        fuel_cell_power_capacity=metric_value(metrics, "氢能总容量"),
+    )
+
+
+def metric_number(value) -> float:
+    parsed = _numeric_or_none(value)
+    return float(parsed) if parsed is not None else 0.0
 
 
 def rows_by_metric(rows: list[dict]) -> dict[str, dict]:
@@ -3573,6 +3597,116 @@ def geocode_with_photon(place: str) -> dict:
     }
 
 
+def reverse_geocode_coordinates(latitude: float, longitude: float) -> dict:
+    latitude, longitude = validate_reverse_geocode_inputs(latitude, longitude)
+    providers = [reverse_geocode_with_nominatim]
+    if AMAP_WEB_SERVICE_KEY:
+        providers.insert(0, reverse_geocode_with_amap)
+    errors: list[str] = []
+    for provider in providers:
+        try:
+            return provider(latitude, longitude)
+        except GeocodingError as exc:
+            errors.append(str(exc))
+    raise GeocodingError("；".join(errors) or "未找到该坐标对应的地点")
+
+
+def validate_reverse_geocode_inputs(latitude: float, longitude: float) -> tuple[float, float]:
+    try:
+        lat = float(latitude)
+        lng = float(longitude)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("经纬度必须为有效数值") from exc
+    if lat < -90 or lat > 90:
+        raise ValueError("纬度范围应为 -90 到 90")
+    if lng < -180 or lng > 180:
+        raise ValueError("经度范围应为 -180 到 180")
+    return lat, lng
+
+
+def reverse_geocode_with_amap(latitude: float, longitude: float) -> dict:
+    query = urlencode(
+        {
+            "location": f"{longitude},{latitude}",
+            "output": "JSON",
+            "key": AMAP_WEB_SERVICE_KEY,
+            "extensions": "base",
+        }
+    )
+    url = f"{AMAP_REVERSE_GEOCODING_URL}?{query}"
+    try:
+        with urlopen_with_user_agent(url, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise GeocodingError(f"高德坐标反查接口返回错误: HTTP {exc.code}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise GeocodingError(f"高德坐标反查接口连接失败: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GeocodingError("高德坐标反查接口返回内容不是合法 JSON") from exc
+    if str(data.get("status")) != "1":
+        raise GeocodingError(f"高德坐标反查失败: {data.get('info') or data.get('infocode') or '未知错误'}")
+    regeocode = data.get("regeocode", {}) if isinstance(data, dict) else {}
+    if not regeocode:
+        raise GeocodingError("高德未找到该坐标对应的地点")
+    component = regeocode.get("addressComponent", {}) if isinstance(regeocode, dict) else {}
+    display_parts = [
+        regeocode.get("formatted_address"),
+        component.get("province"),
+        component.get("city"),
+        component.get("district"),
+        component.get("township"),
+    ]
+    display_name = "，".join(str(part) for part in display_parts if part and part != [])
+    place = str(regeocode.get("formatted_address") or display_name or "").strip()
+    if not place:
+        raise GeocodingError("高德坐标反查结果缺少有效地点名称")
+    return {
+        "place": place,
+        "display_name": place,
+        "latitude": latitude,
+        "longitude": longitude,
+        "source": "高德地图 Web 服务逆地理编码 API",
+    }
+
+
+def reverse_geocode_with_nominatim(latitude: float, longitude: float) -> dict:
+    query = urlencode({"format": "json", "lat": latitude, "lon": longitude, "accept-language": "zh-CN"})
+    url = f"{NOMINATIM_REVERSE_URL}?{query}"
+    try:
+        with urlopen_with_user_agent(url, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise GeocodingError(f"Nominatim 坐标反查接口返回错误: HTTP {exc.code}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise GeocodingError(f"Nominatim 坐标反查接口连接失败: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise GeocodingError("Nominatim 坐标反查接口返回内容不是合法 JSON") from exc
+    if not isinstance(data, dict):
+        raise GeocodingError("Nominatim 未找到该坐标对应的地点")
+    display_name = str(data.get("display_name") or "").strip()
+    address = data.get("address", {}) if isinstance(data.get("address"), dict) else {}
+    place = display_name or ", ".join(
+        str(part)
+        for part in (
+            address.get("road"),
+            address.get("suburb"),
+            address.get("city") or address.get("town") or address.get("village"),
+            address.get("state"),
+            address.get("country"),
+        )
+        if part
+    )
+    if not place:
+        raise GeocodingError("Nominatim 坐标反查结果缺少有效地点名称")
+    return {
+        "place": place,
+        "display_name": display_name or place,
+        "latitude": latitude,
+        "longitude": longitude,
+        "source": "OpenStreetMap Nominatim Reverse",
+    }
+
+
 def urlopen_with_user_agent(url: str, timeout: int):
     from urllib.request import Request
 
@@ -4486,6 +4620,9 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
         if path == "/api/planning/geocode" and method == "POST":
             payload = _read_json_body(body)
             return _json_response(geocode_place_name(str(payload.get("place", ""))))
+        if path == "/api/planning/reverse-geocode" and method == "POST":
+            payload = _read_json_body(body)
+            return _json_response(reverse_geocode_coordinates(payload.get("latitude"), payload.get("longitude")))
         if path == prefix and method == "GET":
             return _json_response({"schemes": PLANNING_STORE.list_schemes()})
         if path == prefix and method == "POST":

@@ -12,8 +12,13 @@ const state = {
   mapMarker: null,
   mapCleanup: null,
   mapProvider: "amap",
+  mapReverseGeocodeToken: 0,
   chartMeta: null,
   chartDrag: null,
+  pendingWeatherRows: null,
+  pendingWeatherMeta: null,
+  weatherPreviewVisibleCurves: new Set(["wind_speed", "solar_irradiance", "temperature"]),
+  weatherPreviewManualHeight: null,
   loadPreviewMeta: null,
   loadPreviewDrag: null,
   timeSeriesImportManualChartHeight: null,
@@ -22,6 +27,7 @@ const state = {
   timeSeriesImportDrag: null,
   timeChartManualHeight: null,
   layoutObserver: null,
+  schemeRailLayoutFrame: 0,
   pendingTimeSeriesImport: null,
   pendingLoadCurve: null,
   originalLoadCurve: null,
@@ -30,6 +36,9 @@ const state = {
   isSwitchingScheme: false,
 };
 
+let activePlanningParameterGroup = "normal";
+
+const WEATHER_COORDINATE_STORAGE_KEY = "powerPlanWeatherCoordinate";
 const COLLAPSED_PANEL_SIZE = 0;
 const AMAP_TILE_SIZE = 256;
 const AMAP_MIN_ZOOM = 2;
@@ -81,6 +90,8 @@ const timeSeriesImportSeries = [
   ["load", "负荷", "#64e6a3", "kW"],
 ];
 
+const weatherPreviewSeries = timeSeriesImportSeries.filter(([key]) => key !== "load");
+
 const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
@@ -130,7 +141,7 @@ const planningParameterGroups = [
   },
   {
     key: "disturbance",
-    title: "是否考虑扰动后平衡约束相关参数",
+    title: "扰动后安全参数",
     toggleKey: "post_disturbance_power_balance_enabled",
     keys: [
       "post_disturbance_power_balance_enabled",
@@ -144,7 +155,7 @@ const planningParameterGroups = [
   },
   {
     key: "frequency",
-    title: "是否考虑频率安全约束相关参数",
+    title: "频率安全参数",
     toggleKey: "frequency_security_constraint_enabled",
     keys: [
       "frequency_security_constraint_enabled",
@@ -281,6 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindSummaryTabs();
   bindTimeResizeHandle();
   bindTimeSeriesImportResizeHandle();
+  bindWeatherPreviewResizeHandle();
   bindActions();
   bindAdaptiveLayout();
   syncAdaptiveLayout();
@@ -331,9 +343,8 @@ function bindActions() {
   document.getElementById("importTimeSeriesFile").addEventListener("click", importTimeSeriesFile);
   document.getElementById("openTimeSeriesImportFile").addEventListener("click", openTimeSeriesImportFile);
   document.getElementById("timeSeriesImportFile").addEventListener("change", onTimeSeriesImportFileChange);
-  document.getElementById("closeTimeSeriesImport").addEventListener("click", closeTimeSeriesImport);
+  document.getElementById("closeTimeSeriesImport").addEventListener("click", cancelTimeSeriesImport);
   document.getElementById("confirmTimeSeriesImport").addEventListener("click", confirmImportedTimeSeries);
-  document.getElementById("cancelTimeSeriesImport").addEventListener("click", cancelTimeSeriesImport);
   document.querySelectorAll("[data-import-curve]").forEach((button) => {
     button.addEventListener("click", () => toggleTimeSeriesImportCurve(button.dataset.importCurve));
   });
@@ -341,19 +352,23 @@ function bindActions() {
   timeSeriesImportChart.addEventListener("pointerdown", startTimeSeriesImportValueDrag);
   document.getElementById("loadGeneratorMode").addEventListener("change", onLoadGeneratorModeChange);
   document.getElementById("openLoadGenerator").addEventListener("click", openLoadGenerator);
-  document.getElementById("closeLoadGenerator").addEventListener("click", closeLoadGenerator);
+  document.getElementById("closeLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("generateLoadCurve").addEventListener("click", generateLoadCurve);
   document.getElementById("loadCurveImportFile").addEventListener("change", onLoadCurveImportFileChange);
   document.getElementById("saveLoadTemplate").addEventListener("click", saveLoadTemplate);
   const loadGeneratorPreview = document.getElementById("loadGeneratorPreview");
   loadGeneratorPreview.addEventListener("pointerdown", startLoadPreviewValueDrag);
   document.getElementById("confirmLoadGenerator").addEventListener("click", confirmGeneratedLoadCurve);
-  document.getElementById("cancelLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("geocodePlace").addEventListener("click", geocodePlace);
   document.getElementById("fetchWeatherHistory").addEventListener("click", fetchWeatherHistory);
   document.getElementById("openCoordinatePicker").addEventListener("click", openCoordinatePicker);
   document.getElementById("closeMapPicker").addEventListener("click", closeMapPicker);
   document.getElementById("confirmMapPoint").addEventListener("click", confirmMapPoint);
+  document.getElementById("weatherLatitude").addEventListener("change", syncMapPointFromInputs);
+  document.getElementById("weatherLongitude").addEventListener("change", syncMapPointFromInputs);
+  document.querySelectorAll("[data-weather-preview-curve]").forEach((button) => {
+    button.addEventListener("click", () => toggleWeatherPreviewCurve(button.dataset.weatherPreviewCurve));
+  });
   document.querySelectorAll("[data-map-provider]").forEach((button) => {
     button.addEventListener("click", () => selectMapProvider(button.dataset.mapProvider));
   });
@@ -385,9 +400,13 @@ function bindAdaptiveLayout() {
 
 function syncAdaptiveLayout() {
   applyPanelTableMaxHeight();
+  applyAdaptiveSchemeRailLayout();
   applyAdaptiveTimeSeriesLayout();
   applyAdaptiveSummaryLayout();
   renderChart();
+  if (!document.getElementById("mapPickerModal")?.hidden) {
+    renderWeatherPreviewChart(state.pendingWeatherRows || []);
+  }
 }
 
 function applyPanelTableMaxHeight() {
@@ -396,6 +415,52 @@ function applyPanelTableMaxHeight() {
   const available = editor ? editor.clientHeight - (header?.offsetHeight || 0) - 72 : window.innerHeight * 0.55;
   const tableMaxHeight = Math.min(680, Math.max(220, available));
   document.documentElement.style.setProperty("--panel-table-max-height", `${Math.round(tableMaxHeight)}px`);
+}
+
+function scheduleSchemeRailLayout() {
+  if (state.schemeRailLayoutFrame) {
+    window.cancelAnimationFrame(state.schemeRailLayoutFrame);
+  }
+  state.schemeRailLayoutFrame = window.requestAnimationFrame(() => {
+    state.schemeRailLayoutFrame = 0;
+    applyAdaptiveSchemeRailLayout();
+  });
+}
+
+function applyAdaptiveSchemeRailLayout() {
+  const layout = document.querySelector(".planning-scheme-rail-layout");
+  const rail = layout?.closest(".scheme-rail");
+  const workspace = rail?.closest(".workspace");
+  const summaryRail = workspace?.querySelector(".summary-rail");
+  const schemeList = layout?.querySelector(".scheme-list");
+  if (!layout || !rail || !workspace || !schemeList) return;
+
+  const workspaceStyle = getComputedStyle(workspace);
+  const railStyle = getComputedStyle(rail);
+  const layoutStyle = getComputedStyle(layout);
+  const rowGap = parseFloat(workspaceStyle.rowGap || workspaceStyle.gap || 0) || 0;
+  const workspaceContentHeight =
+    workspace.clientHeight -
+    (parseFloat(workspaceStyle.paddingTop) || 0) -
+    (parseFloat(workspaceStyle.paddingBottom) || 0);
+  const layoutGap = parseFloat(layoutStyle.rowGap || layoutStyle.gap || 0) || 0;
+  const verticalChrome =
+    (parseFloat(railStyle.paddingTop) || 0) +
+    (parseFloat(railStyle.paddingBottom) || 0) +
+    (parseFloat(railStyle.borderTopWidth) || 0) +
+    (parseFloat(railStyle.borderBottomWidth) || 0);
+  const children = Array.from(layout.children);
+  const nonListHeight = children
+    .filter((child) => child !== schemeList)
+    .reduce((sum, child) => sum + child.getBoundingClientRect().height, 0);
+  const gapHeight = Math.max(0, children.length - 1) * layoutGap;
+  const requiredRailHeight = Math.ceil(verticalChrome + nonListHeight + schemeList.scrollHeight + gapHeight);
+  const summaryMinimumHeight = Math.max(280, Math.min(340, summaryRail?.scrollHeight || 280));
+  const maxRailHeight = Math.max(150, workspaceContentHeight - rowGap - summaryMinimumHeight);
+  const targetHeight = Math.max(150, Math.min(requiredRailHeight, maxRailHeight));
+  const capped = requiredRailHeight > targetHeight + 2;
+  workspace.style.setProperty("--planning-scheme-rail-height", `${Math.round(targetHeight)}px`);
+  rail.classList.toggle("scheme-list-capped", capped);
 }
 
 function applyAdaptiveTimeSeriesLayout() {
@@ -415,7 +480,7 @@ function applyAdaptiveTimeSeriesLayout() {
   const available = Math.max(COLLAPSED_PANEL_SIZE, tabHeight - chartChrome - tableChrome - handleHeight - 32);
   const autoChartHeight = Math.min(340, Math.max(COLLAPSED_PANEL_SIZE, available * 0.4));
   const chartHeight = clampTimeChartHeight(state.timeChartManualHeight ?? autoChartHeight);
-  const tableHeight = Math.min(620, Math.max(COLLAPSED_PANEL_SIZE, available - chartHeight));
+  const tableHeight = Math.max(COLLAPSED_PANEL_SIZE, available - chartHeight);
 
   document.documentElement.style.setProperty("--time-chart-height", `${Math.round(chartHeight)}px`);
   document.documentElement.style.setProperty("--time-table-height", `${Math.round(tableHeight)}px`);
@@ -560,12 +625,70 @@ function bindTimeSeriesImportResizeHandle() {
   handle.setAttribute("aria-valuenow", String(Math.round(chart.getBoundingClientRect().height || 240)));
 }
 
+function bindWeatherPreviewResizeHandle() {
+  const handle = document.getElementById("weatherPreviewResizeHandle");
+  const panel = document.querySelector(".weather-preview-panel");
+  if (!handle || !panel) return;
+
+  const applyHeight = (height) => {
+    const safeHeight = clampWeatherPreviewHeight(height);
+    state.weatherPreviewManualHeight = safeHeight;
+    document.documentElement.style.setProperty("--weather-preview-panel-height", `${Math.round(safeHeight)}px`);
+    handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
+    renderWeatherPreviewChart(state.pendingWeatherRows || []);
+    setTimeout(() => state.mapInstance?.resize?.(), 0);
+  };
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = panel.getBoundingClientRect().height || 220;
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      applyHeight(startHeight - (moveEvent.clientY - startY));
+    };
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+      state.mapInstance?.resize?.();
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const currentHeight = panel.getBoundingClientRect().height || 220;
+    const keySteps = {
+      ArrowUp: 12,
+      ArrowDown: -12,
+      PageUp: 48,
+      PageDown: -48,
+    };
+    if (event.key in keySteps) {
+      event.preventDefault();
+      applyHeight(currentHeight + keySteps[event.key]);
+    }
+  });
+
+  handle.setAttribute("aria-valuenow", String(Math.round(panel.getBoundingClientRect().height || 220)));
+}
+
 function clampTimeChartHeight(height) {
   return Math.min(Math.max(Number(height) || 240, COLLAPSED_PANEL_SIZE), maxTimeChartHeight());
 }
 
 function clampTimeSeriesImportChartHeight(height) {
   return Math.min(Math.max(Number(height) || 240, COLLAPSED_PANEL_SIZE), 430);
+}
+
+function clampWeatherPreviewHeight(height) {
+  return Math.min(Math.max(Number(height) || 220, COLLAPSED_PANEL_SIZE), 460);
 }
 
 function maxTimeChartHeight() {
@@ -634,6 +757,7 @@ function renderSchemes() {
   document.querySelectorAll(".scheme-item").forEach((item) => {
     bindSchemeListItem(item, () => selectSchemeWithSwitchFeedback(item.dataset.name).catch(showError));
   });
+  scheduleSchemeRailLayout();
 }
 
 function bindSchemeListItem(item, onSelect) {
@@ -785,7 +909,7 @@ async function geocodePlace() {
     setMapPickerHint("请输入地名");
     return;
   }
-  setMapPickerHint("正在获取坐标...");
+  setMapPickerHint("正在定位...");
   const result = await api("/api/planning/geocode", {
     method: "POST",
     body: JSON.stringify({ place }),
@@ -794,7 +918,36 @@ async function geocodePlace() {
     return null;
   });
   if (!result) return;
+  rememberWeatherCoordinate(result.latitude, result.longitude, coordinateInputNumber("weatherYear"), place);
   setMapPoint(result.latitude, result.longitude, "geocode", result);
+}
+
+async function reverseGeocodePoint(latitude, longitude) {
+  const token = ++state.mapReverseGeocodeToken;
+  setMapPickerHint(`地图坐标：${formatCoordinate(latitude)}, ${formatCoordinate(longitude)}；正在解析地点...`);
+  const result = await api("/api/planning/reverse-geocode", {
+    method: "POST",
+    body: JSON.stringify({ latitude, longitude }),
+  }).catch((error) => {
+    if (token === state.mapReverseGeocodeToken) {
+      setMapPickerHint(`地图坐标：${formatCoordinate(latitude)}, ${formatCoordinate(longitude)}；地点解析失败`);
+      console.warn("地图选点地点解析失败", error);
+    }
+    return null;
+  });
+  if (!result || token !== state.mapReverseGeocodeToken) return;
+  setWeatherPlaceFromReverseGeocode(result, latitude, longitude);
+}
+
+function setWeatherPlaceFromReverseGeocode(result, latitude, longitude) {
+  const place = String(result?.place || result?.display_name || "").trim();
+  if (!place) return false;
+  const input = document.getElementById("weatherPlace");
+  if (input) input.value = place;
+  rememberWeatherCoordinate(latitude, longitude, coordinateInputNumber("weatherYear"), place);
+  setMapPickerHint(`地图坐标：${formatCoordinate(latitude)}, ${formatCoordinate(longitude)}；地点已更新：${place}`);
+  setWeatherImportStatus("地点已更新", "ok");
+  return true;
 }
 
 async function fetchWeatherHistory() {
@@ -824,11 +977,31 @@ async function fetchWeatherHistory() {
     setWeatherImportStatus(`历史气象数据小时数应为8760，当前为${rows.length}`, "error");
     return;
   }
+  state.pendingWeatherRows = rows;
+  state.pendingWeatherMeta = { year, latitude, longitude };
+  rememberWeatherCoordinate(latitude, longitude, year, document.getElementById("weatherPlace")?.value || "");
+  renderWeatherPreviewChart(rows);
+  setWeatherImportStatus("气象数据已预览，请确认后更新主页面", "ok");
+}
+
+async function applyPendingWeatherHistory() {
+  const rows = Array.isArray(state.pendingWeatherRows) ? state.pendingWeatherRows : [];
+  const meta = state.pendingWeatherMeta || {};
+  if (rows.length !== 8760) {
+    const message = "请先获取气象数据并确认预览曲线";
+    setWeatherImportStatus(message, "error");
+    alert(message);
+    return false;
+  }
+  if (!state.currentScheme || !state.payload) {
+    setWeatherImportStatus("请先选择方案", "error");
+    return false;
+  }
   await ensureTimeSeriesLoaded().catch((error) => {
     setWeatherImportStatus(error.message || String(error), "error");
     return false;
   });
-  if (!isTimeSeriesLoaded()) return;
+  if (!isTimeSeriesLoaded()) return false;
   const nextRows = (state.payload.time_series || []).map((row, index) => {
     const weather = rows[index];
     if (!weather) return row;
@@ -842,7 +1015,7 @@ async function fetchWeatherHistory() {
   });
   if (nextRows.length !== 8760) {
     setWeatherImportStatus("当前时序表不是8760行，未更新数据", "error");
-    return;
+    return false;
   }
   state.payload.time_series = nextRows;
   state.payload.time_series_count = nextRows.length;
@@ -851,7 +1024,18 @@ async function fetchWeatherHistory() {
   renderTimeTable();
   renderLimitSummary();
   renderSummary();
+  clearPendingWeatherPreview(false);
+  const year = Number(meta.year);
+  const latitude = Number(meta.latitude);
+  const longitude = Number(meta.longitude);
   setWeatherImportStatus(`${year}年气象已更新（纬度：${latitude.toFixed(3)}，经度：${longitude.toFixed(3)}）`, "ok");
+  return true;
+}
+
+function clearPendingWeatherPreview(render = true) {
+  state.pendingWeatherRows = null;
+  state.pendingWeatherMeta = null;
+  if (render) renderWeatherPreviewChart([]);
 }
 
 function importTimeSeriesFile() {
@@ -1684,8 +1868,11 @@ function roundUiNumber(value) {
 
 async function openCoordinatePicker() {
   const modal = document.getElementById("mapPickerModal");
+  restoreWeatherCoordinate();
   showModalInBody(modal);
   setMapPickerHint("根据地名查找坐标，或点击地图选点。");
+  renderWeatherPreviewLegend();
+  renderWeatherPreviewChart(state.pendingWeatherRows || []);
   const config = await loadMapConfig();
   if (!config) return;
   state.mapProvider = chooseAvailableMapProvider(config, state.mapProvider);
@@ -1734,7 +1921,8 @@ async function loadSelectedMapProvider() {
   setMapPickerHint(`地图加载失败：${errors.join("；") || "未能加载任何地图服务"}`);
 }
 
-function closeMapPicker() {
+function closeMapPicker({ clearPreview = true } = {}) {
+  if (clearPreview) clearPendingWeatherPreview();
   hideModal(document.getElementById("mapPickerModal"));
 }
 
@@ -1944,6 +2132,7 @@ function createTileMap(canvas, center, initialZoom, provider = "amap") {
       const point = pointFromEvent(event);
       markerPoint = point;
       setMapPoint(point[1], point[0]);
+      reverseGeocodePoint(point[1], point[0]);
     }
   };
 
@@ -2104,17 +2293,177 @@ function modulo(value, divisor) {
 }
 
 function setMapPoint(latitude, longitude, source = "map", geocodeResult = null) {
+  if (source !== "map") state.mapReverseGeocodeToken += 1;
   state.mapPoint = { latitude, longitude };
-  document.getElementById("weatherLatitude").value = Number(latitude).toFixed(6);
-  document.getElementById("weatherLongitude").value = Number(longitude).toFixed(6);
+  document.getElementById("weatherLatitude").value = formatCoordinate(latitude);
+  document.getElementById("weatherLongitude").value = formatCoordinate(longitude);
+  rememberWeatherCoordinate(latitude, longitude, coordinateInputNumber("weatherYear"), document.getElementById("weatherPlace")?.value || "");
   if (state.mapInstance) {
     state.mapInstance.setCenter([longitude, latitude]);
     if (source === "geocode" && state.mapInstance.setZoom) state.mapInstance.setZoom(11);
     if (state.mapMarker) state.mapMarker.setPosition([longitude, latitude]);
   }
-  const sourceText = source === "geocode" ? geocodeHintLabel(geocodeResult) : "地图坐标";
-  setMapPickerHint(`${sourceText}：${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`);
+  const sourceText = source === "geocode" ? geocodeHintLabel(geocodeResult) : (source === "manual" ? "输入坐标" : "地图坐标");
+  setMapPickerHint(`${sourceText}：${formatCoordinate(latitude)}, ${formatCoordinate(longitude)}`);
   setWeatherImportStatus("坐标已填入", "ok");
+}
+
+function syncMapPointFromInputs() {
+  const latitude = coordinateInputNumber("weatherLatitude");
+  const longitude = coordinateInputNumber("weatherLongitude");
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+  if (latitude < -90 || latitude > 90) {
+    setMapPickerHint("纬度范围应为 -90 到 90");
+    return;
+  }
+  if (longitude < -180 || longitude > 180) {
+    setMapPickerHint("经度范围应为 -180 到 180");
+    return;
+  }
+  setMapPoint(latitude, longitude, "manual");
+}
+
+function rememberWeatherCoordinate(latitude, longitude, year, place = "") {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  const dataYear = Number(year);
+  const cleanPlace = String(place || document.getElementById("weatherPlace")?.value || "").trim();
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  const payload = {
+    latitude: lat,
+    longitude: lng,
+    year: Number.isInteger(dataYear) ? dataYear : Number(document.getElementById("weatherYear")?.value || NaN),
+    place: cleanPlace,
+  };
+  try {
+    localStorage.setItem(WEATHER_COORDINATE_STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    console.warn("保存气象坐标失败", error);
+  }
+}
+
+function restoreWeatherCoordinate() {
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(WEATHER_COORDINATE_STORAGE_KEY) || "null");
+  } catch (error) {
+    stored = null;
+  }
+  if (!stored) return;
+  const latitude = Number(stored.latitude);
+  const longitude = Number(stored.longitude);
+  const year = Number(stored.year);
+  const place = String(stored.place || "").trim();
+  if (Number.isFinite(latitude)) document.getElementById("weatherLatitude").value = formatCoordinate(latitude);
+  if (Number.isFinite(longitude)) document.getElementById("weatherLongitude").value = formatCoordinate(longitude);
+  if (Number.isInteger(year)) document.getElementById("weatherYear").value = String(year);
+  if (place) document.getElementById("weatherPlace").value = place;
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    state.mapPoint = { latitude, longitude };
+  }
+}
+
+function formatCoordinate(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(3) : "";
+}
+
+function renderWeatherPreviewLegend() {
+  document.querySelectorAll("[data-weather-preview-curve]").forEach((button) => {
+    const active = state.weatherPreviewVisibleCurves.has(button.dataset.weatherPreviewCurve);
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function toggleWeatherPreviewCurve(curveKey) {
+  if (!curveKey) return;
+  if (state.weatherPreviewVisibleCurves.has(curveKey)) {
+    state.weatherPreviewVisibleCurves.delete(curveKey);
+  } else {
+    state.weatherPreviewVisibleCurves.add(curveKey);
+  }
+  renderWeatherPreviewLegend();
+  renderWeatherPreviewChart(state.pendingWeatherRows || []);
+}
+
+function renderWeatherPreviewChart(rows) {
+  const svg = document.getElementById("weatherPreviewChart");
+  if (!svg) return;
+  renderWeatherPreviewStats(rows);
+  const width = svg.clientWidth || 900;
+  const height = svg.clientHeight || 210;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const baseRect = `<rect x="0" y="0" width="${width}" height="${height}" rx="12" fill="transparent"/>`;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    svg.innerHTML = `${baseRect}<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">获取气象后显示风、光、温曲线预览</text>`;
+    return;
+  }
+  const visibleSpecs = weatherPreviewSeries.filter(([key]) => state.weatherPreviewVisibleCurves.has(key));
+  if (!visibleSpecs.length) {
+    svg.innerHTML = `${baseRect}<text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">请选择至少一条曲线</text>`;
+    return;
+  }
+
+  const padding = { left: 54, right: 24, top: 22, bottom: 32 };
+  const plotWidth = Math.max(1, width - padding.left - padding.right);
+  const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+  const x = (index) => padding.left + (index / Math.max(1, rows.length - 1)) * plotWidth;
+  const yScale = (key) => {
+    const values = rows.map((row) => Number(row[key])).filter(Number.isFinite);
+    const rawMin = values.length ? Math.min(...values) : 0;
+    const rawMax = values.length ? Math.max(...values) : 1;
+    const min = rawMin === rawMax ? rawMin - 1 : rawMin;
+    const max = rawMin === rawMax ? rawMax + 1 : rawMax;
+    const span = max - min || 1;
+    return {
+      rawMin,
+      rawMax,
+      y(value) {
+        const number = Number(value);
+        const safeValue = Number.isFinite(number) ? number : rawMin;
+        return padding.top + plotHeight - ((safeValue - min) / span) * plotHeight;
+      },
+    };
+  };
+  const grid = [0, 0.25, 0.5, 0.75, 1]
+    .map((ratio) => {
+      const y = padding.top + plotHeight * ratio;
+      return `<line x1="${padding.left}" x2="${width - padding.right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(137, 180, 186, 0.36)"/>`;
+    })
+    .join("");
+  const xTicks = monthRanges
+    .map(([label, start]) => {
+      const tickX = x(start);
+      return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padding.top + plotHeight}" y2="${padding.top + plotHeight + 5}" stroke="rgba(137, 180, 186, 0.5)"/><text x="${tickX.toFixed(1)}" y="${height - 9}" text-anchor="middle" fill="#dffbff" font-size="10">${label}</text>`;
+    })
+    .join("");
+  const paths = visibleSpecs
+    .map(([key, title, color, unit]) => {
+      const scale = yScale(key);
+      const d = rows.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${scale.y(row[key]).toFixed(1)}`).join(" ");
+      return `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.8" vector-effect="non-scaling-stroke"><title>${escapeHtml(title)} ${escapeHtml(formatNumber(scale.rawMin))}-${escapeHtml(formatNumber(scale.rawMax))}${escapeHtml(unit)}</title></path>`;
+    })
+    .join("");
+  svg.innerHTML = `${baseRect}<g>${grid}</g><line x1="${padding.left}" x2="${width - padding.right}" y1="${padding.top + plotHeight}" y2="${padding.top + plotHeight}" stroke="rgba(180, 226, 230, 0.7)"/><line x1="${padding.left}" x2="${padding.left}" y1="${padding.top}" y2="${padding.top + plotHeight}" stroke="rgba(180, 226, 230, 0.7)"/><g>${xTicks}</g>${paths}`;
+}
+
+function renderWeatherPreviewStats(rows) {
+  const host = document.getElementById("weatherPreviewStats");
+  if (!host) return;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    host.innerHTML = '<span class="weather-preview-stat-empty">暂无气象数据</span>';
+    return;
+  }
+  host.innerHTML = weatherPreviewSeries
+    .map(([key, title, color, unit]) => {
+      const stats = calculateSeriesStats(rows, key);
+      if (!stats.count) {
+        return `<div class="weather-preview-stat-item" style="--curve-color:${color}"><strong>${escapeHtml(title)}</strong><span>暂无</span></div>`;
+      }
+      return `<div class="weather-preview-stat-item" style="--curve-color:${color}"><strong>${escapeHtml(title)}</strong><span>最大值 ${escapeHtml(formatNumber(stats.max))}${escapeHtml(unit)}</span><span>最小值 ${escapeHtml(formatNumber(stats.min))}${escapeHtml(unit)}</span><span>平均值 ${escapeHtml(formatNumber(stats.avg))}${escapeHtml(unit)}</span></div>`;
+    })
+    .join("");
 }
 
 function geocodeHintLabel(result) {
@@ -2123,12 +2472,10 @@ function geocodeHintLabel(result) {
   return displayName ? `${provider}（${displayName}）` : provider;
 }
 
-function confirmMapPoint() {
-  if (!state.mapPoint) {
-    document.getElementById("mapPickerHint").textContent = "请先点击地图选择位置";
-    return;
+async function confirmMapPoint() {
+  if (await applyPendingWeatherHistory()) {
+    closeMapPicker();
   }
-  closeMapPicker();
 }
 
 function validateWeatherInputs(latitude, longitude, year) {
@@ -2723,15 +3070,32 @@ function renderPlanningParameters() {
     return;
   }
   const row = planningParameterRow();
-  host.innerHTML = `<div class="planning-parameter-grid">${planningParameterGroups
-    .map((group, index) => `${index ? '<div class="planning-parameter-resize-handle" role="separator" tabindex="0" aria-orientation="horizontal" title="拖拽调整表格高度"></div>' : ""}${renderPlanningParameterGroupTable(group, row, true)}`)
-    .join("")}</div>`;
+  const activeGroup = planningParameterGroups.find((group) => group.key === activePlanningParameterGroup) || planningParameterGroups[0];
+  activePlanningParameterGroup = activeGroup.key;
+  host.innerHTML = `<div class="planning-parameter-grid">${renderPlanningParameterTabs(activeGroup.key)}<div class="planning-parameter-panel">${renderPlanningParameterGroupTable(activeGroup, row, true)}</div></div>`;
+  host.querySelectorAll("[data-planning-parameter-tab]").forEach((button) => {
+    button.addEventListener("click", () => selectPlanningParameterGroup(button.dataset.planningParameterTab));
+  });
   host.querySelectorAll("[data-planning-key]:not([data-planning-group-toggle])").forEach((input) => {
     const eventName = input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input";
     input.addEventListener(eventName, onPlanningParameterInput);
   });
   host.querySelectorAll("[data-planning-group-toggle]").forEach((input) => input.addEventListener("change", onPlanningGroupToggle));
-  bindPlanningParameterResizeHandles(host);
+}
+
+function renderPlanningParameterTabs(activeKey) {
+  return `<div class="planning-parameter-tabs" role="tablist" aria-label="规划参数分页">${planningParameterGroups
+    .map((group) => {
+      const active = group.key === activeKey;
+      return `<button class="planning-parameter-tab ${active ? "active" : ""}" type="button" role="tab" aria-selected="${active ? "true" : "false"}" data-planning-parameter-tab="${escapeHtml(group.key)}">${escapeHtml(group.title)}</button>`;
+    })
+    .join("")}</div>`;
+}
+
+function selectPlanningParameterGroup(groupKey) {
+  if (!planningParameterGroups.some((group) => group.key === groupKey)) return;
+  activePlanningParameterGroup = groupKey;
+  renderPlanningParameters();
 }
 
 function renderPlanningParameterGroupTable(group, row, editable = false) {
@@ -2784,43 +3148,6 @@ function onPlanningGroupToggle(event) {
   renderPlanningParameters();
   renderLimitSummary();
   renderSummary();
-}
-
-function bindPlanningParameterResizeHandles(host) {
-  host.querySelectorAll(".planning-parameter-resize-handle").forEach((handle) => {
-    handle.addEventListener("pointerdown", (event) => startPlanningParameterResize(event, handle));
-  });
-}
-
-function startPlanningParameterResize(event, handle) {
-  const previous = handle.previousElementSibling;
-  const next = handle.nextElementSibling;
-  if (!previous || !next) return;
-  event.preventDefault();
-  handle.setPointerCapture?.(event.pointerId);
-  handle.classList.add("dragging");
-  const startY = event.clientY;
-  const previousStart = previous.getBoundingClientRect().height;
-  const nextStart = next.getBoundingClientRect().height;
-  const minHeight = COLLAPSED_PANEL_SIZE;
-
-  const onMove = (moveEvent) => {
-    const delta = moveEvent.clientY - startY;
-    const previousHeight = Math.max(COLLAPSED_PANEL_SIZE, previousStart + delta);
-    const nextHeight = Math.max(COLLAPSED_PANEL_SIZE, nextStart - delta);
-    previous.style.height = `${Math.round(previousHeight)}px`;
-    next.style.height = `${Math.round(nextHeight)}px`;
-  };
-  const onEnd = () => {
-    handle.classList.remove("dragging");
-    handle.releasePointerCapture?.(event.pointerId);
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", onEnd);
-    document.removeEventListener("pointercancel", onEnd);
-  };
-  document.addEventListener("pointermove", onMove);
-  document.addEventListener("pointerup", onEnd);
-  document.addEventListener("pointercancel", onEnd);
 }
 
 function onPlanningParameterInput(event) {

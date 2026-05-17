@@ -1342,6 +1342,7 @@ def build_results(
                 "right_value": costs["annualized_construction_cost"],
                 "unit": "万元",
             },
+            capacity_composition_disk(planning_rows),
             {
                 "title": "电量构成",
                 "left_label": "柴发电量",
@@ -1409,6 +1410,38 @@ def capacity_summary_rows(planning_rows: list[dict[str, Any]]) -> list[dict[str,
         {"指标": "氢能总容量", "数值": round(capacities["fuel_cell_power_capacity"], 4), "单位": "kW"},
         {"指标": "储能总容量", "数值": round(capacities["storage_energy_capacity"], 4), "单位": "kWh"},
     ]
+
+
+def capacity_composition_disk(planning_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    capacities = estimate.capacities_from_planning_rows(planning_rows)
+    return capacity_composition_disk_from_values(
+        diesel_capacity=capacities["diesel_capacity"],
+        wind_capacity=capacities["wind_capacity"],
+        pv_capacity=capacities["pv_capacity"],
+        storage_energy_capacity=capacities["storage_energy_capacity"],
+        fuel_cell_power_capacity=capacities["fuel_cell_power_capacity"],
+    )
+
+
+def capacity_composition_disk_from_values(
+    *,
+    diesel_capacity: float = 0.0,
+    wind_capacity: float = 0.0,
+    pv_capacity: float = 0.0,
+    storage_energy_capacity: float = 0.0,
+    fuel_cell_power_capacity: float = 0.0,
+) -> dict[str, Any]:
+    return {
+        "title": "容量构成",
+        "unit": "kW/kWh",
+        "segments": [
+            {"label": "柴发容量", "value": round(numeric(diesel_capacity), 4), "unit": "kW"},
+            {"label": "风电容量", "value": round(numeric(wind_capacity), 4), "unit": "kW"},
+            {"label": "光伏容量", "value": round(numeric(pv_capacity), 4), "unit": "kW"},
+            {"label": "电储能容量", "value": round(numeric(storage_energy_capacity), 4), "unit": "kWh"},
+            {"label": "燃料电池容量", "value": round(numeric(fuel_cell_power_capacity), 4), "unit": "kW"},
+        ],
+    }
 
 
 def aggregate_daily_partial(dispatch_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

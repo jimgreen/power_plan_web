@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260517-stat-fill">
+  <link rel="stylesheet" href="assets/planning.css?v=20260518-composition-align">
 </head>
 <body>
   <main class="planning-shell">
@@ -44,50 +44,49 @@
 
       <section class="editor-panel">
         <div class="editor-header">
-          <div class="current-scheme-panel">
-            <div class="current-scheme" aria-live="polite">
-              <span>当前:</span>
-              <strong id="currentSchemeName">未选择方案</strong>
+          <div class="optimization-command-card planning-command-card">
+            <div class="current-scheme-panel">
+              <div class="current-scheme" aria-live="polite">
+                <span>当前:</span>
+                <strong id="currentSchemeName">未选择方案</strong>
+              </div>
             </div>
-          </div>
-          <div class="tabs" role="tablist" aria-label="参数维护标签">
-            <button class="tab active" data-tab="time" type="button">时序数据</button>
-            <button class="tab" data-tab="devices" type="button">设备参数</button>
-            <button class="tab" data-tab="planning" type="button">规划参数</button>
-            <button class="tab" data-tab="limits" type="button">方案概览</button>
-          </div>
-          <div class="scheme-actions" aria-label="方案操作">
-            <button id="saveScheme" class="primary" type="button">保存方案</button>
+            <div class="tabs" role="tablist" aria-label="参数维护标签">
+              <button class="tab active" data-tab="time" type="button">时序数据</button>
+              <button class="tab" data-tab="devices" type="button">设备参数</button>
+              <button class="tab" data-tab="planning" type="button">规划参数</button>
+              <button class="tab" data-tab="limits" type="button">方案概览</button>
+            </div>
+            <div class="scheme-actions" aria-label="方案操作">
+              <button id="saveScheme" class="primary" type="button">保存方案</button>
+            </div>
           </div>
         </div>
 
         <section id="timeTab" class="tab-panel active">
           <div class="chart-card">
-            <div class="weather-import-bar" aria-label="历史气象数据获取">
-              <button id="importTimeSeriesFile" type="button">导入曲线</button>
-              <button id="openLoadGenerator" type="button">负荷生成</button>
-              <button id="openCoordinatePicker" type="button">坐标选择</button>
-              <label>纬度<input id="weatherLatitude" type="number" min="-90" max="90" step="0.000001" placeholder="-90 到 90"></label>
-              <label>经度<input id="weatherLongitude" type="number" min="-180" max="180" step="0.000001" placeholder="-180 到 180"></label>
-              <label>历史数据年<input id="weatherYear" type="number" min="2001" step="1" value="2024" placeholder="当前年之前"></label>
-              <button id="fetchWeatherHistory" class="primary" type="button">获取历史气象</button>
-              <span id="weatherImportStatus" class="weather-import-status" role="status" aria-live="polite"></span>
-            </div>
-            <div class="curve-switch-row" aria-label="曲线切换显示">
-              <div class="curve-buttons">
-                <button type="button" data-curve="wind_speed" class="curve-button active" aria-pressed="true">风速</button>
-                <button type="button" data-curve="solar_irradiance" class="curve-button" aria-pressed="false">太阳辐照</button>
-                <button type="button" data-curve="temperature" class="curve-button" aria-pressed="false">环境温度</button>
-                <button type="button" data-curve="load" class="curve-button" aria-pressed="false">负荷</button>
+            <div class="time-chart-toolbar">
+              <div class="weather-import-bar" aria-label="历史气象数据获取">
+                <button id="importTimeSeriesFile" type="button">文件导入</button>
+                <button id="openLoadGenerator" type="button">负荷生成</button>
+                <button id="openCoordinatePicker" type="button">坐标选择</button>
               </div>
-              <div id="timeChartRange" class="time-chart-range" aria-label="时序曲线时间范围筛选">
-                <div class="time-chart-range-scope" role="group" aria-label="时序曲线时间范围">
-                  <button type="button" data-time-chart-scope="year" class="active" aria-pressed="true">全年</button>
-                  <button type="button" data-time-chart-scope="month" aria-pressed="false">指定月</button>
-                  <button type="button" data-time-chart-scope="day" aria-pressed="false">指定日</button>
+              <div class="curve-switch-row" aria-label="曲线切换显示">
+                <div class="curve-buttons">
+                  <button type="button" data-curve="wind_speed" class="curve-button active" aria-pressed="true">风速</button>
+                  <button type="button" data-curve="solar_irradiance" class="curve-button" aria-pressed="false">太阳辐照</button>
+                  <button type="button" data-curve="temperature" class="curve-button" aria-pressed="false">环境温度</button>
+                  <button type="button" data-curve="load" class="curve-button" aria-pressed="false">负荷</button>
                 </div>
-                <label>月份<select id="timeChartMonth"></select></label>
-                <label>日期<select id="timeChartDay"></select></label>
+                <div id="timeChartRange" class="time-chart-range" aria-label="时序曲线时间范围筛选">
+                  <div class="time-chart-range-scope" role="group" aria-label="时序曲线时间范围">
+                    <button type="button" data-time-chart-scope="year" class="active" aria-pressed="true">全年</button>
+                    <button type="button" data-time-chart-scope="month" aria-pressed="false">指定月</button>
+                    <button type="button" data-time-chart-scope="day" aria-pressed="false">指定日</button>
+                  </div>
+                  <label>月份<select id="timeChartMonth"></select></label>
+                  <label>日期<select id="timeChartDay"></select></label>
+                </div>
               </div>
             </div>
             <svg id="timeChart" class="time-chart" role="img" aria-label="风光温荷时序曲线"></svg>
@@ -98,7 +97,10 @@
             <div class="map-picker-dialog time-series-import-dialog" role="dialog" aria-modal="true" aria-labelledby="timeSeriesImportTitle" aria-describedby="timeSeriesImportHint">
               <div class="map-picker-head">
                 <h2 id="timeSeriesImportTitle">导入曲线</h2>
-                <button id="closeTimeSeriesImport" type="button" aria-label="关闭导入曲线">关闭</button>
+                <div class="coordinate-header-actions">
+                  <button id="confirmTimeSeriesImport" class="primary" type="button">确认</button>
+                  <button id="closeTimeSeriesImport" type="button" aria-label="取消导入曲线">取消</button>
+                </div>
               </div>
               <div class="time-series-import-toolbar">
                 <button id="openTimeSeriesImportFile" type="button">打开文件</button>
@@ -123,8 +125,6 @@
               </div>
               <div class="map-picker-foot">
                 <span id="timeSeriesImportSummary">未选择文件</span>
-                <button id="confirmTimeSeriesImport" class="primary" type="button">确定</button>
-                <button id="cancelTimeSeriesImport" type="button">取消</button>
               </div>
             </div>
           </div>
@@ -133,7 +133,10 @@
             <div class="map-picker-dialog load-generator-dialog" role="dialog" aria-modal="true" aria-labelledby="loadGeneratorTitle" aria-describedby="loadGeneratorHint">
               <div class="map-picker-head">
                 <h2 id="loadGeneratorTitle">负荷生成</h2>
-                <button id="closeLoadGenerator" type="button" aria-label="关闭负荷生成">关闭</button>
+                <div class="coordinate-header-actions">
+                  <button id="confirmLoadGenerator" class="primary" type="button">确认</button>
+                  <button id="closeLoadGenerator" type="button" aria-label="取消负荷生成">取消</button>
+                </div>
               </div>
               <div class="load-generator-grid">
                 <label>指定模式
@@ -152,30 +155,50 @@
                 <button id="generateLoadCurve" type="button">生成负荷曲线</button>
                 <input id="loadCurveImportFile" type="file" accept=".csv,.xlsx" hidden>
                 <button id="saveLoadTemplate" type="button">保存模板</button>
-                <button id="confirmLoadGenerator" class="primary" type="button">确定</button>
-                <button id="cancelLoadGenerator" type="button">取消</button>
               </div>
             </div>
           </div>
 
           <div id="mapPickerModal" class="map-picker-modal" hidden>
-            <div class="map-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="mapPickerTitle" aria-describedby="mapPickerHint">
+            <div class="map-picker-dialog coordinate-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="mapPickerTitle" aria-describedby="mapPickerHint">
               <div class="map-picker-head">
                 <h2 id="mapPickerTitle">坐标选择</h2>
-                <button id="closeMapPicker" type="button" aria-label="关闭坐标选择">关闭</button>
+                <div class="coordinate-header-actions">
+                  <button id="confirmMapPoint" class="primary" type="button">确认</button>
+                  <button id="closeMapPicker" type="button" aria-label="取消坐标选择">取消</button>
+                </div>
               </div>
-              <div class="coordinate-search-row">
-                <label>地名<input id="weatherPlace" type="text" placeholder="例如：上海"></label>
-                <button id="geocodePlace" type="button">获取坐标</button>
+              <div class="coordinate-control-row">
+                <div class="coordinate-search-row">
+                  <label>地名<input id="weatherPlace" type="text" placeholder="例如：上海"></label>
+                  <button id="geocodePlace" type="button">定位</button>
+                </div>
+                <div class="coordinate-weather-row" aria-label="气象数据坐标与年份">
+                  <label>纬度<input id="weatherLatitude" type="number" min="-90" max="90" step="0.001" placeholder="-90 到 90"></label>
+                  <label>经度<input id="weatherLongitude" type="number" min="-180" max="180" step="0.001" placeholder="-180 到 180"></label>
+                  <label>年份<input id="weatherYear" type="number" min="2001" step="1" value="2024" placeholder="当前年之前"></label>
+                  <button id="fetchWeatherHistory" class="primary" type="button">气象获取</button>
+                  <span id="weatherImportStatus" class="weather-import-status" role="status" aria-live="polite"></span>
+                </div>
               </div>
               <div class="map-provider-tabs" role="tablist" aria-label="地图接口切换">
                 <button class="map-provider-tab active" type="button" data-map-provider="amap" aria-selected="true">高德地图</button>
                 <button class="map-provider-tab" type="button" data-map-provider="osm" aria-selected="false">OpenStreetMap</button>
               </div>
+              <div id="mapPickerHint" class="coordinate-map-hint">根据地名查找坐标，或点击地图选点。</div>
               <div id="mapPickerCanvas" class="map-picker-canvas"></div>
-              <div class="map-picker-foot">
-                <span id="mapPickerHint">根据地名查找坐标，或点击地图选点。</span>
-                <button id="confirmMapPoint" class="primary" type="button">确认坐标</button>
+              <div id="weatherPreviewResizeHandle" class="weather-preview-resize-handle" role="separator" aria-orientation="horizontal" aria-label="调整地图与气象曲线高度" tabindex="0"></div>
+              <div class="weather-preview-panel">
+                <div class="weather-preview-head">
+                  <strong>气象曲线预览</strong>
+                  <div class="weather-preview-legend" aria-label="气象曲线显示切换">
+                    <button type="button" class="weather-preview-legend-item active" data-weather-preview-curve="wind_speed" aria-pressed="true"><span style="--curve-color:#21d5ff"></span>风速</button>
+                    <button type="button" class="weather-preview-legend-item active" data-weather-preview-curve="solar_irradiance" aria-pressed="true"><span style="--curve-color:#ffd166"></span>太阳辐射</button>
+                    <button type="button" class="weather-preview-legend-item active" data-weather-preview-curve="temperature" aria-pressed="true"><span style="--curve-color:#b292ff"></span>环境温度</button>
+                  </div>
+                </div>
+                <svg id="weatherPreviewChart" class="weather-preview-chart" role="img" aria-label="气象曲线预览"></svg>
+                <div id="weatherPreviewStats" class="weather-preview-stats" aria-label="气象统计">暂无气象数据</div>
               </div>
             </div>
           </div>
@@ -245,8 +268,8 @@
       </aside>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20260514-i18n"></script>
+  <script src="assets/i18n.js?v=20260518-param-tabs-map-task-filter"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/planning.js?v=20260517-save-alerts"></script>
+  <script src="assets/planning.js?v=20260518-scheme-list-adaptive"></script>
 </body>
 </html>
