@@ -323,6 +323,8 @@
     "日期": "Day",
     "曲线时间范围筛选": "Curve Time Range Filter",
     "曲线时间范围": "Curve Time Range",
+    "曲线显示切换": "Curve Display Toggle",
+    "显示/隐藏曲线": "Show/Hide Curve",
     "时序曲线时间范围筛选": "Time Series Curve Range Filter",
     "时序曲线时间范围": "Time Series Curve Range",
     "日级统计只支持全年或指定月筛选": "Daily statistics only support full-year or selected-month filters",

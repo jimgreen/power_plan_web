@@ -693,7 +693,7 @@ function formatDisplayValue(value) {
 function formatLevelizedCostValue(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return value ?? "";
-  return number.toLocaleString("zh-CN", { minimumSignificantDigits: 3, maximumSignificantDigits: 3 });
+  return number.toLocaleString("zh-CN", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 }
 
 function escapeHtml(value) {

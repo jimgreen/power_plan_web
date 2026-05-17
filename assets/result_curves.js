@@ -1,5 +1,6 @@
 (function () {
   const CHART_COLORS = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90", "#b38cff", "#5ee7df", "#ff9f43", "#ff6bcb"];
+  const LINE_PATTERNS = ["", "7 4", "2 4", "10 4 2 4"];
   const GROUP_DEFINITIONS = [
     { key: "hourly", title: "小时级曲线" },
     { key: "daily", title: "日级统计" },
@@ -26,6 +27,7 @@
       groups: emptyGroups(),
       annualTable: [],
       selectedCurvesByGroup: { hourly: [], daily: [], monthly: [] },
+      hiddenSeriesByGroup: { hourly: [], daily: [], monthly: [] },
       curveRangeFilter: defaultCurveRangeFilter(),
       activeGroup: "hourly",
       hoverIndex: null,
@@ -43,6 +45,9 @@
         if (!state.selectedCurvesByGroup[group.key].length && curveNames.length) {
           state.selectedCurvesByGroup[group.key] = [curveNames[0]];
         }
+        state.hiddenSeriesByGroup[group.key] = (state.hiddenSeriesByGroup[group.key] || []).filter((seriesId) =>
+          availableSeriesIds(group.key).includes(seriesId),
+        );
       });
       if (!groupHasData(state.activeGroup)) state.activeGroup = firstAvailableGroup();
       state.hoverIndex = null;
@@ -53,6 +58,7 @@
       state.groups = emptyGroups();
       state.annualTable = [];
       state.selectedCurvesByGroup = { hourly: [], daily: [], monthly: [] };
+      state.hiddenSeriesByGroup = { hourly: [], daily: [], monthly: [] };
       state.curveRangeFilter = defaultCurveRangeFilter();
       state.activeGroup = "hourly";
       state.hoverIndex = null;
@@ -137,13 +143,21 @@
 
     function selectedCurveSeries() {
       const group = activeCurveGroup();
+      let seriesIndex = 0;
       return filterSeriesByRange(
         selectedCurveNames().flatMap((curveName) =>
-          (group.series[curveName] || []).map((item) => ({
-            ...item,
-            curveName,
-            displayLabel: `${curveName} / ${item.label}`,
-          })),
+          (group.series[curveName] || []).map((item) => {
+            const displayLabel = `${curveName} / ${item.label}`;
+            const next = {
+              ...item,
+              curveName,
+              displayLabel,
+              seriesId: seriesKey(curveName, item.label),
+              seriesIndex,
+            };
+            seriesIndex += 1;
+            return next;
+          }),
         ),
         state.activeGroup,
         state.curveRangeFilter,
@@ -158,9 +172,10 @@
         return;
       }
       const curveNames = selectedCurveNames();
-      const series = selectedCurveSeries();
+      const allSeries = selectedCurveSeries();
+      const visibleSeries = allSeries.filter((item) => !isSeriesHidden(item.seriesId));
       const controls = renderRangeControls();
-      if (!curveNames.length || !series.length) {
+      if (!curveNames.length || !allSeries.length) {
         target.innerHTML = `${controls}<div class="empty-summary">${escapeHtml(message || groupPromptText())}</div>`;
         bindRangeControls(target);
         return;
@@ -170,11 +185,11 @@
       const margin = { top: 18, right: 24, bottom: 28, left: 58 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
-      const values = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
-      const minY = Math.min(...values, 0);
-      const maxY = Math.max(...values, 1);
+      const values = visibleSeries.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
+      const minY = values.length ? Math.min(...values, 0) : 0;
+      const maxY = values.length ? Math.max(...values, 1) : 1;
       const ySpan = Math.max(maxY - minY, 1);
-      const maxPoints = Math.max(...series.map((item) => item.points.length), 1);
+      const maxPoints = Math.max(...visibleSeries.map((item) => item.points.length), 1);
       const xAt = (index, total) => margin.left + (total <= 1 ? plotWidth / 2 : (index / (total - 1)) * plotWidth);
       const yAt = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
       const yTicks = [0, 0.5, 1].map((ratio) => {
@@ -188,18 +203,20 @@
             <line class="comparison-chart-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
             <line class="comparison-chart-axis" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
             ${yTicks.map((tick) => renderYAxisGrid(tick.y, margin.left, width - margin.right)).join("")}
-            ${series.map((item, index) => renderSeriesPath(item.points, xAt, yAt, CHART_COLORS[index % CHART_COLORS.length])).join("")}
+            ${visibleSeries.map((item) => renderSeriesPath(item.points, xAt, yAt, item)).join("")}
             <g class="comparison-chart-hover-group" hidden>
               <line class="comparison-chart-hover-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
             </g>
             <rect class="comparison-chart-hover-capture" x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}"></rect>
           </svg>
-          ${renderAxisLabels({ yTicks, series, maxPoints })}
-          ${renderCurveStats(series)}
+          ${renderAxisLabels({ yTicks, series: visibleSeries, maxPoints })}
+          ${renderCurveLegend(allSeries, visibleSeries)}
+          ${visibleSeries.length ? "" : '<div class="result-curve-empty-overlay">暂无可显示曲线</div>'}
           <div class="comparison-chart-tooltip" data-result-curve-tooltip hidden></div>
         </div>`;
       bindRangeControls(target);
-      bindChartHover({ target, margin, plotWidth, series });
+      bindCurveLegendToggles(target);
+      if (visibleSeries.length) bindChartHover({ target, margin, plotWidth, series: visibleSeries });
     }
 
     function renderRangeControls() {
@@ -290,25 +307,80 @@
           .join("")}</div>`;
     }
 
-    function renderCurveStats(series) {
-      return `<div class="comparison-curve-stats" aria-label="当前曲线统计信息">${series
+    function renderCurveLegend(series, visibleSeries) {
+      const visibleIds = new Set((visibleSeries || []).map((item) => item.seriesId));
+      return `<div class="result-curve-legend" aria-label="曲线显示切换">${series
         .map((item) => {
-          const values = item.points.map((point) => Number(point.y)).filter(Number.isFinite);
-          const min = values.length ? Math.min(...values) : 0;
-          const max = values.length ? Math.max(...values) : 0;
-          const sum = values.reduce((total, value) => total + value, 0);
-          const average = values.length ? sum / values.length : 0;
-          return `<section><strong>${escapeHtml(item.displayLabel)}</strong><span>最小 ${escapeHtml(formatAxis(min))}</span><span>最大 ${escapeHtml(formatAxis(max))}</span><span>平均 ${escapeHtml(formatAxis(average))}</span><span>合计 ${escapeHtml(formatAxis(sum))}</span></section>`;
+          const hidden = isSeriesHidden(item.seriesId);
+          const style = seriesLineStyle(item);
+          const stats = curveStats(item);
+          const dash = style.dash ? ` stroke-dasharray="${style.dash}"` : "";
+          return `<button type="button" class="${hidden ? "is-hidden" : ""}" data-result-series-toggle="${escapeHtml(item.seriesId)}" aria-pressed="${visibleIds.has(item.seriesId) ? "true" : "false"}" title="显示/隐藏曲线">
+              <span class="result-curve-legend-swatch" data-result-series-swatch aria-hidden="true">
+                <svg viewBox="0 0 36 8" preserveAspectRatio="none"><line x1="1" y1="4" x2="35" y2="4" stroke="${style.color}"${dash}></line></svg>
+              </span>
+              <span class="result-curve-legend-label">${escapeHtml(item.displayLabel)}</span>
+              <span class="result-curve-legend-stat">最小 ${escapeHtml(formatAxis(stats.min))}</span>
+              <span class="result-curve-legend-stat">最大 ${escapeHtml(formatAxis(stats.max))}</span>
+              <span class="result-curve-legend-stat">平均 ${escapeHtml(formatAxis(stats.average))}</span>
+              <span class="result-curve-legend-stat">合计 ${escapeHtml(formatAxis(stats.sum))}</span>
+            </button>`;
         })
         .join("")}</div>`;
     }
 
-    function renderSeriesPath(points, xAt, yAt, color) {
+    function bindCurveLegendToggles(target) {
+      target.querySelectorAll("[data-result-series-toggle]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleSeriesVisibility(button.dataset.resultSeriesToggle || "");
+        });
+      });
+    }
+
+    function toggleSeriesVisibility(seriesId) {
+      if (!seriesId || state.activeGroup === "annual") return;
+      const hidden = new Set(state.hiddenSeriesByGroup[state.activeGroup] || []);
+      if (hidden.has(seriesId)) hidden.delete(seriesId);
+      else hidden.add(seriesId);
+      state.hiddenSeriesByGroup[state.activeGroup] = Array.from(hidden);
+      state.hoverIndex = null;
+      render();
+    }
+
+    function isSeriesHidden(seriesId) {
+      return Boolean(seriesId && (state.hiddenSeriesByGroup[state.activeGroup] || []).includes(seriesId));
+    }
+
+    function availableSeriesIds(groupKey) {
+      const group = state.groups[groupKey] || { curves: [], series: {} };
+      return (group.curves || []).flatMap((curveName) => (group.series[curveName] || []).map((item) => seriesKey(curveName, item.label)));
+    }
+
+    function renderSeriesPath(points, xAt, yAt, item) {
+      const style = seriesLineStyle(item);
       const sampled = downsample(points, 720);
       const path = sampled
         .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index, sampled.length).toFixed(2)} ${yAt(Number(point.y)).toFixed(2)}`)
         .join(" ");
-      return `<path class="comparison-series-line" d="${path}" stroke="${color}"></path>`;
+      return `<path class="comparison-series-line" d="${path}" stroke="${style.color}"${style.dash ? ` stroke-dasharray="${style.dash}"` : ""}></path>`;
+    }
+
+    function seriesLineStyle(item) {
+      const index = Number.isFinite(Number(item?.seriesIndex)) ? Number(item.seriesIndex) : 0;
+      const color = CHART_COLORS[index % CHART_COLORS.length];
+      const dash = LINE_PATTERNS[Math.floor(index / CHART_COLORS.length) % LINE_PATTERNS.length] || "";
+      return { color, dash };
+    }
+
+    function curveStats(item) {
+      const values = (item?.points || []).map((point) => Number(point.y)).filter(Number.isFinite);
+      const min = values.length ? Math.min(...values) : 0;
+      const max = values.length ? Math.max(...values) : 0;
+      const sum = values.reduce((total, value) => total + value, 0);
+      const average = values.length ? sum / values.length : 0;
+      return { min, max, sum, average };
     }
 
     function bindChartHover(chart) {
@@ -343,11 +415,16 @@
       const rows = chart.series.map((item) => {
         const index = Math.min(Math.max(pointIndex, 0), item.points.length - 1);
         const point = item.points[index] || {};
-        return { label: item.displayLabel || item.label, x: point.x ?? index + 1, y: point.y };
+        return { label: item.displayLabel || item.label, x: point.x ?? index + 1, y: point.y, style: seriesLineStyle(item) };
       });
       tooltip.innerHTML = `
         <h3>${escapeHtml(rows[0]?.x ?? "")}</h3>
-        ${rows.map((row) => `<div><span>${escapeHtml(row.label)}</span><strong>${escapeHtml(formatAxis(row.y))}</strong></div>`).join("")}`;
+        ${rows
+          .map(
+            (row) =>
+              `<div><span><i class="result-curve-tooltip-swatch" style="background:${row.style.color}"></i>${escapeHtml(row.label)}</span><strong>${escapeHtml(formatAxis(row.y))}</strong></div>`,
+          )
+          .join("")}`;
       tooltip.hidden = false;
       const bounds = chart.target.getBoundingClientRect();
       const tooltipX = Math.min(Math.max(event.clientX - bounds.left + 14, 8), Math.max(bounds.width - tooltip.offsetWidth - 8, 8));
@@ -478,6 +555,10 @@
     return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 1;
   }
 
+  function seriesKey(curveName, label) {
+    return `${curveName || ""}::${label || ""}`;
+  }
+
   function downsample(points, limit) {
     if (points.length <= limit) return points;
     const step = Math.ceil(points.length / limit);
@@ -501,7 +582,7 @@
   function formatLevelizedCostValue(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return value ?? "";
-    return number.toLocaleString("zh-CN", { minimumSignificantDigits: 3, maximumSignificantDigits: 3 });
+    return number.toLocaleString("zh-CN", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
   }
 
   function escapeHtml(value) {
