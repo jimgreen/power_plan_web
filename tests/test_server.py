@@ -248,6 +248,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Load Up Disturbance Factor", i18n_script)
         self.assertIn("Load Down Disturbance Factor", i18n_script)
         self.assertIn("Renewable Down Disturbance Factor", i18n_script)
+        self.assertIn("Grid Up Regulation Requirement", i18n_script)
+        self.assertIn("Grid Down Regulation Requirement", i18n_script)
         self.assertIn("Import File", i18n_script)
         self.assertIn("Importing load file", i18n_script)
         self.assertIn("Load file imported", i18n_script)
@@ -353,6 +355,15 @@ class PowerPlanServerTest(unittest.TestCase):
             '"柴发电量": "Diesel Generation"',
             '"绿电电量": "Green Energy"',
             '"电量构成": "Energy Composition"',
+            '"负荷上扰动功率": "Load Up Disturbance Power"',
+            '"负荷下扰动功率": "Load Down Disturbance Power"',
+            '"新能源下扰动功率": "Renewable Down Disturbance Power"',
+            '"风光单机功率最大值": "Max Single Wind/PV Unit Power"',
+            '"新能源N-1功率缺口": "Renewable N-1 Power Gap"',
+            '"电网向上调节能力": "Grid Up Regulation Capability"',
+            '"电网向下调节能力": "Grid Down Regulation Capability"',
+            '"电网向上调节需求": "Grid Up Regulation Requirement"',
+            '"电网向下调节需求": "Grid Down Regulation Requirement"',
         ):
             self.assertIn(exact_mapping, i18n_script)
         for mixed_label in (
@@ -888,6 +899,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("<colgroup>", script)
         self.assertIn("task-col-scheme", script)
         self.assertIn("task-col-actions", script)
+        self.assertLess(script.index('<col class="task-col-actions">'), script.index('<col class="task-col-status">'))
+        self.assertLess(script.index("<th>操作</th>"), script.index("<th>任务状态</th>"))
+        self.assertLess(script.index('<div class="task-actions">'), script.index('<td><span class="task-status-pill'))
         self.assertIn("syncTaskSectionHeights", script)
         self.assertIn("--optimization-task-section-height", script)
         self.assertIn("--evaluation-task-section-height", script)
@@ -1352,6 +1366,11 @@ class PowerPlanServerTest(unittest.TestCase):
 
     def test_estimate_dispatch_outputs_requested_8760_curve_columns(self):
         payload = server.planning_store.default_payload("方案A")
+        payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
+        payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
+        payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.2
+        payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.3
+        payload["storage_pcs"][0]["is_grid_forming"] = 1
         for row in payload["time_series"]:
             row["wind_speed"] = 12
             row["solar_irradiance"] = 900
@@ -1393,10 +1412,33 @@ class PowerPlanServerTest(unittest.TestCase):
             "unmet_load",
             "renewable_ratio",
             "renewable_curtailed_rate",
+            "load_up_disturbance_power",
+            "load_down_disturbance_power",
+            "renewable_down_disturbance_power",
+            "renewable_single_unit_power_max",
+            "renewable_n1_power_gap",
+            "grid_up_regulation_capacity",
+            "grid_down_regulation_capacity",
+            "grid_up_regulation_requirement",
+            "grid_down_regulation_requirement",
         ):
             self.assertIn(field, row)
             self.assertIsInstance(row[field], (int, float))
         self.assertAlmostEqual(row["curtailed_power"], row["wind_curtailed_power"] + row["pv_curtailed_power"], places=3)
+        self.assertAlmostEqual(row["load_up_disturbance_power"], row["load"] * 0.1, places=3)
+        self.assertAlmostEqual(row["load_down_disturbance_power"], -row["load"] * 0.2, places=3)
+        self.assertAlmostEqual(
+            row["renewable_down_disturbance_power"],
+            (row["wind_power"] + row["pv_power"]) * 0.3,
+            places=3,
+        )
+        self.assertAlmostEqual(row["renewable_n1_power_gap"], row["renewable_single_unit_power_max"], places=3)
+        self.assertAlmostEqual(
+            row["grid_up_regulation_requirement"],
+            row["load_up_disturbance_power"] + row["renewable_down_disturbance_power"],
+            places=3,
+        )
+        self.assertAlmostEqual(row["grid_down_regulation_requirement"], row["load_down_disturbance_power"], places=3)
 
         requested_energy_fields = (
             "load_energy",
@@ -2060,6 +2102,15 @@ class PowerPlanServerTest(unittest.TestCase):
                 hourly_headers = [cell.value for cell in workbook["调度结果"][1]]
                 self.assertIn("新能源占比", hourly_headers)
                 self.assertIn("新能源弃电率", hourly_headers)
+                self.assertIn("负荷上扰动功率", hourly_headers)
+                self.assertIn("负荷下扰动功率", hourly_headers)
+                self.assertIn("新能源下扰动功率", hourly_headers)
+                self.assertIn("风光单机功率最大值", hourly_headers)
+                self.assertIn("新能源N-1功率缺口", hourly_headers)
+                self.assertIn("电网向上调节能力", hourly_headers)
+                self.assertIn("电网向下调节能力", hourly_headers)
+                self.assertIn("电网向上调节需求", hourly_headers)
+                self.assertIn("电网向下调节需求", hourly_headers)
                 self.assertEqual(workbook["运行日志"]["A1"].value, "时间")
                 log_messages = [row[2] for row in workbook["运行日志"].iter_rows(min_row=2, values_only=True)]
                 self.assertIn("规划求解完成", log_messages)

@@ -10,13 +10,13 @@ const TASK_COLUMN_GROUP = `
       <colgroup>
         <col class="task-col-scheme">
         <col class="task-col-result">
+        <col class="task-col-actions">
         <col class="task-col-status">
         <col class="task-col-process">
         <col class="task-col-start">
         <col class="task-col-end">
         <col class="task-col-elapsed">
         <col class="task-col-log">
-        <col class="task-col-actions">
       </colgroup>
 `;
 
@@ -83,13 +83,13 @@ function renderTaskSection(taskTypeKey, targetId, emptyText) {
         <tr>
           <th>任务所用方案</th>
           <th>任务所用结果</th>
+          <th>操作</th>
           <th>任务状态</th>
           <th>进程号</th>
           <th>计算开始时刻</th>
           <th>计算结束时刻</th>
           <th>计算总用时(秒)</th>
           <th>最新更新日志</th>
-          <th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -139,12 +139,6 @@ function renderTaskRow(task) {
     <tr>
       <td>${escapeHtml(task.scheme || "-")}</td>
       <td>${escapeHtml(task.result || "-")}</td>
-      <td><span class="task-status-pill ${statusClass}">${escapeHtml(task.status || "未计算")}${queueText ? ` <em>${escapeHtml(queueText)}</em>` : ""}</span></td>
-      <td>${escapeHtml(task.process_id || "-")}</td>
-      <td>${escapeHtml(task.start_time || "-")}</td>
-      <td>${escapeHtml(task.end_time || "-")}</td>
-      <td>${escapeHtml(task.elapsed_seconds ?? 0)}</td>
-      <td class="task-log-cell" title="${escapeHtml(task.latest_log || "")}">${escapeHtml(task.latest_log || "-")}</td>
       <td>
         <div class="task-actions">
           <button class="primary" type="button" data-task-action="start" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_start ? "" : "disabled"}>立刻启动</button>
@@ -152,6 +146,12 @@ function renderTaskRow(task) {
           <button class="danger" type="button" data-task-action="${escapeHtml(terminalAction.action)}" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${terminalAction.enabled ? "" : "disabled"}>${escapeHtml(terminalAction.label)}</button>
         </div>
       </td>
+      <td><span class="task-status-pill ${statusClass}">${escapeHtml(task.status || "未计算")}${queueText ? ` <em>${escapeHtml(queueText)}</em>` : ""}</span></td>
+      <td>${escapeHtml(task.process_id || "-")}</td>
+      <td>${escapeHtml(task.start_time || "-")}</td>
+      <td>${escapeHtml(task.end_time || "-")}</td>
+      <td>${escapeHtml(task.elapsed_seconds ?? 0)}</td>
+      <td class="task-log-cell" title="${escapeHtml(task.latest_log || "")}">${escapeHtml(task.latest_log || "-")}</td>
     </tr>
   `;
 }

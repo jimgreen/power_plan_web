@@ -667,6 +667,50 @@ def renewable_candidate_devices(model: dict[str, Any], key: str) -> list[dict[st
     ]
 
 
+def dispatch_security_curve_fields(
+    model: dict[str, Any],
+    *,
+    load: float,
+    wind_power: float,
+    pv_power: float,
+    renewable_single_unit_power_max: float,
+    diesel_capacity: float,
+    diesel_power: float,
+    grid_storage_power: float,
+    grid_storage_up_capacity: float,
+    grid_storage_down_capacity: float,
+) -> dict[str, float]:
+    # These derived curves mirror the disturbance-security constraints using
+    # signed power directions: upward values are positive, downward demand and
+    # capability are shown as negative numbers for visual comparison.
+    renewable_power = max(0.0, float(wind_power) + float(pv_power))
+    load_up_disturbance = max(0.0, float(load)) * model["load_up_disturbance_factor"]
+    load_down_disturbance = -1.0 * max(0.0, float(load)) * model["load_down_disturbance_factor"]
+    renewable_down_disturbance = renewable_power * model["renewable_down_disturbance_factor"]
+    grid_up_capacity = (
+        float(diesel_capacity)
+        - float(diesel_power)
+        + float(grid_storage_up_capacity)
+        - float(grid_storage_power)
+    )
+    grid_down_capacity = -1.0 * (
+        float(diesel_power)
+        + float(grid_storage_power)
+        + float(grid_storage_down_capacity)
+    )
+    return {
+        "load_up_disturbance_power": round(load_up_disturbance, 4),
+        "load_down_disturbance_power": round(load_down_disturbance, 4),
+        "renewable_down_disturbance_power": round(renewable_down_disturbance, 4),
+        "renewable_single_unit_power_max": round(max(0.0, float(renewable_single_unit_power_max)), 4),
+        "renewable_n1_power_gap": round(max(0.0, float(renewable_single_unit_power_max)), 4),
+        "grid_up_regulation_capacity": round(grid_up_capacity, 4),
+        "grid_down_regulation_capacity": round(grid_down_capacity, 4),
+        "grid_up_regulation_requirement": round(load_up_disturbance + renewable_down_disturbance, 4),
+        "grid_down_regulation_requirement": round(load_down_disturbance, 4),
+    }
+
+
 def add_renewable_hour_variables(
     builder: dispatch_milp.MilpModelBuilder,
     hour: int,
@@ -882,6 +926,18 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
         )
         renewable_available = wind_available + pv_available
         hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
+        security_fields = dispatch_security_curve_fields(
+            model,
+            load=load,
+            wind_power=0.0,
+            pv_power=0.0,
+            renewable_single_unit_power_max=0.0,
+            diesel_capacity=0.0,
+            diesel_power=0.0,
+            grid_storage_power=0.0,
+            grid_storage_up_capacity=0.0,
+            grid_storage_down_capacity=0.0,
+        )
         rows.append(
             {
                 "hour_index": hour_index,
@@ -913,6 +969,7 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
                 "renewable_curtailed_rate": round(estimate.percent(renewable_available, renewable_available), 4),
                 "unmet_load": 0.0,
                 "diesel_consumption": 0.0,
+                **security_fields,
             }
         )
     return rows
@@ -969,9 +1026,33 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
     diesel_devices = active_devices(model, "diesel_generators")
     electrolyzer_devices = active_devices(model, "hydrogen_electrolyzers")
     fuel_cell_devices = active_devices(model, "fuel_cells")
+    grid_storage_pcs_devices = [
+        device
+        for device in model["device_rows"]["storage_pcs"]
+        if device.get("is_grid_forming")
+    ]
 
     def value(key: tuple[Any, ...]) -> float:
         return clean_solution_value(solution[variables[key]])
+
+    def optional_value(key: tuple[Any, ...], default: float = 0.0) -> float:
+        index = variables.get(key)
+        return clean_solution_value(solution[index]) if index is not None else default
+
+    def renewable_single_unit_power_max(hour: int) -> float:
+        rate = min(1.0, max(0.0, optional_value(("renewable_curtailment_rate", hour), 0.0)))
+        maximum = 0.0
+        for device in model["device_rows"]["wind_turbines"]:
+            if quantity_values.get((device["key"], device["index"]), 0) <= 0:
+                continue
+            per_unit = float(model["wind_available_per_unit"][device["id"]][hour])
+            maximum = max(maximum, per_unit * (1.0 - rate))
+        for device in model["device_rows"]["photovoltaics"]:
+            if quantity_values.get((device["key"], device["index"]), 0) <= 0:
+                continue
+            per_unit = float(model["pv_available_per_unit"][device["id"]][hour])
+            maximum = max(maximum, per_unit * (1.0 - rate))
+        return maximum
 
     quantity_values = {
         (device["key"], device["index"]): int(round(solution[variables[("qty", device["key"], device["index"])]]))
@@ -1019,6 +1100,33 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
         renewable_available = wind_available + pv_available
         renewable_energy = wind_power + pv_power
         load = float(model["loads"][hour])
+        storage_charge = value(("storage_charge", hour))
+        storage_discharge = value(("storage_discharge", hour))
+        storage_power = storage_discharge - storage_charge
+        diesel_capacity = sum(
+            optional_value(("diesel_on_count", hour, device["index"])) * device["power_upper"]
+            for device in diesel_devices
+        )
+        grid_storage_up_capacity = sum(
+            optional_value(("grid_storage_up_available_count", hour, device["index"])) * device["capacity"]
+            for device in grid_storage_pcs_devices
+        )
+        grid_storage_down_capacity = sum(
+            optional_value(("grid_storage_down_available_count", hour, device["index"])) * device["capacity"]
+            for device in grid_storage_pcs_devices
+        )
+        security_fields = dispatch_security_curve_fields(
+            model,
+            load=load,
+            wind_power=wind_power,
+            pv_power=pv_power,
+            renewable_single_unit_power_max=renewable_single_unit_power_max(hour),
+            diesel_capacity=diesel_capacity,
+            diesel_power=diesel_power,
+            grid_storage_power=storage_power,
+            grid_storage_up_capacity=grid_storage_up_capacity,
+            grid_storage_down_capacity=grid_storage_down_capacity,
+        )
         hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
         rows.append(
             {
@@ -1035,9 +1143,9 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "pv_power": round(pv_power, 4),
                 "renewable_available": round(renewable_available, 4),
                 "renewable_ratio": round(estimate.percent(renewable_energy, load), 4),
-                "storage_power": round(value(("storage_discharge", hour)) - value(("storage_charge", hour)), 4),
-                "storage_charge": round(value(("storage_charge", hour)), 4),
-                "storage_discharge": round(value(("storage_discharge", hour)), 4),
+                "storage_power": round(storage_power, 4),
+                "storage_charge": round(storage_charge, 4),
+                "storage_discharge": round(storage_discharge, 4),
                 "storage_soc": round(value(("storage_soc", hour)), 4),
                 "diesel_on": int(round(sum(
                     value(("diesel_on_count", hour, device["index"]))
@@ -1057,6 +1165,7 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "renewable_curtailed_rate": round(estimate.percent(curtailed_power, renewable_available), 4),
                 "unmet_load": round(value(("unmet_load", hour)), 4),
                 "diesel_consumption": round(diesel_consumption, 8),
+                **security_fields,
             }
         )
     return rows
