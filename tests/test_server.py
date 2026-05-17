@@ -96,6 +96,41 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertIn("assets/i18n.js", html)
         self.assertIn(".language-switch", html)
+        self.assertIn(".home-theme-switch", html)
+        self.assertIn('id="homeThemeSelect"', html)
+        self.assertIn('aria-label="首页显示主题"', html)
+        self.assertIn('data-home-theme="default"', html)
+        self.assertIn('value="default">默认样式</option>', html)
+        self.assertIn('value="fresh">轻快</option>', html)
+        self.assertIn('value="bright">明亮</option>', html)
+        self.assertIn('value="sci-fi">科幻</option>', html)
+        self.assertIn('value="solemn">庄重</option>', html)
+        additional_home_themes = [
+            ("minimal", "极简"),
+            ("dark", "黑暗"),
+            ("illustration", "插画"),
+            ("flat", "扁平"),
+            ("neon-future", "霓虹未来"),
+            ("glassmorphism", "玻璃拟态"),
+            ("material", "材料设计"),
+            ("magazine", "杂志排版"),
+            ("dynamic", "动态交互"),
+        ]
+        for theme_value, theme_label in additional_home_themes:
+            self.assertIn(f'value="{theme_value}">{theme_label}</option>', html)
+            self.assertIn(f'.screen[data-home-theme="{theme_value}"]', html)
+        i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
+        for _, theme_label in additional_home_themes:
+            self.assertIn(theme_label, i18n_script)
+        self.assertIn("powerPlanHomeTheme", html)
+        self.assertIn("applyHomeTheme", html)
+        self.assertIn("document.documentElement.dataset.homeTheme = theme", html)
+        self.assertIn("document.body.dataset.homeTheme = theme", html)
+        self.assertIn("homeDynamicPulse", html)
+        self.assertIn(".screen[data-home-theme=\"fresh\"]", html)
+        self.assertIn(".screen[data-home-theme=\"bright\"]", html)
+        self.assertIn(".screen[data-home-theme=\"sci-fi\"]", html)
+        self.assertIn(".screen[data-home-theme=\"solemn\"]", html)
         self.assertIn('background-image: url("assets/main-dashboard-bg.png?v=20260513-bg-refresh")', html)
         self.assertIn("background-size: contain", html)
         self.assertIn('<link rel="icon" href="data:,">', html)
@@ -156,6 +191,29 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("系统主导航", html)
         self.assertNotIn("在线监视快捷入口", html)
         self.assertNotIn("SIMU在线监视", html)
+
+        self.assertIn("HOME_THEME_STORAGE_KEY", i18n_script)
+        self.assertIn("HOME_THEMES", i18n_script)
+        self.assertIn("applyStoredHomeTheme", i18n_script)
+        self.assertIn("document.documentElement.dataset.homeTheme = theme", i18n_script)
+        self.assertIn("document.body.dataset.homeTheme = theme", i18n_script)
+        self.assertIn('"玻璃拟态": "Glassmorphism"', i18n_script)
+        planning_css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        self.assertIn('body[data-home-theme="glassmorphism"]', planning_css)
+        self.assertIn('body[data-home-theme="neon-future"]', planning_css)
+        self.assertIn("--theme-accent", planning_css)
+        self.assertIn("--theme-control-text", planning_css)
+        self.assertIn("--theme-active-bg", planning_css)
+        self.assertIn("--theme-active-text", planning_css)
+        self.assertIn("--theme-control-text: #ffffff", planning_css)
+        self.assertIn("--theme-text: #183247", planning_css)
+        self.assertIn("--theme-active-bg: #1f6f94", planning_css)
+        self.assertIn("color: var(--theme-control-text)", planning_css)
+        self.assertIn("background: var(--theme-active-bg)", planning_css)
+        self.assertIn("color: var(--theme-active-text)", planning_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .scheme-item,', planning_css)
+        self.assertIn("background: color-mix(in srgb, var(--theme-control-bg) 56%, transparent)", planning_css)
+        self.assertIn("color: #102f47", html)
 
     def test_power_plan_pages_share_dark_hud_visual_theme(self):
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
@@ -899,6 +957,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("<colgroup>", script)
         self.assertIn("task-col-scheme", script)
         self.assertIn("task-col-actions", script)
+        self.assertIn('class="task-actions-cell"', script)
         self.assertLess(script.index('<col class="task-col-actions">'), script.index('<col class="task-col-status">'))
         self.assertLess(script.index("<th>操作</th>"), script.index("<th>任务状态</th>"))
         self.assertLess(script.index('<div class="task-actions">'), script.index('<td><span class="task-status-pill'))
@@ -928,9 +987,20 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".task-section-evaluation", css)
         self.assertIn("grid-row: 3", css)
         self.assertIn(".tasks-panel .task-table", css)
+        task_table_panel_css = css.split(".tasks-panel .task-table {", 1)[1].split("}", 1)[0]
+        self.assertIn("overflow-x: hidden", task_table_panel_css)
         self.assertIn("table-layout: fixed", css)
+        task_table_css = css.split(".task-table table {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-width: 0", task_table_css)
+        self.assertNotIn("min-width: 1120px", task_table_css)
         self.assertIn(".task-col-scheme", css)
         self.assertIn(".task-col-actions", css)
+        self.assertIn(".task-actions-cell", css)
+        self.assertNotIn(".task-table td:last-child", css)
+        task_log_cell_css = css.split(".task-log-cell {", 1)[1].split("}", 1)[0]
+        self.assertIn("max-width: 0", task_log_cell_css)
+        self.assertIn("overflow: hidden", task_log_cell_css)
+        self.assertIn("text-overflow: ellipsis", task_log_cell_css)
         self.assertIn('if (status === "计算中止") return "interrupted";', script)
         self.assertIn('if (status === "计算失败") return "failed";', script)
         self.assertIn('if (status === "计算超时") return "timeout";', script)

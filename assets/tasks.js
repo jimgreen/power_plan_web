@@ -141,7 +141,7 @@ function renderTaskRow(task) {
     <tr>
       <td>${escapeHtml(task.scheme || "-")}</td>
       <td>${escapeHtml(task.result || "-")}</td>
-      <td>
+      <td class="task-actions-cell">
         <div class="task-actions">
           <button class="primary" type="button" data-task-action="start" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_start ? "" : "disabled"}>立刻启动</button>
           <button type="button" data-task-action="queue" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_queue ? "" : "disabled"}>加入排队</button>

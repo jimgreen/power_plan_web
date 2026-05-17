@@ -1,8 +1,25 @@
 (() => {
   const STORAGE_KEY = "powerPlanLanguage";
+  const HOME_THEME_STORAGE_KEY = "powerPlanHomeTheme";
   const LANGUAGES = [
     { code: "zh", label: "中文" },
     { code: "en", label: "English" },
+  ];
+  const HOME_THEMES = [
+    "default",
+    "fresh",
+    "bright",
+    "sci-fi",
+    "solemn",
+    "minimal",
+    "dark",
+    "illustration",
+    "flat",
+    "neon-future",
+    "glassmorphism",
+    "material",
+    "magazine",
+    "dynamic",
   ];
 
   const dictionary = {
@@ -32,6 +49,22 @@
     "包含": "Contains",
     "文件": "File",
     "已解析": "Parsed",
+    "显示主题": "Theme",
+    "首页显示主题": "Home Theme",
+    "默认样式": "Default",
+    "轻快": "Fresh",
+    "明亮": "Bright",
+    "科幻": "Sci-Fi",
+    "庄重": "Solemn",
+    "极简": "Minimal",
+    "黑暗": "Dark",
+    "插画": "Illustration",
+    "扁平": "Flat",
+    "霓虹未来": "Neon Future",
+    "玻璃拟态": "Glassmorphism",
+    "材料设计": "Material Design",
+    "杂志排版": "Magazine Layout",
+    "动态交互": "Dynamic Interaction",
     "共": "Total",
     "行": "Rows",
     "请选择": "Please select",
@@ -531,6 +564,7 @@
   }
 
   function boot() {
+    applyStoredHomeTheme();
     insertLanguageControl();
     patchDialogs();
     setLanguage(currentLanguage());
@@ -640,6 +674,30 @@
     window.prompt = (message, defaultValue) => nativePrompt(translateText(message, currentLanguage()), defaultValue);
   }
 
+  function normalizeHomeTheme(value) {
+    if (value === "stripped-neumorphism") return "glassmorphism";
+    return HOME_THEMES.includes(value) ? value : "default";
+  }
+
+  function currentHomeTheme() {
+    try {
+      return normalizeHomeTheme(localStorage.getItem(HOME_THEME_STORAGE_KEY));
+    } catch (error) {
+      return "default";
+    }
+  }
+
+  function applyStoredHomeTheme() {
+    const theme = currentHomeTheme();
+    document.documentElement.dataset.homeTheme = theme;
+    if (document.body) document.body.dataset.homeTheme = theme;
+    const screen = document.querySelector(".screen");
+    if (screen) screen.dataset.homeTheme = theme;
+    const select = document.getElementById("homeThemeSelect");
+    if (select) select.value = theme;
+    return theme;
+  }
+
   function normalizeText(value) {
     return String(value ?? "").replace(/\s+/g, " ").trim();
   }
@@ -648,7 +706,7 @@
     return !element || ignoredTags.has(element.tagName) || element.closest("[data-i18n-ignore]");
   }
 
-  window.PowerPlanI18n = { setLanguage, currentLanguage, translate: translateText };
+  window.PowerPlanI18n = { setLanguage, currentLanguage, translate: translateText, applyStoredHomeTheme, currentHomeTheme };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
