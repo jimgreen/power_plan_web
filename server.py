@@ -114,12 +114,12 @@ RESULT_CURVE_FIELD_LABELS = {
     "load_down_disturbance_power": "负荷下扰动功率",
     "renewable_down_disturbance_power": "新能源下扰动功率",
     "renewable_single_unit_power_max": "风光单机功率最大值",
-    "renewable_n1_power_gap": "新能源N-1功率缺口",
     "grid_up_regulation_capacity": "电网向上调节能力",
     "grid_down_regulation_capacity": "电网向下调节能力",
     "grid_up_regulation_requirement": "电网向上调节需求",
     "grid_down_regulation_requirement": "电网向下调节需求",
 }
+DEPRECATED_RESULT_CURVE_HEADERS = {"新能源N-1功率缺口", "renewable_n1_power_gap"}
 RESULT_WORKBOOK_HEADER_TO_FIELD = {label: key for key, label in RESULT_CURVE_FIELD_LABELS.items()}
 RESULT_WORKBOOK_HEADER_TO_FIELD.update(
     {
@@ -1290,7 +1290,6 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "load_down_disturbance_power",
             "renewable_down_disturbance_power",
             "renewable_single_unit_power_max",
-            "renewable_n1_power_gap",
             "grid_up_regulation_capacity",
             "grid_down_regulation_capacity",
             "grid_up_regulation_requirement",
@@ -1328,7 +1327,6 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "load_down_disturbance_power": "负荷下扰动功率",
             "renewable_down_disturbance_power": "新能源下扰动功率",
             "renewable_single_unit_power_max": "风光单机功率最大值",
-            "renewable_n1_power_gap": "新能源N-1功率缺口",
             "grid_up_regulation_capacity": "电网向上调节能力",
             "grid_down_regulation_capacity": "电网向下调节能力",
             "grid_up_regulation_requirement": "电网向上调节需求",
@@ -1711,6 +1709,8 @@ def read_workbook_rows_with_field_map(workbook, sheet_name: str, limit: int | No
 
 def result_workbook_header_to_field(header: str) -> str:
     clean = str(header or "").strip()
+    if clean in DEPRECATED_RESULT_CURVE_HEADERS:
+        return ""
     return RESULT_WORKBOOK_HEADER_TO_FIELD.get(clean, clean)
 
 
@@ -1840,8 +1840,9 @@ def read_curve_sheet(workbook, sheet_name: str, limit: int | None = None) -> dic
     headers = [str(value or "").strip() for value in next(rows_iter, [])]
     curves: dict[str, list[dict]] = {}
     for header in headers:
-        if header and header not in COMPARISON_CURVE_X_HEADERS:
-            curves[result_curve_display_name(header)] = []
+        display_name = result_curve_display_name(header)
+        if header and header not in COMPARISON_CURVE_X_HEADERS and display_name:
+            curves[display_name] = []
     for row_index, row in enumerate(rows_iter, start=1):
         if limit is not None and row_index > limit:
             break
@@ -1858,7 +1859,10 @@ def read_curve_sheet(workbook, sheet_name: str, limit: int | None = None) -> dic
 
 
 def result_curve_display_name(header: str) -> str:
-    return RESULT_CURVE_FIELD_LABELS.get(str(header or "").strip(), str(header or "").strip())
+    clean = str(header or "").strip()
+    if clean in DEPRECATED_RESULT_CURVE_HEADERS:
+        return ""
+    return RESULT_CURVE_FIELD_LABELS.get(clean, clean)
 
 
 def merge_comparison_rows(tables: list[list[dict]], items: list[dict], key_field: str) -> list[dict]:

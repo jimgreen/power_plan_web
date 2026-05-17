@@ -703,7 +703,6 @@ def dispatch_security_curve_fields(
         "load_down_disturbance_power": round(load_down_disturbance, 4),
         "renewable_down_disturbance_power": round(renewable_down_disturbance, 4),
         "renewable_single_unit_power_max": round(max(0.0, float(renewable_single_unit_power_max)), 4),
-        "renewable_n1_power_gap": round(max(0.0, float(renewable_single_unit_power_max)), 4),
         "grid_up_regulation_capacity": round(grid_up_capacity, 4),
         "grid_down_regulation_capacity": round(grid_down_capacity, 4),
         "grid_up_regulation_requirement": round(load_up_disturbance + renewable_down_disturbance, 4),

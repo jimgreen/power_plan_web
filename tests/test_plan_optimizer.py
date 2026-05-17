@@ -13,6 +13,7 @@ sys.path.insert(0, str(WEB_ROOT))
 import plan_optimizer
 import planning_store
 import estimate
+import dispatch_milp
 
 
 class PlanOptimizerTest(unittest.TestCase):
@@ -35,6 +36,66 @@ class PlanOptimizerTest(unittest.TestCase):
         payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 60
         return payload
+
+    def test_post_disturbance_constraints_use_combined_up_and_down_requirements(self):
+        builder = dispatch_milp.MilpModelBuilder()
+        variable_keys = [
+            ("diesel_power",),
+            ("diesel_on",),
+            ("storage_charge",),
+            ("storage_discharge",),
+            ("grid_storage_up",),
+            ("grid_storage_down",),
+            ("wind_power",),
+            ("pv_power",),
+        ]
+        for key in variable_keys:
+            builder.add_var(key)
+        dispatch_milp.add_post_disturbance_balance_constraints(
+            builder,
+            load=100,
+            load_up_factor=0.1,
+            load_down_factor=0.3,
+            renewable_down_factor=0.2,
+            diesel_power_indices=[builder.var(("diesel_power",))],
+            diesel_on_terms={builder.var(("diesel_on",)): 100},
+            grid_storage_charge_index=builder.var(("storage_charge",)),
+            grid_storage_discharge_index=builder.var(("storage_discharge",)),
+            grid_storage_up_on_terms={builder.var(("grid_storage_up",)): 50},
+            grid_storage_down_on_terms={builder.var(("grid_storage_down",)): 50},
+            wind_power_indices=[builder.var(("wind_power",))],
+            pv_power_indices=[builder.var(("pv_power",))],
+        )
+        index_to_key = {index: key for key, index in builder.variables.items()}
+        matrix = builder.constraint_matrix().tocoo()
+        constraints = []
+        for row_index in range(builder.constraint_count):
+            terms = {
+                index_to_key[column]: value
+                for row, column, value in zip(matrix.row, matrix.col, matrix.data)
+                if row == row_index
+            }
+            constraints.append((terms, builder.constraint_lower[row_index], builder.constraint_upper[row_index]))
+
+        expected_up_terms = {
+            ("diesel_on",): 100.0,
+            ("diesel_power",): -1.0,
+            ("grid_storage_up",): 50.0,
+            ("storage_discharge",): -1.0,
+            ("storage_charge",): 1.0,
+            ("wind_power",): -0.2,
+            ("pv_power",): -0.2,
+        }
+        expected_down_terms = {
+            ("diesel_power",): 1.0,
+            ("grid_storage_down",): 50.0,
+            ("storage_discharge",): 1.0,
+            ("storage_charge",): -1.0,
+        }
+        self.assertIn((expected_up_terms, 10.0, np.inf), constraints)
+        self.assertIn((expected_down_terms, 30.0, np.inf), constraints)
+        self.assertNotIn(({key: value for key, value in expected_up_terms.items() if key not in {("wind_power",), ("pv_power",)}}, 10.0, np.inf), constraints)
+        self.assertNotIn(({**{key: value for key, value in expected_up_terms.items() if key != ("pv_power",)}, ("wind_power",): -1.0}, 0.0, np.inf), constraints)
 
     def test_planning_optimization_optimizes_equipment_counts_and_cost_terms(self):
         payload = self._payload()

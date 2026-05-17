@@ -488,17 +488,12 @@ def add_post_disturbance_balance_constraints(
     down_terms[grid_storage_discharge_index] = down_terms.get(grid_storage_discharge_index, 0.0) + 1.0
     down_terms[grid_storage_charge_index] = down_terms.get(grid_storage_charge_index, 0.0) - 1.0
 
-    if load_up_factor > 0:
-        builder.add_constraint(up_terms, max(0.0, float(load) * float(load_up_factor)), np.inf)
-    if renewable_down_factor > 0 and renewable_power_indices:
+    load_up_requirement = max(0.0, float(load) * float(load_up_factor))
+    if load_up_requirement > 0 or (renewable_down_factor > 0 and renewable_power_indices):
         terms = dict(up_terms)
         for index in renewable_power_indices:
             terms[index] = terms.get(index, 0.0) - float(renewable_down_factor)
-        builder.add_constraint(terms, 0.0, np.inf)
-    for index in renewable_power_indices:
-        terms = dict(up_terms)
-        terms[index] = terms.get(index, 0.0) - 1.0
-        builder.add_constraint(terms, 0.0, np.inf)
+        builder.add_constraint(terms, load_up_requirement, np.inf)
     if load_down_factor > 0:
         builder.add_constraint(down_terms, max(0.0, float(load) * float(load_down_factor)), np.inf)
 

@@ -4,6 +4,7 @@ const taskState = {
   pollTimer: null,
   heightSyncFrame: 0,
   evaluationSchemeFilter: "",
+  manualOptimizationTaskHeight: null,
 };
 const TASK_SECTION_MIN_HEIGHT = 140;
 const TASK_COLUMN_GROUP = `
@@ -24,6 +25,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("optimizationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("evaluationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("evaluationSchemeFilter")?.addEventListener("change", handleEvaluationSchemeFilterChange);
+  document.getElementById("taskTableResizeHandle")?.addEventListener("pointerdown", startTaskTableResize);
   window.addEventListener("resize", scheduleTaskSectionHeights);
   loadTasks().catch(showTaskError);
   taskState.pollTimer = window.setInterval(() => loadTasks({ silent: true }).catch(showTaskError), 4000);
@@ -221,22 +223,25 @@ function syncTaskSectionHeights() {
   const panel = document.querySelector(".tasks-panel");
   const optimizationSection = panel?.querySelector(".task-section-optimization");
   const evaluationSection = panel?.querySelector(".task-section-evaluation");
+  const resizeHandle = document.getElementById("taskTableResizeHandle");
   if (!panel || !optimizationSection || !evaluationSection) return;
 
   const styles = window.getComputedStyle(panel);
   const paddingTop = parseFloat(styles.paddingTop || "0") || 0;
   const paddingBottom = parseFloat(styles.paddingBottom || "0") || 0;
   const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
-  const errorHeight = document.getElementById("taskError")?.hidden ? 0 : (document.getElementById("taskError")?.getBoundingClientRect().height || 0);
+  const handleHeight = resizeHandle?.getBoundingClientRect().height || 0;
   const panelContentHeight = Math.max(0, panel.clientHeight - paddingTop - paddingBottom);
-  const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - rowGap);
+  const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - handleHeight - rowGap * 2);
 
   const optimizationDesiredHeight = measureTaskSectionHeight(optimizationSection);
   const evaluationDesiredHeight = measureTaskSectionHeight(evaluationSection);
   const totalDesiredHeight = Math.max(optimizationDesiredHeight + evaluationDesiredHeight, 1);
 
   let optimizationHeight;
-  if (totalDesiredHeight <= availableHeight) {
+  if (Number.isFinite(taskState.manualOptimizationTaskHeight)) {
+    optimizationHeight = taskState.manualOptimizationTaskHeight;
+  } else if (totalDesiredHeight <= availableHeight) {
     const remainingHeight = availableHeight - totalDesiredHeight;
     optimizationHeight = optimizationDesiredHeight + remainingHeight * (optimizationDesiredHeight / totalDesiredHeight);
   } else {
@@ -247,6 +252,44 @@ function syncTaskSectionHeights() {
 
   panel.style.setProperty("--optimization-task-section-height", `${Math.round(optimizationHeight)}px`);
   panel.style.setProperty("--evaluation-task-section-height", `${Math.round(evaluationHeight)}px`);
+}
+
+function startTaskTableResize(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  const handle = event.currentTarget;
+  const panel = document.querySelector(".tasks-panel");
+  const optimizationSection = panel?.querySelector(".task-section-optimization");
+  const evaluationSection = panel?.querySelector(".task-section-evaluation");
+  if (!panel || !optimizationSection || !evaluationSection) return;
+  event.preventDefault();
+  handle.classList.add("dragging");
+  handle.setPointerCapture?.(event.pointerId);
+  const startY = event.clientY;
+  const startHeight = optimizationSection.getBoundingClientRect().height;
+
+  const applyHeight = (nextHeight) => {
+    const styles = window.getComputedStyle(panel);
+    const paddingTop = parseFloat(styles.paddingTop || "0") || 0;
+    const paddingBottom = parseFloat(styles.paddingBottom || "0") || 0;
+    const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
+    const handleHeight = handle.getBoundingClientRect().height || 0;
+    const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panel.clientHeight - paddingTop - paddingBottom - handleHeight - rowGap * 2);
+    taskState.manualOptimizationTaskHeight = clamp(nextHeight, TASK_SECTION_MIN_HEIGHT, availableHeight - TASK_SECTION_MIN_HEIGHT);
+    panel.style.setProperty("--optimization-task-section-height", `${Math.round(taskState.manualOptimizationTaskHeight)}px`);
+    panel.style.setProperty("--evaluation-task-section-height", `${Math.round(availableHeight - taskState.manualOptimizationTaskHeight)}px`);
+  };
+
+  const onMove = (moveEvent) => applyHeight(startHeight + moveEvent.clientY - startY);
+  const onEnd = () => {
+    handle.classList.remove("dragging");
+    handle.releasePointerCapture?.(event.pointerId);
+    document.removeEventListener("pointermove", onMove);
+    document.removeEventListener("pointerup", onEnd);
+    document.removeEventListener("pointercancel", onEnd);
+  };
+  document.addEventListener("pointermove", onMove);
+  document.addEventListener("pointerup", onEnd);
+  document.addEventListener("pointercancel", onEnd);
 }
 
 function measureTaskSectionHeight(section) {

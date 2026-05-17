@@ -219,7 +219,6 @@
     "负荷下扰动功率": "Load Down Disturbance Power",
     "新能源下扰动功率": "Renewable Down Disturbance Power",
     "风光单机功率最大值": "Max Single Wind/PV Unit Power",
-    "新能源N-1功率缺口": "Renewable N-1 Power Gap",
     "电网向上调节能力": "Grid Up Regulation Capability",
     "电网向下调节能力": "Grid Down Regulation Capability",
     "电网向上调节需求": "Grid Up Regulation Requirement",

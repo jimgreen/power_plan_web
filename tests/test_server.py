@@ -224,7 +224,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('id="evaluationTaskTable"', tasks_html)
         self.assertIn('id="evaluationSchemeFilter"', tasks_html)
         self.assertIn("全部方案</option>", tasks_html)
-        self.assertNotIn('id="taskTableResizeHandle"', tasks_html)
+        self.assertIn('id="taskTableResizeHandle"', tasks_html)
         self.assertNotIn('id="refreshTasks"', tasks_html)
         self.assertNotIn("<h1>任务并发</h1>", tasks_html)
         self.assertNotIn("展示所有规划计算任务和方案评估任务", tasks_html)
@@ -359,13 +359,13 @@ class PowerPlanServerTest(unittest.TestCase):
             '"负荷下扰动功率": "Load Down Disturbance Power"',
             '"新能源下扰动功率": "Renewable Down Disturbance Power"',
             '"风光单机功率最大值": "Max Single Wind/PV Unit Power"',
-            '"新能源N-1功率缺口": "Renewable N-1 Power Gap"',
             '"电网向上调节能力": "Grid Up Regulation Capability"',
             '"电网向下调节能力": "Grid Down Regulation Capability"',
             '"电网向上调节需求": "Grid Up Regulation Requirement"',
             '"电网向下调节需求": "Grid Down Regulation Requirement"',
         ):
             self.assertIn(exact_mapping, i18n_script)
+        self.assertNotIn("新能源N-1功率缺口", i18n_script)
         for mixed_label in (
             '"切入风速(m/s)"',
             '"额定风速(m/s)"',
@@ -903,6 +903,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(script.index("<th>操作</th>"), script.index("<th>任务状态</th>"))
         self.assertLess(script.index('<div class="task-actions">'), script.index('<td><span class="task-status-pill'))
         self.assertIn("syncTaskSectionHeights", script)
+        self.assertIn("startTaskTableResize", script)
+        self.assertIn("manualOptimizationTaskHeight", script)
         self.assertIn("--optimization-task-section-height", script)
         self.assertIn("--evaluation-task-section-height", script)
         self.assertIn("measureTaskSectionHeight", script)
@@ -910,11 +912,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('section.querySelector(".task-empty")', script)
         self.assertIn("remainingHeight", script)
         self.assertIn("totalDesiredHeight <= availableHeight", script)
-        self.assertIn("panelContentHeight - rowGap", script)
+        self.assertIn("panelContentHeight - handleHeight - rowGap * 2", script)
         self.assertNotIn('section.querySelector(".task-table")?.scrollHeight', script)
         self.assertNotIn("refreshTasks", script)
-        self.assertNotIn(".task-table-resize-handle", css)
-        self.assertIn("grid-template-rows: minmax(0, var(--optimization-task-section-height, 1fr)) minmax(0, var(--evaluation-task-section-height, 1fr))", css)
+        self.assertIn('id="taskTableResizeHandle"', html)
+        self.assertIn(".task-table-resize-handle", css)
+        self.assertIn("grid-template-rows: minmax(0, var(--optimization-task-section-height, 1fr)) 8px minmax(0, var(--evaluation-task-section-height, 1fr))", css)
         self.assertIn(".tasks-workspace > .tasks-panel", css)
         tasks_workspace_css = css.split(".tasks-workspace {", 1)[1].split("}", 1)[0]
         self.assertIn("grid-template-rows: minmax(0, 1fr)", tasks_workspace_css)
@@ -922,7 +925,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".task-section-optimization", css)
         self.assertIn("grid-row: 1", css)
         self.assertIn(".task-section-evaluation", css)
-        self.assertIn("grid-row: 2", css)
+        self.assertIn("grid-row: 3", css)
         self.assertIn(".tasks-panel .task-table", css)
         self.assertIn("table-layout: fixed", css)
         self.assertIn(".task-col-scheme", css)
@@ -1416,7 +1419,6 @@ class PowerPlanServerTest(unittest.TestCase):
             "load_down_disturbance_power",
             "renewable_down_disturbance_power",
             "renewable_single_unit_power_max",
-            "renewable_n1_power_gap",
             "grid_up_regulation_capacity",
             "grid_down_regulation_capacity",
             "grid_up_regulation_requirement",
@@ -1432,7 +1434,7 @@ class PowerPlanServerTest(unittest.TestCase):
             (row["wind_power"] + row["pv_power"]) * 0.3,
             places=3,
         )
-        self.assertAlmostEqual(row["renewable_n1_power_gap"], row["renewable_single_unit_power_max"], places=3)
+        self.assertNotIn("renewable_n1_power_gap", row)
         self.assertAlmostEqual(
             row["grid_up_regulation_requirement"],
             row["load_up_disturbance_power"] + row["renewable_down_disturbance_power"],
@@ -2106,7 +2108,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 self.assertIn("负荷下扰动功率", hourly_headers)
                 self.assertIn("新能源下扰动功率", hourly_headers)
                 self.assertIn("风光单机功率最大值", hourly_headers)
-                self.assertIn("新能源N-1功率缺口", hourly_headers)
+                self.assertNotIn("新能源N-1功率缺口", hourly_headers)
                 self.assertIn("电网向上调节能力", hourly_headers)
                 self.assertIn("电网向下调节能力", hourly_headers)
                 self.assertIn("电网向上调节需求", hourly_headers)
@@ -2157,8 +2159,8 @@ class PowerPlanServerTest(unittest.TestCase):
             safety_daily_sheet.append(["day", "frequency_max", "frequency_min"])
             safety_daily_sheet.append([1, 50.2, 49.8])
             dispatch_sheet = workbook.create_sheet("调度结果")
-            dispatch_sheet.append(["小时", "负荷总功率", "柴发总功率"])
-            dispatch_sheet.append([1, 100, 30])
+            dispatch_sheet.append(["小时", "负荷总功率", "柴发总功率", "新能源N-1功率缺口"])
+            dispatch_sheet.append([1, 100, 30, 88])
             workbook.save(result_path)
             workbook.close()
 
@@ -2176,6 +2178,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(payload["results"]["curves"]["green_monthly"][0]["load_energy"], 310)
             self.assertEqual(payload["results"]["curves"]["safety_daily"][0]["frequency_max"], 50.2)
             self.assertEqual(payload["results"]["curves"]["green_hourly"][0]["load"], 100)
+            self.assertNotIn("renewable_n1_power_gap", payload["results"]["curves"]["green_hourly"][0])
         finally:
             server.PLANNING_STORE = original_store
             server.OPTIMIZATION_RUNTIME = original_runtime
