@@ -4,6 +4,7 @@ import sys
 import time
 import unittest
 import base64
+import csv
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -2042,12 +2043,11 @@ class PowerPlanServerTest(unittest.TestCase):
             try:
                 self.assertEqual(
                     workbook.sheetnames,
-                    ["总体指标", "规划结果", "规划年指标", "供能分析", "供能日曲线", "供能月曲线", "安全评估", "安全日曲线", "调度结果", "运行日志"],
+                    ["总体指标", "规划年指标", "供能分析", "供能日曲线", "供能月曲线", "安全评估", "安全日曲线", "调度结果", "运行日志"],
                 )
                 self.assertEqual(workbook["总体指标"]["A1"].value, "指标")
                 self.assertEqual(workbook["总体指标"]["B1"].value, "数值")
-                self.assertEqual(workbook["规划结果"]["A1"].value, "设备类型")
-                self.assertEqual(workbook["规划结果"]["A2"].value, "柴发")
+                self.assertNotIn("规划结果", workbook.sheetnames)
                 self.assertEqual(workbook["供能日曲线"].max_row, 366)
                 self.assertIn("供能月曲线", workbook.sheetnames)
                 self.assertEqual(workbook["供能月曲线"].max_row, 13)
@@ -2065,6 +2065,11 @@ class PowerPlanServerTest(unittest.TestCase):
                 self.assertIn("规划求解完成", log_messages)
             finally:
                 workbook.close()
+            csv_path = planning_root / "方案A" / "opt_results.csv"
+            self.assertTrue(csv_path.exists())
+            csv_rows = list(csv.DictReader(csv_path.open(encoding="utf-8-sig", newline="")))
+            self.assertEqual(csv_rows[0]["设备类型"], "柴发")
+            self.assertIn("设计台数", csv_rows[0])
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -2110,6 +2115,11 @@ class PowerPlanServerTest(unittest.TestCase):
             dispatch_sheet.append([1, 100, 30])
             workbook.save(result_path)
             workbook.close()
+            csv_path = planning_root / "方案A" / "opt_results.csv"
+            with csv_path.open("w", encoding="utf-8-sig", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+                writer.writeheader()
+                writer.writerow({"设备类型": "CSV柴发", "设计台数": 4, "单台容量": 222, "总容量": 888, "单位": "kW"})
 
             status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A")
             payload = json.loads(body.decode("utf-8"))
@@ -2117,7 +2127,8 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(payload["result_file"], str(result_path))
             self.assertEqual(payload["metrics"][3], {"label": "度电成本", "value": 9.99, "unit": "元"})
-            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设备类型"], "工作簿柴发")
+            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设备类型"], "CSV柴发")
+            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设计台数"], 4)
             self.assertEqual(payload["results"]["overview_tables"][1]["rows"][0]["指标"], "工作簿年指标")
             self.assertEqual(payload["results"]["green_table"][0]["指标"], "工作簿供能指标")
             self.assertEqual(payload["results"]["safety_table"][0]["指标"], "工作簿安全指标")
@@ -2234,6 +2245,11 @@ class PowerPlanServerTest(unittest.TestCase):
             safety_daily_sheet.append([1, 50.1, 49.9])
             workbook.save(result_path)
             workbook.close()
+            csv_path = planning_root / "方案A" / "case_results.csv"
+            with csv_path.open("w", encoding="utf-8-sig", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+                writer.writeheader()
+                writer.writerow({"设备类型": "CSV评估柴发", "设计台数": 2, "单台容量": 300, "总容量": 600, "单位": "kW"})
 
             status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A&filename=case_results.xlsx")
             payload = json.loads(body.decode("utf-8"))
@@ -2247,7 +2263,8 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertNotIn("综合评分", metric_labels)
             self.assertNotIn("风险等级", metric_labels)
             self.assertEqual(payload["metrics"][3], {"label": "柴油消耗", "value": 8.8, "unit": "吨"})
-            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设备类型"], "评估柴发")
+            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设备类型"], "CSV评估柴发")
+            self.assertEqual(payload["results"]["overview_tables"][0]["rows"][0]["设计台数"], 2)
             self.assertEqual(payload["results"]["overview_tables"][1]["rows"][0]["指标"], "评估年指标")
             self.assertEqual(payload["results"]["green_table"][0]["指标"], "评估供能指标")
             self.assertEqual(payload["results"]["safety_table"][0]["指标"], "评估安全指标")
@@ -2355,9 +2372,9 @@ class PowerPlanServerTest(unittest.TestCase):
             planning_sheet.append(["燃料电池", 0, 50, 50, "kW"])
             create_workbook.save(source_path)
 
-            broken_path = planning_root / "方案A" / "aaa_results.xlsx"
+            broken_path = planning_root / "方案A" / "aaa_estimate.xlsx"
             broken_path.write_bytes(b"not a valid workbook")
-            dead_path = planning_root / "方案A" / "dead_results.xlsx"
+            dead_path = planning_root / "方案A" / "dead_estimate.xlsx"
             dead_path.write_bytes(b"dead workbook")
 
             status, headers, body = server.handle_api_path(
@@ -2366,7 +2383,7 @@ class PowerPlanServerTest(unittest.TestCase):
             listed = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertEqual(listed["selected"], "opt_results.xlsx")
-            broken_item = next(item for item in listed["results"] if item["name"] == "aaa_results.xlsx")
+            broken_item = next(item for item in listed["results"] if item["name"] == "aaa_estimate.xlsx")
             self.assertFalse(broken_item["readable"])
             self.assertIn("结果文件无法读取", broken_item["message"])
             self.assertEqual(
@@ -2380,11 +2397,11 @@ class PowerPlanServerTest(unittest.TestCase):
             )
 
             status, headers, body = server.handle_api_path(
-                "/api/evaluation/results?scheme=方案A&filename=aaa_results.xlsx"
+                "/api/evaluation/results?scheme=方案A&filename=aaa_estimate.xlsx"
             )
             selected_broken = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(selected_broken["selected"], "aaa_results.xlsx")
+            self.assertEqual(selected_broken["selected"], "aaa_estimate.xlsx")
             self.assertEqual(selected_broken["planning_result_rows"], [])
 
             status, headers, body = server.handle_evaluation_results_api_path(
@@ -2402,8 +2419,11 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             copied = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(copied["selected"], "custom_results.xlsx")
-            self.assertTrue((planning_root / "方案A" / "custom_results.xlsx").exists())
+            self.assertEqual(copied["selected"], "custom_estimate.xlsx")
+            self.assertTrue((planning_root / "方案A" / "custom_estimate.xlsx").exists())
+            self.assertTrue((planning_root / "方案A" / "custom_results.csv").exists())
+            copied_csv_rows = list(csv.DictReader((planning_root / "方案A" / "custom_results.csv").open(encoding="utf-8-sig", newline="")))
+            self.assertEqual(copied_csv_rows[0]["设备类型"], "柴发")
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -2438,27 +2458,28 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             overwritten = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(overwritten["selected"], "aaa_results.xlsx")
-            overwritten_item = next(item for item in overwritten["results"] if item["name"] == "aaa_results.xlsx")
+            self.assertEqual(overwritten["selected"], "aaa_estimate.xlsx")
+            overwritten_item = next(item for item in overwritten["results"] if item["name"] == "aaa_estimate.xlsx")
             self.assertTrue(overwritten_item["readable"])
-            workbook = load_workbook(planning_root / "方案A" / "aaa_results.xlsx", read_only=True)
+            workbook = load_workbook(planning_root / "方案A" / "aaa_estimate.xlsx", read_only=True)
             try:
                 self.assertIn("规划结果", workbook.sheetnames)
             finally:
                 workbook.close()
+            self.assertTrue((planning_root / "方案A" / "aaa_results.csv").exists())
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
                 "POST",
                 json.dumps(
-                    {"scheme": "方案A", "action": "delete", "filename": "dead_results.xlsx"},
+                    {"scheme": "方案A", "action": "delete", "filename": "dead_estimate.xlsx"},
                     ensure_ascii=False,
                 ).encode("utf-8"),
             )
             deleted_broken = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertFalse(dead_path.exists())
-            self.assertNotIn("dead_results.xlsx", [item["name"] for item in deleted_broken["results"]])
+            self.assertNotIn("dead_estimate.xlsx", [item["name"] for item in deleted_broken["results"]])
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -2491,19 +2512,19 @@ class PowerPlanServerTest(unittest.TestCase):
                 "/api/evaluation/results",
                 "POST",
                 json.dumps(
-                    {"scheme": "方案A", "action": "save", "filename": "custom_results.xlsx"},
+                    {"scheme": "方案A", "action": "save", "filename": "custom_estimate.xlsx"},
                     ensure_ascii=False,
                 ).encode("utf-8"),
             )
             saved = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(saved["selected"], "custom_results.xlsx")
-            workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
+            self.assertEqual(saved["selected"], "custom_estimate.xlsx")
+            workbook = load_workbook(planning_root / "方案A" / "custom_estimate.xlsx", read_only=True)
             try:
                 self.assertIn("总体指标", workbook.sheetnames)
-                self.assertIn("规划结果", workbook.sheetnames)
             finally:
                 workbook.close()
+            self.assertTrue((planning_root / "方案A" / "custom_results.csv").exists())
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -2512,7 +2533,7 @@ class PowerPlanServerTest(unittest.TestCase):
                     {
                         "scheme": "方案A",
                         "action": "save",
-                        "filename": "custom_results.xlsx",
+                        "filename": "custom_estimate.xlsx",
                         "planning_result_rows": [
                             {"设备类型": "柴发", "设计台数": 5},
                             {"设备类型": "储能", "设计台数": 7},
@@ -2523,33 +2544,22 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             saved_with_counts = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(saved_with_counts["selected"], "custom_results.xlsx")
+            self.assertEqual(saved_with_counts["selected"], "custom_estimate.xlsx")
             saved_counts = {row["设备类型"]: row["设计台数"] for row in saved_with_counts["planning_result_rows"]}
             saved_totals = {row["设备类型"]: row["总容量"] for row in saved_with_counts["planning_result_rows"]}
             self.assertEqual(saved_counts["柴发"], 5)
             self.assertEqual(saved_counts["储能"], 7)
             self.assertEqual(saved_totals["柴发"], 1600)
             self.assertEqual(saved_totals["储能"], 1750)
-            workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
-            try:
-                workbook_counts = {
-                    row[0]: row[1]
-                    for row in workbook["规划结果"].iter_rows(min_row=2, values_only=True)
-                    if row and row[0]
-                }
-                workbook_totals = {
-                    row[0]: row[3]
-                    for row in workbook["规划结果"].iter_rows(min_row=2, values_only=True)
-                    if row and row[0]
-                }
-                self.assertEqual(workbook_counts["柴发"], 5)
-                self.assertEqual(workbook_counts["储能"], 7)
-                self.assertEqual(workbook_totals["柴发"], 1600)
-                self.assertEqual(workbook_totals["储能"], 1750)
-            finally:
-                workbook.close()
+            csv_rows = list(csv.DictReader((planning_root / "方案A" / "custom_results.csv").open(encoding="utf-8-sig", newline="")))
+            csv_counts = {row["设备类型"]: int(row["设计台数"]) for row in csv_rows}
+            csv_totals = {row["设备类型"]: float(row["总容量"]) for row in csv_rows}
+            self.assertEqual(csv_counts["柴发"], 5)
+            self.assertEqual(csv_counts["储能"], 7)
+            self.assertEqual(csv_totals["柴发"], 1600)
+            self.assertEqual(csv_totals["储能"], 1750)
 
-            result_path_for_retry = planning_root / "方案A" / "custom_results.xlsx"
+            result_path_for_retry = planning_root / "方案A" / "custom_results.csv"
             replace_calls = {"count": 0}
             original_replace = Path.replace
 
@@ -2568,7 +2578,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         {
                             "scheme": "方案A",
                             "action": "save",
-                            "filename": "custom_results.xlsx",
+                            "filename": "custom_estimate.xlsx",
                             "planning_result_rows": [{"设备类型": "柴发", "设计台数": 6}],
                         },
                         ensure_ascii=False,
@@ -2576,7 +2586,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 )
             retried_save = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(retried_save["selected"], "custom_results.xlsx")
+            self.assertEqual(retried_save["selected"], "custom_estimate.xlsx")
             self.assertGreaterEqual(replace_calls["count"], 2)
             retried_counts = {row["设备类型"]: row["设计台数"] for row in retried_save["planning_result_rows"]}
             self.assertEqual(retried_counts["柴发"], 6)
@@ -2594,7 +2604,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         {
                             "scheme": "方案A",
                             "action": "save",
-                            "filename": "custom_results.xlsx",
+                            "filename": "custom_estimate.xlsx",
                             "planning_result_rows": [{"设备类型": "柴发", "设计台数": 6}],
                         },
                         ensure_ascii=False,
@@ -2603,14 +2613,14 @@ class PowerPlanServerTest(unittest.TestCase):
             locked = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 409)
             self.assertEqual(locked["error"], "file_locked")
-            self.assertIn("结果文件被占用", locked["message"])
+            self.assertIn("规划结果CSV被占用", locked["message"])
             self.assertIn("请关闭", locked["message"])
 
             original_copy2 = server.file_ops.shutil.copy2
             copy_calls = {"count": 0}
 
             def flaky_copy2(source, target):
-                if Path(target).name == "copyretry_results.xlsx":
+                if Path(target).name == "copyretry_estimate.xlsx":
                     copy_calls["count"] += 1
                     if copy_calls["count"] == 1:
                         raise PermissionError("simulated copy lock")
@@ -2624,7 +2634,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         {
                             "scheme": "方案A",
                             "action": "copy",
-                            "filename": "custom_results.xlsx",
+                            "filename": "custom_estimate.xlsx",
                             "target_name": "copyretry",
                         },
                         ensure_ascii=False,
@@ -2632,11 +2642,11 @@ class PowerPlanServerTest(unittest.TestCase):
                 )
             retried_copy = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(retried_copy["selected"], "copyretry_results.xlsx")
+            self.assertEqual(retried_copy["selected"], "copyretry_estimate.xlsx")
             self.assertGreaterEqual(copy_calls["count"], 2)
 
             def always_locked_copy2(source, target):
-                if Path(target).name == "copylocked_results.xlsx":
+                if Path(target).name == "copylocked_estimate.xlsx":
                     raise PermissionError("copy target locked")
                 return original_copy2(source, target)
 
@@ -2648,7 +2658,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         {
                             "scheme": "方案A",
                             "action": "copy",
-                            "filename": "custom_results.xlsx",
+                            "filename": "custom_estimate.xlsx",
                             "target_name": "copylocked",
                         },
                         ensure_ascii=False,
@@ -2664,7 +2674,7 @@ class PowerPlanServerTest(unittest.TestCase):
             unlink_calls = {"count": 0}
 
             def flaky_unlink(self, *args, **kwargs):
-                if Path(self).name == "copyretry_results.xlsx":
+                if Path(self).name == "copyretry_estimate.xlsx":
                     unlink_calls["count"] += 1
                     if unlink_calls["count"] == 1:
                         raise PermissionError("simulated delete lock")
@@ -2675,14 +2685,15 @@ class PowerPlanServerTest(unittest.TestCase):
                     "/api/evaluation/results",
                     "POST",
                     json.dumps(
-                        {"scheme": "方案A", "action": "delete", "filename": "copyretry_results.xlsx"},
+                        {"scheme": "方案A", "action": "delete", "filename": "copyretry_estimate.xlsx"},
                         ensure_ascii=False,
                     ).encode("utf-8"),
                 )
             retried_delete = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertGreaterEqual(unlink_calls["count"], 2)
-            self.assertNotIn("copyretry_results.xlsx", [item["name"] for item in retried_delete["results"]])
+            self.assertFalse((planning_root / "方案A" / "copyretry_results.csv").exists())
+            self.assertNotIn("copyretry_estimate.xlsx", [item["name"] for item in retried_delete["results"]])
 
             for invalid_count in (-1, 1.5, "2.2"):
                 status, headers, body = server.handle_evaluation_results_api_path(
@@ -2692,7 +2703,7 @@ class PowerPlanServerTest(unittest.TestCase):
                         {
                             "scheme": "方案A",
                             "action": "save",
-                            "filename": "custom_results.xlsx",
+                            "filename": "custom_estimate.xlsx",
                             "planning_result_rows": [{"设备类型": "柴发", "设计台数": invalid_count}],
                         },
                         ensure_ascii=False,
@@ -2707,15 +2718,16 @@ class PowerPlanServerTest(unittest.TestCase):
                 "/api/evaluation/results",
                 "POST",
                 json.dumps(
-                    {"scheme": "方案A", "action": "delete", "filename": "custom_results.xlsx"},
+                    {"scheme": "方案A", "action": "delete", "filename": "custom_estimate.xlsx"},
                     ensure_ascii=False,
                 ).encode("utf-8"),
             )
             deleted = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertFalse((planning_root / "方案A" / "custom_results.xlsx").exists())
-            self.assertEqual([item["name"] for item in deleted["results"]], ["aaa_results.xlsx", "opt_results.xlsx"])
-            self.assertEqual(deleted["selected"], "aaa_results.xlsx")
+            self.assertFalse((planning_root / "方案A" / "custom_estimate.xlsx").exists())
+            self.assertFalse((planning_root / "方案A" / "custom_results.csv").exists())
+            self.assertEqual([item["name"] for item in deleted["results"]], ["aaa_estimate.xlsx", "opt_results.xlsx"])
+            self.assertEqual(deleted["selected"], "aaa_estimate.xlsx")
         finally:
             server.PLANNING_STORE = original_store
             server.OPTIMIZATION_RUNTIME = original_runtime

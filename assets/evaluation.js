@@ -437,7 +437,7 @@ function renderEvaluationResultWarnings() {
 }
 
 function resultDisplayName(filename) {
-  return String(filename || "").replace(/_results\.xlsx$/, "");
+  return String(filename || "").replace(/_(?:results|estimate)\.xlsx$/, "");
 }
 
 function currentEvaluationResultLabel() {
@@ -643,7 +643,7 @@ async function clearEvaluationLogs() {
 
 function saveEvaluationLogs() {
   const logs = state.optimization?.logs || [];
-  const resultName = state.selectedResultFile ? `_${state.selectedResultFile.replace(/_results\.xlsx$/i, "")}` : "";
+  const resultName = state.selectedResultFile ? `_${state.selectedResultFile.replace(/_(?:results|estimate)\.xlsx$/i, "")}` : "";
   saveLogsToFile(logs, `方案评估_${state.currentScheme || "未选择方案"}${resultName}_运行日志`);
 }
 
