@@ -5070,9 +5070,16 @@ class PowerPlanServerTest(unittest.TestCase):
 
     def test_planning_save_has_parameter_alarm_validation(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
 
         self.assertIn("collectSaveWarnings", script)
         self.assertIn("参数校验未通过", script)
+        self.assertIn("参数保存成功", script)
+        self.assertIn("保存参数失败：", script)
+        self.assertIn("时序数据未加载，无法保存", script)
+        self.assertIn('"参数保存成功": "Parameters saved successfully"', i18n_script)
+        self.assertIn('"保存参数失败：": "Failed to save parameters: "', i18n_script)
+        self.assertIn('"时序数据未加载，无法保存": "Time series data is not loaded, cannot save"', i18n_script)
         self.assertIn("数量下限(台)", script)
         self.assertIn("数量上限(台)", script)
         self.assertIn("数量上限不能小于数量下限", script)

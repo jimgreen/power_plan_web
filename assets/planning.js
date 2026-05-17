@@ -738,23 +738,34 @@ async function renameScheme() {
 
 async function saveScheme() {
   if (!state.currentScheme || !state.payload) return alert("请先选择方案");
-  if (!isTimeSeriesLoaded()) {
-    await ensureTimeSeriesLoaded().catch(showError);
-    if (!isTimeSeriesLoaded()) return;
+  try {
+    if (!isTimeSeriesLoaded()) {
+      await ensureTimeSeriesLoaded();
+      if (!isTimeSeriesLoaded()) {
+        alert("保存参数失败：时序数据未加载，无法保存");
+        return;
+      }
+    }
+    const warnings = collectSaveWarnings();
+    if (warnings.length) {
+      renderSummary();
+      alert(`参数校验未通过：\n${warnings.map((item) => `- ${item.message}`).join("\n")}`);
+      return;
+    }
+    const savedPayload = await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}`, {
+      method: "PUT",
+      body: JSON.stringify(state.payload),
+    });
+    state.payload = normalizePayload(savedPayload);
+    if (!state.payload) {
+      alert("保存参数失败：后台返回数据为空");
+      return;
+    }
+    renderAll();
+    alert("参数保存成功");
+  } catch (error) {
+    alert(`保存参数失败：${error.message || String(error)}`);
   }
-  const warnings = collectSaveWarnings();
-  if (warnings.length) {
-    renderSummary();
-    alert(`参数校验未通过：\n${warnings.map((item) => `- ${item.message}`).join("\n")}`);
-    return;
-  }
-  state.payload = normalizePayload(await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}`, {
-    method: "PUT",
-    body: JSON.stringify(state.payload),
-  }).catch(showError));
-  if (!state.payload) return;
-  renderAll();
-  alert("保存成功");
 }
 
 async function deleteScheme() {
