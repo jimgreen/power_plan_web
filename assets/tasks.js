@@ -166,6 +166,9 @@ function taskStatusClass(status) {
   if (status === "计算中") return "running";
   if (status === "排队中") return "queued";
   if (status === "完成计算") return "completed";
+  if (status === "计算中止") return "interrupted";
+  if (status === "计算失败") return "failed";
+  if (status === "计算超时") return "timeout";
   return "idle";
 }
 

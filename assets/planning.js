@@ -30,6 +30,7 @@ const state = {
   isSwitchingScheme: false,
 };
 
+const COLLAPSED_PANEL_SIZE = 0;
 const AMAP_TILE_SIZE = 256;
 const AMAP_MIN_ZOOM = 2;
 const AMAP_MAX_ZOOM = 18;
@@ -411,10 +412,10 @@ function applyAdaptiveTimeSeriesLayout() {
   const chartChrome = Math.max(0, chartCard.offsetHeight - chart.clientHeight);
   const tableChrome = Math.max(0, tableCard.offsetHeight - table.clientHeight) || (toolbar?.offsetHeight || 0) + 44;
   const handleHeight = (handle?.offsetHeight || 14) + 10;
-  const available = Math.max(240, tabHeight - chartChrome - tableChrome - handleHeight - 32);
-  const autoChartHeight = Math.min(340, Math.max(140, available * 0.4));
+  const available = Math.max(COLLAPSED_PANEL_SIZE, tabHeight - chartChrome - tableChrome - handleHeight - 32);
+  const autoChartHeight = Math.min(340, Math.max(COLLAPSED_PANEL_SIZE, available * 0.4));
   const chartHeight = clampTimeChartHeight(state.timeChartManualHeight ?? autoChartHeight);
-  const tableHeight = Math.min(620, Math.max(120, available - chartHeight));
+  const tableHeight = Math.min(620, Math.max(COLLAPSED_PANEL_SIZE, available - chartHeight));
 
   document.documentElement.style.setProperty("--time-chart-height", `${Math.round(chartHeight)}px`);
   document.documentElement.style.setProperty("--time-table-height", `${Math.round(tableHeight)}px`);
@@ -497,7 +498,7 @@ function bindTimeResizeHandle() {
       applyHeight(currentHeight + keySteps[event.key]);
     } else if (event.key === "Home") {
       event.preventDefault();
-      applyHeight(120);
+      applyHeight(COLLAPSED_PANEL_SIZE);
     } else if (event.key === "End") {
       event.preventDefault();
       applyHeight(maxTimeChartHeight());
@@ -560,17 +561,17 @@ function bindTimeSeriesImportResizeHandle() {
 }
 
 function clampTimeChartHeight(height) {
-  return Math.min(Math.max(Number(height) || 240, 120), maxTimeChartHeight());
+  return Math.min(Math.max(Number(height) || 240, COLLAPSED_PANEL_SIZE), maxTimeChartHeight());
 }
 
 function clampTimeSeriesImportChartHeight(height) {
-  return Math.min(Math.max(Number(height) || 240, 120), 430);
+  return Math.min(Math.max(Number(height) || 240, COLLAPSED_PANEL_SIZE), 430);
 }
 
 function maxTimeChartHeight() {
   const tab = document.getElementById("timeTab");
-  const available = tab ? tab.clientHeight - 230 : 420;
-  return Math.max(140, Math.min(520, available));
+  const available = tab ? tab.clientHeight - 110 : 420;
+  return Math.max(COLLAPSED_PANEL_SIZE, Math.min(900, available));
 }
 
 async function api(path, options = {}) {
@@ -2790,12 +2791,12 @@ function startPlanningParameterResize(event, handle) {
   const startY = event.clientY;
   const previousStart = previous.getBoundingClientRect().height;
   const nextStart = next.getBoundingClientRect().height;
-  const minHeight = 120;
+  const minHeight = COLLAPSED_PANEL_SIZE;
 
   const onMove = (moveEvent) => {
     const delta = moveEvent.clientY - startY;
-    const previousHeight = Math.max(minHeight, previousStart + delta);
-    const nextHeight = Math.max(minHeight, nextStart - delta);
+    const previousHeight = Math.max(COLLAPSED_PANEL_SIZE, previousStart + delta);
+    const nextHeight = Math.max(COLLAPSED_PANEL_SIZE, nextStart - delta);
     previous.style.height = `${Math.round(previousHeight)}px`;
     next.style.height = `${Math.round(nextHeight)}px`;
   };

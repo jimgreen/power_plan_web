@@ -18,6 +18,7 @@ sys.path.insert(0, str(WEB_ROOT))
 
 import server
 import estimate
+import milp_solver
 import plan_optimizer
 
 
@@ -294,7 +295,60 @@ class PowerPlanServerTest(unittest.TestCase):
             '"名称": "Name"',
             '"设备类型": "Device Type"',
             '"成本构成": "Cost Composition"',
+            '"柴发总容量": "Total Diesel Capacity"',
+            '"风电总容量": "Total Wind Capacity"',
+            '"光伏总容量": "Total PV Capacity"',
+            '"氢能总容量": "Total Hydrogen Capacity"',
+            '"储能总容量": "Total Storage Capacity"',
+            '"绿电年发电量": "Annual Green Energy Generation"',
+            '"总发电量": "Total Generation"',
+            '"柴油消耗": "Diesel Consumption"',
+            '"频率风险点": "Frequency Risk Points"',
+            '"年总成本": "Annual Total Cost"',
+            '"总成本": "Total Cost"',
             '"年柴油成本": "Annual Diesel Cost"',
+            '"包含": "Contains"',
+            '"文件": "File"',
+            '"已解析": "Parsed"',
+            '"共": "Total"',
+            '"行": "Rows"',
+            '"小时序号": "Hour Index"',
+            '"时间": "Time"',
+            '"风光柴": "Wind-Solar-Diesel"',
+            '"电储能": "Battery Storage"',
+            '"氢储能": "Hydrogen Storage"',
+            '"柴发": "Diesel Generator"',
+            '"风机": "Wind Turbine"',
+            '"光伏": "PV"',
+            '"储能PCS": "Storage PCS"',
+            '"储能电池组": "Battery Pack"',
+            '"电制氢": "Electrolyzer"',
+            '"储氢罐": "Hydrogen Tank"',
+            '"燃料电池": "Fuel Cell"',
+            '"新增行": "Add Row"',
+            '"是否考虑新能源扰动": "Renewable Disturbance Constraint"',
+            '"是": "Yes"',
+            '"否": "No"',
+            '"取值范围": "Value Range"',
+            '"参数": "Parameter"',
+            '"参数名称": "Parameter Name"',
+            '"当前": "Current"',
+            '"行数正确": "Row Count OK"',
+            '"分布": "Distribution"',
+            '"正常": "Normal"',
+            '"相关参数": "Related Parameters"',
+            '"总容量": "Total Capacity"',
+            '"规划年指标": "Planning Annual Metrics"',
+            '"规划结果": "Planning Result"',
+            '"计算中止": "Calculation Stopped"',
+            '"计算失败": "Calculation Failed"',
+            '"计算超时": "Calculation Timed Out"',
+            '"请选择": "Please select"',
+            '"暂无": "No data"',
+            '"柴发总电量": "Total Diesel Energy"',
+            '"制氢总量": "Total Hydrogen Production"',
+            '"氢储总发电量": "Hydrogen Storage Generation"',
+            '"电储总发电量": "Battery Storage Generation"',
             '"年均建设成本": "Annualized Construction Cost"',
             '"柴发电量": "Diesel Generation"',
             '"绿电电量": "Green Energy"',
@@ -313,6 +367,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("target.insertBefore(wrap, target.firstElementChild)", i18n_script)
         self.assertIn("const translated = translateText(node.nodeValue, language);", i18n_script)
         self.assertIn("if (translated !== node.nodeValue) node.nodeValue = translated;", i18n_script)
+        self.assertIn("filter(([key]) => key.length > 1)", i18n_script)
         self.assertIn("data-admin-only", planning_html)
         self.assertIn("data-admin-only", optimize_html)
         self.assertIn("data-admin-only", index_html)
@@ -493,7 +548,7 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             stopped = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(stopped["state"]["status"], "已停止")
+            self.assertEqual(stopped["state"]["status"], "计算中止")
             self.assertTrue(stopped["state"]["end_time"])
             self.assertTrue(any("停止规划求解" in item["message"] for item in stopped["state"]["logs"]))
 
@@ -547,6 +602,12 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 400)
             self.assertIn("风机数量上限和光伏数量上限均为0", data["message"])
             self.assertIn("绿色电量占比下限大于0", data["message"])
+            status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A&light=1")
+            failed_task = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(failed_task["status"], "失败")
+            self.assertEqual(failed_task["task_status"], "计算失败")
+            self.assertIn("绿色电量占比下限大于0", failed_task["logs"][-1]["message"])
 
             for row in payload["time_series"]:
                 row["wind_speed"] = 0
@@ -598,12 +659,18 @@ class PowerPlanServerTest(unittest.TestCase):
     def test_fast_feasibility_prechecks_are_shared_outside_server(self):
         server_source = (WEB_ROOT / "server.py").read_text(encoding="utf-8")
         precheck_source = (WEB_ROOT / "calculation_precheck.py").read_text(encoding="utf-8")
+        docs = (WEB_ROOT / "docs" / "启动优化程序说明.md").read_text(encoding="utf-8")
 
         self.assertIn("import calculation_precheck", server_source)
         self.assertNotIn("def validate_optimization_fast_feasibility", server_source)
         self.assertNotIn("def validate_evaluation_fast_feasibility", server_source)
         self.assertIn("def validate_optimization_fast_feasibility", precheck_source)
         self.assertIn("def validate_evaluation_fast_feasibility", precheck_source)
+        self.assertIn("启动前快速可行性预检查", docs)
+        self.assertIn("年度风光最大可发电量不足", docs)
+        self.assertIn("单小时最大供电功率不足", docs)
+        self.assertIn("储氢自损耗无法补偿", docs)
+        self.assertIn("电储自损耗无法补偿", docs)
 
     def test_tasks_api_lists_and_controls_optimization_and_evaluation_jobs(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
@@ -703,7 +770,7 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             stopped = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(stopped["task"]["status"], "未计算")
+            self.assertEqual(stopped["task"]["status"], "计算中止")
             self.assertIn("停止规划求解", stopped["task"]["latest_log"])
 
             status, headers, body = server.handle_control_path(
@@ -846,7 +913,47 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("table-layout: fixed", css)
         self.assertIn(".task-col-scheme", css)
         self.assertIn(".task-col-actions", css)
+        self.assertIn('if (status === "计算中止") return "interrupted";', script)
+        self.assertIn('if (status === "计算失败") return "failed";', script)
+        self.assertIn('if (status === "计算超时") return "timeout";', script)
+        self.assertIn(".task-status-pill.interrupted", css)
+        self.assertIn(".task-status-pill.failed", css)
+        self.assertIn(".task-status-pill.timeout", css)
         self.assertNotIn("<th>任务类型</th>", script)
+
+    def test_timeout_solver_result_maps_to_timeout_task_status(self):
+        self.assertTrue(milp_solver.is_timeout_result(SimpleNamespace(message="Gurobi status TIME_LIMIT", status=9)))
+        self.assertTrue(milp_solver.is_timeout_result(SimpleNamespace(message="Time limit reached", status=1)))
+        self.assertFalse(milp_solver.is_timeout_result(SimpleNamespace(message="Gurobi status INFEASIBLE", status=3)))
+
+        with self.assertRaises(milp_solver.CalculationTimeoutError):
+            plan_optimizer.raise_if_solver_timed_out(
+                SimpleNamespace(message="Gurobi status TIME_LIMIT", status=9),
+                "规划求解",
+            )
+
+        optimization_runtime = server.OptimizationRuntime("方案A")
+        with optimization_runtime._lock:
+            optimization_runtime.status = "运行中"
+            optimization_runtime.scheme = "方案A"
+            optimization_runtime.start_time = server._now_text()
+            optimization_runtime._handle_process_event_unlocked({"type": "timeout", "message": "规划求解达到最大用时"})
+            optimization_payload = optimization_runtime._payload_unlocked()
+        self.assertEqual(optimization_payload["status"], "超时")
+        self.assertEqual(server.task_display_status(optimization_payload["status"]), "计算超时")
+        self.assertIn("最大用时", optimization_payload["logs"][-1]["message"])
+
+        evaluation_runtime = server.EvaluationRuntime("方案A")
+        with evaluation_runtime._lock:
+            evaluation_runtime.status = "运行中"
+            evaluation_runtime.scheme = "方案A"
+            evaluation_runtime.result_filename = "aaa_results.xlsx"
+            evaluation_runtime.start_time = server._now_text()
+            evaluation_runtime._handle_process_event_unlocked({"type": "timeout", "message": "方案评估达到最大用时"})
+            evaluation_payload = evaluation_runtime._payload_unlocked()
+        self.assertEqual(evaluation_payload["status"], "超时")
+        self.assertEqual(server.task_display_status(evaluation_payload["status"]), "计算超时")
+        self.assertIn("最大用时", evaluation_payload["logs"][-1]["message"])
 
     def test_tasks_api_queues_jobs_and_starts_next_after_current_finishes(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
@@ -896,7 +1003,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 json.dumps({"action": "stop", "task_type": "optimization", "scheme": "方案B"}, ensure_ascii=False).encode("utf-8"),
             )
             stopped = json.loads(body.decode("utf-8"))["task"]
-            self.assertEqual(stopped["status"], "未计算")
+            self.assertEqual(stopped["status"], "计算中止")
         finally:
             for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
                 if runtime.status == "运行中":
@@ -925,7 +1032,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertNotEqual(payload["process_id"], server.os.getpid())
 
             stopped = runtime.apply("stop", scheme="方案A")
-            self.assertEqual(stopped["status"], "已停止")
+            self.assertEqual(stopped["status"], "计算中止")
             self.assertFalse(runtime._process and runtime._process.is_alive())
         finally:
             server.PLANNING_STORE = original_store
@@ -1361,8 +1468,10 @@ class PowerPlanServerTest(unittest.TestCase):
         planning_root.mkdir(parents=True)
         original_store = server.PLANNING_STORE
         original_runtime = server.EVALUATION_RUNTIME
+        original_scheduler = server.TASK_SCHEDULER
         server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
         server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        server.TASK_SCHEDULER = server.TaskScheduler()
         try:
             payload = server.planning_store.default_payload("方案A")
             for row in payload["time_series"]:
@@ -1420,10 +1529,11 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             stopped = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
-            self.assertEqual(stopped["state"]["status"], "已停止")
+            self.assertEqual(stopped["state"]["status"], "计算中止")
         finally:
             server.PLANNING_STORE = original_store
             server.EVALUATION_RUNTIME = original_runtime
+            server.TASK_SCHEDULER = original_scheduler
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_evaluation_start_rejects_fast_infeasible_fixed_results_before_solving(self):
@@ -1432,8 +1542,10 @@ class PowerPlanServerTest(unittest.TestCase):
         planning_root.mkdir(parents=True)
         original_store = server.PLANNING_STORE
         original_runtime = server.EVALUATION_RUNTIME
+        original_scheduler = server.TASK_SCHEDULER
         server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
         server.EVALUATION_RUNTIME = server.EvaluationRuntimeManager()
+        server.TASK_SCHEDULER = server.TaskScheduler()
 
         def write_result(filename: str, rows: list[list[object]]) -> None:
             workbook = Workbook()
@@ -1450,6 +1562,16 @@ class PowerPlanServerTest(unittest.TestCase):
                 "/api/evaluation/control",
                 json.dumps(
                     {"action": "start", "scheme": "方案A", "filename": filename},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            return status, json.loads(body.decode("utf-8"))
+
+        def queue_result(filename: str) -> tuple[int, dict]:
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps(
+                    {"action": "queue", "task_type": "evaluation", "scheme": "方案A", "result": filename},
                     ensure_ascii=False,
                 ).encode("utf-8"),
             )
@@ -1539,6 +1661,29 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 400)
             self.assertIn("第1小时", data["message"])
             self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
+            status, headers, body = server.handle_api_path(
+                "/api/evaluation/status?scheme=方案A&filename=supply_shortage_results.xlsx&light=1"
+            )
+            failed_task = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(failed_task["status"], "失败")
+            self.assertEqual(failed_task["task_status"], "计算失败")
+            self.assertIn("第1小时", failed_task["logs"][-1]["message"])
+
+            status, data = queue_result("supply_shortage_results.xlsx")
+            self.assertEqual(status, 200)
+            self.assertEqual(data["task"]["status"], "排队中")
+            self.assertTrue(server.TASK_SCHEDULER.is_queued("evaluation", "方案A", "supply_shortage_results.xlsx"))
+            scheduled_tasks = server.build_task_list()
+            self.assertEqual(status, 200)
+            supply_task = next(
+                item
+                for item in scheduled_tasks
+                if item["task_type_key"] == "evaluation" and item["result"] == "supply_shortage_results.xlsx"
+            )
+            self.assertEqual(supply_task["status"], "计算失败")
+            self.assertFalse(supply_task["queued"])
+            self.assertIn("第1小时", supply_task["latest_log"])
 
             write_result(
                 "battery_no_pcs_results.xlsx",
@@ -1564,6 +1709,7 @@ class PowerPlanServerTest(unittest.TestCase):
                     runtime.apply("stop", scheme=runtime.scheme, filename=runtime.result_filename)
             server.PLANNING_STORE = original_store
             server.EVALUATION_RUNTIME = original_runtime
+            server.TASK_SCHEDULER = original_scheduler
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_evaluation_status_is_scoped_by_result_file(self):
@@ -2644,6 +2790,45 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(len(payload["curve_groups"]["monthly"]["series"]["负荷总电量"][0]["points"]), 2)
             self.assertEqual(payload["annual_table"][0]["指标"], "年总成本")
             self.assertEqual(payload["annual_table"][0]["方案A / case"], 123.4)
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_comparison_data_api_accepts_up_to_eight_items(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_comparison_limit"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            planning_sheet = workbook.active
+            planning_sheet.title = "规划结果"
+            planning_sheet.append(["设备类型", "设计台数", "单台容量"])
+            planning_sheet.append(["柴发", 2, 100])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            green_sheet.append(["柴油消耗", 12.5, "吨"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            safety_sheet.append(["最大未供负荷", 0, "kW"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["年总成本", 123.4, "万元"])
+            workbook.save(result_path)
+            workbook.close()
+
+            items = [{"scheme": "方案A", "filename": "case_results.xlsx"} for _ in range(9)]
+            status, headers, body = server.handle_api_path(
+                "/api/comparison/data?mode=summary&items=" + quote(json.dumps(items, ensure_ascii=False))
+            )
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertEqual(len(payload["items"]), 8)
+            self.assertEqual(payload["items"][-1]["id"], "item-8")
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -3870,6 +4055,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("renderSafetyResult(data.results?.safety_table || [], data.results?.curves?.safety_daily || [], { allowEmpty: allowEmptyResult })", script)
         scheme_handler = script.split("bindSchemeListItem(item, () => {", 1)[1].split("});", 1)[0]
         self.assertIn("clearOptimizationDisplayForSchemeSwitch(state.currentScheme)", scheme_handler)
+        self.assertIn("rememberOptimizationScheme()", scheme_handler)
+        self.assertIn("OPTIMIZATION_SCHEME_STORAGE_KEY", script)
+        self.assertIn("powerPlanLastOptimizationScheme", script)
+        self.assertIn("readStoredText(OPTIMIZATION_SCHEME_STORAGE_KEY)", script)
         clear_scheme_script = script.split("function clearOptimizationDisplayForSchemeSwitch", 1)[1].split("function renderOptimizationSwitchingState", 1)[0]
         for snippet in (
             "window.clearInterval(state.pollTimer)",
@@ -4042,6 +4231,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("设计台数", script)
         self.assertIn("prompt(", script)
         self.assertIn("复制失败", script)
+        self.assertIn("const message = messages[action]", script)
+        self.assertIn("alert(message)", script)
+        self.assertIn("EVALUATION_SELECTION_STORAGE_KEY", script)
+        self.assertIn("powerPlanLastEvaluationSelection", script)
+        self.assertIn("storedEvaluationSelection()", script)
+        self.assertIn("rememberEvaluationSelection()", script)
         self.assertIn("selectedResultIsDefault", script)
         self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
         self.assertIn("saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
@@ -4056,7 +4251,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("flex: 0 1 220px", optimization_current_scheme_css)
         self.assertIn("text-align: left", optimization_current_scheme_css)
         self.assertNotIn("margin-left: auto", optimization_current_scheme_css)
-        self.assertIn("grid-template-columns: minmax(260px, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr)", css)
         self.assertIn("grid-template-rows: minmax(150px, 30vh) minmax(260px, 1fr)", css)
         self.assertIn(".evaluation-result-rail {\n  grid-column: 1;\n  grid-row: 2;", css)
         self.assertIn(".evaluation-workspace > .scheme-rail {\n  grid-column: 1;\n  grid-row: 1;", css)
@@ -4111,11 +4306,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/evaluation/results", script)
         self.assertIn("/api/comparison/data", script)
         self.assertIn("mode=summary", script)
-        self.assertIn("MAX_TABS = 4", script)
+        self.assertIn("MAX_TABS = 8", script)
         self.assertIn("addComparisonTab", script)
         self.assertIn("renderAddComparisonTab", script)
         self.assertIn(".join(\"\") + renderAddComparisonTab()", script)
         self.assertIn('closest("#addComparisonTab")', script)
+        self.assertIn("leftTabForNewComparison", script)
+        self.assertIn('scheme: leftTabForNewComparison()?.scheme || state.schemes[0]?.name || ""', script)
+        self.assertIn("COMPARISON_TABS_STORAGE_KEY", script)
+        self.assertIn("powerPlanLastComparisonTabs", script)
+        self.assertIn("restoreComparisonTabs()", script)
+        self.assertIn("rememberComparisonTabs()", script)
         self.assertIn("draggable=\"true\"", script)
         self.assertIn("data-close-comparison-tab", script)
         self.assertIn("bindComparisonTableCurveResizeHandle", script)
@@ -4172,13 +4373,13 @@ class PowerPlanServerTest(unittest.TestCase):
         comparison_workspace_css = css.split(".comparison-workspace {", 1)[1].split("}", 1)[0]
         self.assertIn("grid-template-rows: minmax(0, 1fr)", comparison_workspace_css)
         comparison_panel_css = css.split(".comparison-panel {", 1)[1].split("}", 1)[0]
-        self.assertIn("grid-template-rows: minmax(108px, auto) minmax(150px, var(--comparison-table-height, 30vh)) 12px minmax(260px, 1fr)", comparison_panel_css)
+        self.assertIn("grid-template-rows: minmax(108px, auto) minmax(0, var(--comparison-table-height, 30vh)) 12px minmax(0, 1fr)", comparison_panel_css)
         comparison_tab_bar_css = css.split(".comparison-tab-bar {", 1)[1].split("}", 1)[0]
         self.assertIn("min-height: 108px", comparison_tab_bar_css)
         comparison_tabs_css = css.split(".comparison-tabs {", 1)[1].split("}", 1)[0]
         self.assertIn("min-height: 88px", comparison_tabs_css)
         comparison_curve_board_css = css.split(".comparison-curve-board {", 1)[1].split("}", 1)[0]
-        self.assertIn("min-height: 260px", comparison_curve_board_css)
+        self.assertIn("min-height: 0", comparison_curve_board_css)
         self.assertIn("height: 100%", comparison_curve_board_css)
         self.assertIn("grid-template-columns: minmax(0, var(--comparison-capacity-table-width, 1fr)) 10px minmax(0, var(--comparison-energy-table-width, 1fr)) 10px minmax(0, var(--comparison-safety-table-width, 1fr))", css)
         comparison_table_css = css.split(".comparison-table table {", 1)[1].split("}", 1)[0]
@@ -4344,7 +4545,7 @@ class PowerPlanServerTest(unittest.TestCase):
         for field in ("名称", "设计台数", "指标", "数值", "单位"):
             self.assertIn(field, script)
         self.assertIn(".optimization-overview-grid", css)
-        self.assertIn("grid-template-columns: minmax(240px, var(--overview-left-column-width, 1fr)) 10px minmax(280px, var(--overview-middle-column-width, 0.95fr)) 10px minmax(240px, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--overview-left-column-width, 1fr)) 10px minmax(0, var(--overview-middle-column-width, 0.95fr)) 10px minmax(0, 1fr)", css)
         self.assertIn(".overview-column-resize-handle", css)
         self.assertIn("cursor: col-resize", css)
         self.assertIn(".overview-table-card", css)
@@ -4432,7 +4633,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".green-result-layout", css)
         green_layout_css = css.split(".green-result-layout {", 1)[1].split("}", 1)[0]
         self.assertIn("display: grid", green_layout_css)
-        self.assertIn("grid-template-columns: minmax(260px, var(--green-result-table-width, 34%)) 10px minmax(0, 1fr)", green_layout_css)
+        self.assertIn("grid-template-columns: minmax(0, var(--green-result-table-width, 34%)) 10px minmax(0, 1fr)", green_layout_css)
         self.assertIn(".result-column-resize-handle", css)
         result_column_resize_css = css.split(".result-column-resize-handle {", 1)[1].split("}", 1)[0]
         self.assertIn("cursor: col-resize", result_column_resize_css)
@@ -4521,7 +4722,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".safety-result-layout", css)
         safety_layout_css = css.split(".safety-result-layout {", 1)[1].split("}", 1)[0]
         self.assertIn("display: grid", safety_layout_css)
-        self.assertIn("grid-template-columns: minmax(260px, var(--safety-result-table-width, 34%)) 10px minmax(0, 1fr)", safety_layout_css)
+        self.assertIn("grid-template-columns: minmax(0, var(--safety-result-table-width, 34%)) 10px minmax(0, 1fr)", safety_layout_css)
         self.assertIn(".result-column-resize-handle", css)
         result_column_resize_css = css.split(".result-column-resize-handle {", 1)[1].split("}", 1)[0]
         self.assertIn("cursor: col-resize", result_column_resize_css)
@@ -4564,9 +4765,15 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("function formatMetricTime(value)", script)
             self.assertIn("element.textContent = `${formatMetricValue(item)}${unit}`", script)
             self.assertIn('["开始", "完成"].includes(item.label)', script)
+            self.assertIn('item.label === "度电成本"', script)
+            self.assertIn("formatLevelizedCostValue(item.value)", script)
             self.assertIn('text.match(/(\\d{2}:\\d{2}:\\d{2})$/)', script)
-            self.assertIn("formatDisplayValue(row[header])", script)
+            self.assertIn("formatDisplayValue(row[header], row, header)", script)
             self.assertIn("formatDisplayValue(value)", script)
+            self.assertIn('row?.["指标"] === "度电成本"', script)
+            self.assertIn("function formatLevelizedCostValue(value)", script)
+            self.assertIn("minimumSignificantDigits: 3", script)
+            self.assertIn("maximumSignificantDigits: 3", script)
             self.assertIn("minimumFractionDigits: 2", script)
             self.assertIn("maximumFractionDigits: 2", script)
             self.assertIn("return formatNumber(value);", script)
@@ -4574,10 +4781,50 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for script in (comparison_script, result_curve_script):
             self.assertIn("function formatDisplayValue(value)", script)
-            self.assertIn('formatDisplayValue(row[header] ?? "")', script)
+            self.assertIn('formatDisplayValue(row[header] ?? "", row, header)', script)
+            self.assertIn('row?.["指标"] === "度电成本"', script)
+            self.assertIn("function formatLevelizedCostValue(value)", script)
+            self.assertIn("minimumSignificantDigits: 3", script)
+            self.assertIn("maximumSignificantDigits: 3", script)
             self.assertIn("minimumFractionDigits: 2", script)
             self.assertIn("maximumFractionDigits: 2", script)
             self.assertNotIn("maximumFractionDigits: 1", script)
+
+    def test_drag_resize_controls_allow_full_panel_collapse(self):
+        planning_script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        optimize_script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
+        evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
+        comparison_script = (WEB_ROOT / "assets" / "comparison.js").read_text(encoding="utf-8")
+        planning_html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+
+        self.assertIn("const COLLAPSED_PANEL_SIZE = 0", planning_script)
+        self.assertIn("const minHeight = COLLAPSED_PANEL_SIZE", planning_script)
+        self.assertIn("Math.max(COLLAPSED_PANEL_SIZE, previousStart + delta)", planning_script)
+        self.assertIn("Math.max(COLLAPSED_PANEL_SIZE, nextStart - delta)", planning_script)
+        self.assertIn("Math.max(Number(height) || 240, COLLAPSED_PANEL_SIZE)", planning_script)
+        self.assertIn('aria-valuemin="0"', planning_html)
+
+        for script in (optimize_script, evaluation_script):
+            self.assertIn("const COLLAPSED_PANEL_SIZE = 0", script)
+            self.assertIn("return { min: COLLAPSED_PANEL_SIZE", script)
+            self.assertIn("const maxTableWidth = layout.clientWidth - gap * 2 - handleWidth", script)
+            self.assertNotIn("const minTableWidth = 260", script)
+            self.assertNotIn("const minChartWidth = 320", script)
+            self.assertNotIn("const max = grid.clientWidth - handleWidth * 2 - gap * 4 - 240 - 240", script)
+
+        self.assertIn("const MIN_COMPARISON_TABLE_FR = 0", comparison_script)
+        self.assertIn("Math.max(Number.isFinite(numericValue) ? numericValue : 1, MIN_COMPARISON_TABLE_FR)", comparison_script)
+        self.assertIn("Math.max(COLLAPSED_PANEL_SIZE, Math.min", comparison_script)
+        self.assertNotIn("const minWidth = 0.45", comparison_script)
+
+        self.assertIn("grid-template-columns: minmax(0, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-rows: minmax(108px, auto) minmax(0, var(--comparison-table-height, 30vh)) 12px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--overview-left-column-width, 1fr)) 10px minmax(0, var(--overview-middle-column-width, 0.95fr)) 10px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--green-result-table-width, 34%)) 10px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--safety-result-table-width, 34%)) 10px minmax(0, 1fr)", css)
+        comparison_curve_board_css = css.split(".comparison-curve-board {", 1)[1].split("}", 1)[0]
+        self.assertIn("min-height: 0", comparison_curve_board_css)
 
     def test_planning_scheme_rail_places_scheme_actions_around_list(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")

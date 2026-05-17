@@ -19,6 +19,57 @@ CUSTOM_SOLVER_OPTIONS = {
     "solver_log_interval",
 }
 
+TIMEOUT_TEXT_MARKERS = (
+    "time_limit",
+    "time limit",
+    "timelimit",
+    "time_limit_reached",
+    "time limit reached",
+    "timeout",
+    "timed out",
+    "time out",
+    "maximum time",
+    "max time",
+    "optimizer_max_time",
+    "最大用时",
+    "时间上限",
+    "计算超时",
+    "超时",
+)
+
+
+class CalculationTimeoutError(RuntimeError):
+    """Raised when the backend solver stops because the configured time limit is reached."""
+
+
+def is_timeout_text(text: object) -> bool:
+    """Return True when solver text indicates a time-limit stop."""
+
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return False
+    compact = normalized.replace("-", "_")
+    return any(marker in normalized or marker in compact for marker in TIMEOUT_TEXT_MARKERS)
+
+
+def is_timeout_result(result: Any) -> bool:
+    """Return True when a backend OptimizeResult-like object timed out."""
+
+    if result is None:
+        return False
+    message = getattr(result, "message", "")
+    if is_timeout_text(message):
+        return True
+    solver = str(getattr(result, "solver", "") or "").strip().lower()
+    status = getattr(result, "status", None)
+    if solver in ("gurobi", "grb", ""):
+        try:
+            if int(status) == 9:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
 
 class SolverLogStream:
     """File-like stream that forwards solver text output to the UI log sink."""

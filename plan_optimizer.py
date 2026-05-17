@@ -10,7 +10,7 @@ import numpy as np
 
 import dispatch_milp
 import estimate
-from milp_solver import solve_milp
+from milp_solver import CalculationTimeoutError, is_timeout_result, solve_milp
 
 
 LogSink = Callable[[dict[str, Any]], None]
@@ -493,8 +493,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         problem_name=model.get("problem_name", "规划求解"),
         solve_fn=solve_milp,
     )
-    if result.x is None:
-        raise ValueError(f"{model.get('problem_name', '规划求解')}失败：{result.message}")
     objective_value = float(result.fun) if result.fun is not None else 0.0
     emit(
         log,
@@ -502,11 +500,23 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         f"求解器返回：success={result.success}，目标函数值={format_log_number(objective_value)}，状态={result.message}",
         80,
     )
+    raise_if_solver_timed_out(result, model.get("problem_name", "规划求解"))
+    if result.x is None:
+        raise ValueError(f"{model.get('problem_name', '规划求解')}失败：{result.message}")
     if not result.success:
         emit(log, "warn", f"规划优化未达到最优但返回了可行解：{result.message}", 80)
     model["variables"] = builder.variables
     model["objective_value"] = objective_value
     return result.x
+
+
+def raise_if_solver_timed_out(result: Any, problem_name: str = "规划求解") -> None:
+    """Convert backend time-limit statuses into a domain-level timeout error."""
+
+    if not is_timeout_result(result):
+        return
+    message = str(getattr(result, "message", "") or "求解器达到时间上限")
+    raise CalculationTimeoutError(f"{problem_name}达到优化求解时间上限，计算超时：{message}")
 
 
 def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

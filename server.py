@@ -44,6 +44,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 import calculation_precheck
 import estimate
 import file_ops
+import milp_solver
 import plan_optimizer
 import planning_store
 
@@ -526,7 +527,11 @@ class OptimizationRuntime:
             except FileNotFoundError:
                 scheme_payload = None
             if scheme_payload:
-                calculation_precheck.validate_optimization_fast_feasibility(scheme_payload)
+                try:
+                    calculation_precheck.validate_optimization_fast_feasibility(scheme_payload)
+                except ValueError as exc:
+                    self._mark_start_failure(target_scheme, str(exc))
+                    raise
             with self._lock:
                 if self.status == "运行中":
                     if self.scheme == target_scheme:
@@ -565,12 +570,30 @@ class OptimizationRuntime:
                     raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行")
                 self._stop_requested = True
                 self._terminate_process_unlocked()
-                self.status = "已停止"
+                self.status = "计算中止"
                 self.end_time = _now_text()
                 self._append_log_unlocked("warn", "停止规划求解")
                 return self._payload_unlocked()
 
         raise ValueError(f"unknown optimization action: {action}")
+
+    def _mark_start_failure(self, scheme: str, message: str) -> None:
+        with self._lock:
+            if self.status == "运行中":
+                return
+            self.scheme = scheme
+            now = _now_text()
+            self.start_time = now
+            self.end_time = now
+            self.progress = 0
+            self.result_file = ""
+            self._metrics = []
+            self._results = {}
+            self._results_exported = False
+            self._stop_requested = False
+            self._terminate_process_unlocked()
+            self.status = "失败"
+            self._append_log_unlocked("error", message)
 
     def _drain_events_unlocked(self) -> None:
         if not self._event_queue:
@@ -611,6 +634,15 @@ class OptimizationRuntime:
             self.result_file = str(result_path)
             self._results_exported = True
             self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+            return
+        if event_type == "timeout" or (event_type == "error" and calculation_timeout_message(event.get("message"))):
+            if self.status != "运行中":
+                return
+            self.status = "超时"
+            self.end_time = _now_text()
+            self._append_log_unlocked("error", str(event.get("message") or "规划求解达到最大用时，计算超时"))
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
             return
@@ -1076,6 +1108,12 @@ class OptimizationStateError(RuntimeError):
         self.code = code
 
 
+def calculation_timeout_message(message: object) -> bool:
+    """Return True when a worker error message represents a solver time-limit stop."""
+
+    return milp_solver.is_timeout_text(message)
+
+
 def optimization_process_worker(event_queue, scheme: str, planning_root: str = "") -> None:
     """Run planning optimization in a child process and report serializable events."""
     try:
@@ -1093,6 +1131,8 @@ def optimization_process_worker(event_queue, scheme: str, planning_root: str = "
                 "results": result.get("results") if isinstance(result.get("results"), dict) else {},
             }
         )
+    except milp_solver.CalculationTimeoutError as exc:
+        event_queue.put({"type": "timeout", "message": f"规划求解超时：{exc}", "traceback": traceback.format_exc()})
     except Exception as exc:
         event_queue.put({"type": "error", "message": f"规划求解失败：{exc}", "traceback": traceback.format_exc()})
 
@@ -1119,6 +1159,8 @@ def evaluation_process_worker(event_queue, scheme: str, filename: str, planning_
                 "dispatch_rows": result.get("dispatch_rows") if isinstance(result.get("dispatch_rows"), list) else [],
             }
         )
+    except milp_solver.CalculationTimeoutError as exc:
+        event_queue.put({"type": "timeout", "message": f"方案评估超时：{exc}", "traceback": traceback.format_exc()})
     except Exception as exc:
         event_queue.put({"type": "error", "message": f"方案评估失败：{exc}", "traceback": traceback.format_exc()})
 
@@ -1444,7 +1486,7 @@ def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, di
         items = json.loads(items_text or "[]")
         if not isinstance(items, list):
             raise ValueError("对比项必须为列表")
-        return _json_response(build_comparison_payload(items[:4], include_hourly_curves=include_hourly_curves))
+        return _json_response(build_comparison_payload(items[:8], include_hourly_curves=include_hourly_curves))
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
     except (ValueError, json.JSONDecodeError) as exc:
@@ -2109,7 +2151,11 @@ class EvaluationRuntime:
             planning_rows = read_evaluation_planning_result_rows(target_scheme, target_filename)
             if not planning_rows:
                 raise ValueError("当前结果文件缺少规划结果")
-            calculation_precheck.validate_evaluation_fast_feasibility(scheme_payload, planning_rows)
+            try:
+                calculation_precheck.validate_evaluation_fast_feasibility(scheme_payload, planning_rows)
+            except ValueError as exc:
+                self._mark_start_failure(target_scheme, target_filename, str(exc), str(target_path))
+                raise
 
             with self._lock:
                 if self.status == "运行中":
@@ -2147,12 +2193,30 @@ class EvaluationRuntime:
                     raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行")
                 self._stop_requested = True
                 self._terminate_process_unlocked()
-                self.status = "已停止"
+                self.status = "计算中止"
                 self.end_time = _now_text()
                 self._append_log_unlocked("warn", "停止方案评估")
                 return self._payload_unlocked()
 
         raise ValueError(f"unknown evaluation action: {action}")
+
+    def _mark_start_failure(self, scheme: str, filename: str, message: str, result_file: str = "") -> None:
+        with self._lock:
+            if self.status == "运行中":
+                return
+            self.scheme = scheme
+            self.result_filename = filename
+            self.result_file = result_file
+            now = _now_text()
+            self.start_time = now
+            self.end_time = now
+            self.progress = 0
+            self._metrics = []
+            self._results = {}
+            self._stop_requested = False
+            self._terminate_process_unlocked()
+            self.status = "失败"
+            self._append_log_unlocked("error", message)
 
     def _drain_events_unlocked(self) -> None:
         if not self._event_queue:
@@ -2193,6 +2257,15 @@ class EvaluationRuntime:
             self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
             self.status = "已完成"
             self.end_time = _now_text()
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+            return
+        if event_type == "timeout" or (event_type == "error" and calculation_timeout_message(event.get("message"))):
+            if self.status != "运行中":
+                return
+            self.status = "超时"
+            self.end_time = _now_text()
+            self._append_log_unlocked("error", str(event.get("message") or "方案评估达到最大用时，计算超时"))
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
             return
@@ -2490,9 +2563,10 @@ def start_task_item_unlocked(item: dict) -> dict:
     raise ValueError("任务类型必须为规划计算或方案评估")
 
 
-def build_task_list() -> list[dict]:
+def build_task_list(schedule: bool = True) -> list[dict]:
     TASK_SCHEDULER.remove_running_or_finished()
-    TASK_SCHEDULER.schedule_next_if_idle()
+    if schedule:
+        TASK_SCHEDULER.schedule_next_if_idle()
     tasks: dict[str, dict] = {}
     for scheme_item in safe_list_schemes_for_tasks():
         scheme = str(scheme_item.get("name") or "").strip()
@@ -2658,6 +2732,12 @@ def task_display_status(runtime_status: str, queued: bool = False) -> str:
         return "排队中"
     if runtime_status == "已完成":
         return "完成计算"
+    if runtime_status == "计算中止":
+        return "计算中止"
+    if runtime_status == "超时":
+        return "计算超时"
+    if runtime_status == "失败":
+        return "计算失败"
     return "未计算"
 
 
@@ -2680,8 +2760,9 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
         task = find_task_in_list(tasks, item, queued=False)
         return {"ok": True, "task": task, "tasks": tasks}
     if normalized_action == "queue":
-        item = TASK_SCHEDULER.enqueue(task_type_key, scheme, result)
-        tasks = build_task_list()
+        item = normalized_task_item(task_type_key, scheme, result)
+        item = TASK_SCHEDULER.enqueue(item["task_type_key"], item["scheme"], item["result"])
+        tasks = build_task_list(schedule=False)
         task = find_task_in_list(tasks, item)
         return {"ok": True, "task": task, "tasks": tasks}
     if task_type_key == "optimization":

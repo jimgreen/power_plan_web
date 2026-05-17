@@ -1,3 +1,6 @@
+const EVALUATION_SELECTION_STORAGE_KEY = "powerPlanLastEvaluationSelection";
+const COLLAPSED_PANEL_SIZE = 0;
+
 const state = {
   schemes: [],
   currentScheme: "",
@@ -169,8 +172,45 @@ async function api(path, options = {}) {
   return data;
 }
 
+function readStoredJson(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    // 选择记忆只是体验增强，存储不可用时不影响主流程。
+  }
+}
+
+function storedEvaluationSelection() {
+  const stored = readStoredJson(EVALUATION_SELECTION_STORAGE_KEY, {});
+  if (!stored || typeof stored !== "object") return { scheme: "", result: "" };
+  return {
+    scheme: String(stored.scheme || ""),
+    result: String(stored.result || ""),
+  };
+}
+
+function rememberEvaluationSelection() {
+  writeStoredJson(EVALUATION_SELECTION_STORAGE_KEY, {
+    scheme: state.currentScheme || "",
+    result: state.selectedResultFile || "",
+  });
+}
+
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes || [];
+  const remembered = storedEvaluationSelection();
+  if (!state.currentScheme && state.schemes.some((scheme) => scheme.name === remembered.scheme)) {
+    state.currentScheme = remembered.scheme;
+  }
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
   renderSchemes();
   renderCurrentScheme();
@@ -352,11 +392,14 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
     state.evaluationCurveViewer?.clear("请先选择方案");
     return;
   }
-  const selectedParam = selected ? `&filename=${encodeURIComponent(selected)}` : "";
+  const remembered = storedEvaluationSelection();
+  const requestedSelected = selected || (remembered.scheme === state.currentScheme ? remembered.result : "");
+  const selectedParam = requestedSelected ? `&filename=${encodeURIComponent(requestedSelected)}` : "";
   const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(state.currentScheme)}${selectedParam}`);
   state.resultFiles = data.results || [];
   const readableNames = state.resultFiles.filter((item) => item.readable !== false).map((item) => item.name);
-  state.selectedResultFile = data.selected || (readableNames.includes(selected) ? selected : readableNames[0] || "");
+  state.selectedResultFile = data.selected || (readableNames.includes(requestedSelected) ? requestedSelected : readableNames[0] || "");
+  rememberEvaluationSelection();
   renderCurrentScheme();
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
@@ -521,6 +564,7 @@ async function manageEvaluationResult(action, extra = {}) {
     });
     state.resultFiles = data.results || [];
     state.selectedResultFile = data.selected || state.selectedResultFile;
+    rememberEvaluationSelection();
     renderCurrentScheme();
     state.planningResultRows = data.planning_result_rows || state.planningResultRows || [];
     state.curveDataKey = "";
@@ -543,13 +587,17 @@ function renderEvaluationMessage(action, filename) {
     copy: `结果文件已复制：${filename || ""}`,
     save: `结果文件已保存：${filename || state.selectedResultFile}`,
   };
+  const message = messages[action];
+  if (!message) return;
   const box = document.getElementById("evaluationLogs");
-  if (!box || !messages[action]) return;
-  box.insertAdjacentHTML(
-    "beforeend",
-    `<div class="log-line ok"><span>${escapeHtml(new Date().toLocaleString("zh-CN"))}</span><strong>${escapeHtml(messages[action])}</strong></div>`,
-  );
-  box.scrollTop = box.scrollHeight;
+  if (box) {
+    box.insertAdjacentHTML(
+      "beforeend",
+      `<div class="log-line ok"><span>${escapeHtml(new Date().toLocaleString("zh-CN"))}</span><strong>${escapeHtml(message)}</strong></div>`,
+    );
+    box.scrollTop = box.scrollHeight;
+  }
+  alert(message);
 }
 
 async function controlOptimization(action) {
@@ -882,7 +930,7 @@ function renderGreenResult(rows, dailyPoints, options = {}) {
   const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultGreenTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
-    "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],
+    "数值": formatDisplayValue(row["数值"], row, "数值"),
     "单位": row["单位"] || "",
   }));
   panel.innerHTML = `
@@ -950,7 +998,7 @@ function renderSafetyResult(rows, dailyPoints, options = {}) {
   const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultSafetyTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
-    "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],
+    "数值": formatDisplayValue(row["数值"], row, "数值"),
     "单位": row["单位"] || "",
   }));
   panel.innerHTML = `
@@ -1077,7 +1125,7 @@ function renderResultTable(rows) {
   if (!rows.length) return '<div class="empty-summary">暂无结果</div>';
   const headers = Object.keys(rows[0]);
   return `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header]))}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header], row, header))}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
 
@@ -1106,6 +1154,7 @@ function renderMiniBars(points) {
 function formatMetricValue(item) {
   if (!item) return "-";
   if (["开始", "完成"].includes(item.label)) return formatMetricTime(item.value);
+  if (item.label === "度电成本") return formatLevelizedCostValue(item.value);
   return formatDisplayValue(item.value);
 }
 
@@ -1117,6 +1166,9 @@ function formatMetricTime(value) {
 }
 
 function formatDisplayValue(value) {
+  const row = arguments[1] || null;
+  const header = arguments[2] || "";
+  if (row?.["指标"] === "度电成本" && header !== "指标") return formatLevelizedCostValue(value);
   if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
   if (Number.isInteger(value)) return value.toLocaleString("zh-CN");
   return formatNumber(value);
@@ -1126,6 +1178,12 @@ function formatNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
   return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatLevelizedCostValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value ?? "";
+  return number.toLocaleString("zh-CN", { minimumSignificantDigits: 3, maximumSignificantDigits: 3 });
 }
 
 function formatAxisNumber(value) {
@@ -1556,16 +1614,15 @@ function clampEvaluationMainWidth() {
 
 function evaluationMainWidthBounds() {
   const workspace = document.querySelector(".evaluation-workspace");
-  if (!workspace) return { min: 280, max: 620 };
+  if (!workspace) return { min: COLLAPSED_PANEL_SIZE, max: 620 };
   const handle = document.getElementById("evaluationMainResizeHandle");
   const style = window.getComputedStyle(workspace);
   const gap = cssNumber(style.columnGap || style.gap);
   const handleWidth = handle?.getBoundingClientRect().width || 10;
-  const minRightWidth = 420;
-  const max = workspace.clientWidth - handleWidth - minRightWidth - gap * 2;
+  const max = workspace.clientWidth - handleWidth - gap * 2;
   return {
-    min: 280,
-    max: Math.max(280, Math.min(680, max)),
+    min: COLLAPSED_PANEL_SIZE,
+    max: Math.max(COLLAPSED_PANEL_SIZE, Math.min(1200, max)),
   };
 }
 
@@ -1593,16 +1650,14 @@ function currentResultColumnTableWidth(kind, handle) {
 
 function resultColumnWidthBounds(kind, handle) {
   const layout = resultColumnLayout(kind, handle);
-  if (!layout) return { min: 260, max: 620 };
+  if (!layout) return { min: COLLAPSED_PANEL_SIZE, max: 620 };
   const style = window.getComputedStyle(layout);
   const gap = cssNumber(style.columnGap || style.gap);
   const handleWidth = handle?.getBoundingClientRect().width || 10;
-  const minTableWidth = 260;
-  const minChartWidth = 320;
-  const maxTableWidth = layout.clientWidth - gap * 2 - handleWidth - minChartWidth;
+  const maxTableWidth = layout.clientWidth - gap * 2 - handleWidth;
   return {
-    min: minTableWidth,
-    max: Math.max(minTableWidth, maxTableWidth),
+    min: COLLAPSED_PANEL_SIZE,
+    max: Math.max(COLLAPSED_PANEL_SIZE, maxTableWidth),
   };
 }
 
@@ -1662,11 +1717,11 @@ function currentOverviewColumnWidth(mode, handle) {
 
 function overviewColumnWidthBounds(handle) {
   const grid = handle?.closest(".optimization-overview-grid");
-  if (!grid) return { min: 240, max: 720 };
+  if (!grid) return { min: COLLAPSED_PANEL_SIZE, max: 720 };
   const handleWidth = handle?.getBoundingClientRect().width || 10;
   const gap = cssNumber(window.getComputedStyle(grid).columnGap || window.getComputedStyle(grid).gap);
-  const max = grid.clientWidth - handleWidth * 2 - gap * 4 - 240 - 240;
-  return { min: 240, max: Math.max(260, max) };
+  const max = grid.clientWidth - handleWidth * 2 - gap * 4;
+  return { min: COLLAPSED_PANEL_SIZE, max: Math.max(COLLAPSED_PANEL_SIZE, max) };
 }
 
 function bindHorizontalResizeHandleKeys(handle, currentWidth, applyWidth, boundsFactory) {

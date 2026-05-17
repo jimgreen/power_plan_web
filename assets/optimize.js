@@ -1,3 +1,6 @@
+const OPTIMIZATION_SCHEME_STORAGE_KEY = "powerPlanLastOptimizationScheme";
+const COLLAPSED_PANEL_SIZE = 0;
+
 const state = {
   schemes: [],
   currentScheme: "",
@@ -152,9 +155,35 @@ async function api(path, options = {}) {
   return data;
 }
 
+function readStoredText(key) {
+  try {
+    return localStorage.getItem(key) || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function writeStoredText(key, value) {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch (error) {
+    // 浏览器隐私模式或禁用存储时，选择记忆失败不应阻塞页面初始化。
+  }
+}
+
+function rememberOptimizationScheme() {
+  writeStoredText(OPTIMIZATION_SCHEME_STORAGE_KEY, state.currentScheme);
+}
+
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes || [];
+  const storedScheme = readStoredText(OPTIMIZATION_SCHEME_STORAGE_KEY);
+  if (!state.currentScheme && state.schemes.some((scheme) => scheme.name === storedScheme)) {
+    state.currentScheme = storedScheme;
+  }
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
+  if (state.currentScheme) rememberOptimizationScheme();
   renderSchemes();
   renderCurrentScheme();
 }
@@ -171,6 +200,7 @@ function renderSchemes() {
   list.querySelectorAll(".scheme-item").forEach((item) => {
     bindSchemeListItem(item, () => {
       state.currentScheme = item.dataset.name || "";
+      rememberOptimizationScheme();
       renderSchemes();
       renderCurrentScheme();
       clearOptimizationDisplayForSchemeSwitch(state.currentScheme);
@@ -562,7 +592,7 @@ function renderGreenResult(rows, dailyPoints, options = {}) {
   const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultGreenTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
-    "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],
+    "数值": formatDisplayValue(row["数值"], row, "数值"),
     "单位": row["单位"] || "",
   }));
   panel.innerHTML = `
@@ -630,7 +660,7 @@ function renderSafetyResult(rows, dailyPoints, options = {}) {
   const safeRows = rows.length ? rows : options.allowEmpty ? [] : defaultSafetyTable();
   const formattedRows = safeRows.map((row) => ({
     "指标": row["指标"],
-    "数值": typeof row["数值"] === "number" ? formatNumber(row["数值"]) : row["数值"],
+    "数值": formatDisplayValue(row["数值"], row, "数值"),
     "单位": row["单位"] || "",
   }));
   panel.innerHTML = `
@@ -757,7 +787,7 @@ function renderResultTable(rows) {
   if (!rows.length) return '<div class="empty-summary">暂无结果</div>';
   const headers = Object.keys(rows[0]);
   return `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header]))}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header], row, header))}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
 
@@ -786,6 +816,7 @@ function renderMiniBars(points) {
 function formatMetricValue(item) {
   if (!item) return "-";
   if (["开始", "完成"].includes(item.label)) return formatMetricTime(item.value);
+  if (item.label === "度电成本") return formatLevelizedCostValue(item.value);
   return formatDisplayValue(item.value);
 }
 
@@ -797,6 +828,9 @@ function formatMetricTime(value) {
 }
 
 function formatDisplayValue(value) {
+  const row = arguments[1] || null;
+  const header = arguments[2] || "";
+  if (row?.["指标"] === "度电成本" && header !== "指标") return formatLevelizedCostValue(value);
   if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
   if (Number.isInteger(value)) return value.toLocaleString("zh-CN");
   return formatNumber(value);
@@ -806,6 +840,12 @@ function formatNumber(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
   return number.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatLevelizedCostValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value ?? "";
+  return number.toLocaleString("zh-CN", { minimumSignificantDigits: 3, maximumSignificantDigits: 3 });
 }
 
 function formatAxisNumber(value) {
@@ -1185,16 +1225,14 @@ function currentResultColumnTableWidth(kind, handle) {
 
 function resultColumnWidthBounds(kind, handle) {
   const layout = resultColumnLayout(kind, handle);
-  if (!layout) return { min: 260, max: 620 };
+  if (!layout) return { min: COLLAPSED_PANEL_SIZE, max: 620 };
   const style = window.getComputedStyle(layout);
   const gap = cssNumber(style.columnGap || style.gap);
   const handleWidth = handle?.getBoundingClientRect().width || 10;
-  const minTableWidth = 260;
-  const minChartWidth = 320;
-  const maxTableWidth = layout.clientWidth - gap * 2 - handleWidth - minChartWidth;
+  const maxTableWidth = layout.clientWidth - gap * 2 - handleWidth;
   return {
-    min: minTableWidth,
-    max: Math.max(minTableWidth, maxTableWidth),
+    min: COLLAPSED_PANEL_SIZE,
+    max: Math.max(COLLAPSED_PANEL_SIZE, maxTableWidth),
   };
 }
 
@@ -1256,11 +1294,11 @@ function currentOverviewColumnWidth(mode, handle) {
 
 function overviewColumnWidthBounds(handle) {
   const grid = handle?.closest(".optimization-overview-grid");
-  if (!grid) return { min: 240, max: 720 };
+  if (!grid) return { min: COLLAPSED_PANEL_SIZE, max: 720 };
   const handleWidth = handle?.getBoundingClientRect().width || 10;
   const gap = cssNumber(window.getComputedStyle(grid).columnGap || window.getComputedStyle(grid).gap);
-  const max = grid.clientWidth - handleWidth * 2 - gap * 4 - 240 - 240;
-  return { min: 240, max: Math.max(260, max) };
+  const max = grid.clientWidth - handleWidth * 2 - gap * 4;
+  return { min: COLLAPSED_PANEL_SIZE, max: Math.max(COLLAPSED_PANEL_SIZE, max) };
 }
 
 function bindResizeHandleKeys(handle, currentHeight, applyHeight, boundsFactory) {

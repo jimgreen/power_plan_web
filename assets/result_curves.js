@@ -262,7 +262,7 @@
           <table>
             <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
             <tbody>${state.annualTable
-              .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? ""))}</td>`).join("")}</tr>`)
+              .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? "", row, header))}</td>`).join("")}</tr>`)
               .join("")}</tbody>
           </table>
         </div>`;
@@ -491,8 +491,17 @@
   }
 
   function formatDisplayValue(value) {
+    const row = arguments[1] || null;
+    const header = arguments[2] || "";
+    if (row?.["指标"] === "度电成本" && header !== "指标") return formatLevelizedCostValue(value);
     if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
     return Number.isInteger(value) ? value.toLocaleString("zh-CN") : formatAxis(value);
+  }
+
+  function formatLevelizedCostValue(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return value ?? "";
+    return number.toLocaleString("zh-CN", { minimumSignificantDigits: 3, maximumSignificantDigits: 3 });
   }
 
   function escapeHtml(value) {

@@ -1,4 +1,7 @@
-const MAX_TABS = 4;
+const MAX_TABS = 8;
+const COMPARISON_TABS_STORAGE_KEY = "powerPlanLastComparisonTabs";
+const COLLAPSED_PANEL_SIZE = 0;
+const MIN_COMPARISON_TABLE_FR = 0;
 
 const state = {
   schemes: [],
@@ -26,6 +29,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindAddTab();
   bindComparisonTableColumnResizeHandles();
   bindComparisonTableCurveResizeHandle();
+  restoreComparisonTabs();
   loadSchemes().catch(showError);
 });
 
@@ -49,12 +53,59 @@ async function api(path, options = {}) {
   return data;
 }
 
+function readStoredJson(key, fallback = null) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    // 本地存储不可用时，只跳过对比项记忆，不影响对比页面使用。
+  }
+}
+
+function restoreComparisonTabs() {
+  const stored = readStoredJson(COMPARISON_TABS_STORAGE_KEY, []);
+  if (!Array.isArray(stored) || !stored.length) return;
+  const tabs = stored
+    .slice(0, MAX_TABS)
+    .map((item, index) => ({
+      id: `tab-${index + 1}`,
+      scheme: String(item?.scheme || ""),
+      result: String(item?.result || ""),
+      results: [],
+    }))
+    .filter((tab) => tab.scheme || tab.result);
+  if (!tabs.length) return;
+  state.tabs = tabs;
+  state.activeTabId = state.tabs[0].id;
+}
+
+function rememberComparisonTabs() {
+  writeStoredJson(
+    COMPARISON_TABS_STORAGE_KEY,
+    state.tabs.slice(0, MAX_TABS).map((tab) => ({ scheme: tab.scheme || "", result: tab.result || "" })),
+  );
+}
+
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes || [];
+  const schemeNames = new Set(state.schemes.map((scheme) => scheme.name));
   state.tabs.forEach((tab) => {
+    if (tab.scheme && !schemeNames.has(tab.scheme)) {
+      tab.scheme = "";
+      tab.result = "";
+    }
     if (!tab.scheme && state.schemes.length) tab.scheme = state.schemes[0].name;
   });
   await Promise.all(state.tabs.map(loadResultFilesForTab));
+  rememberComparisonTabs();
   renderComparisonTabs();
   await refreshComparisonData();
 }
@@ -77,16 +128,21 @@ function bindAddTab() {
     if (state.tabs.length >= MAX_TABS) return;
     const tab = {
       id: `tab-${Date.now()}`,
-      scheme: state.schemes[0]?.name || "",
+      scheme: leftTabForNewComparison()?.scheme || state.schemes[0]?.name || "",
       result: "",
       results: [],
     };
     state.tabs.push(tab);
     state.activeTabId = tab.id;
     await loadResultFilesForTab(tab);
+    rememberComparisonTabs();
     renderComparisonTabs();
     refreshComparisonData().catch(showError);
   });
+}
+
+function leftTabForNewComparison() {
+  return state.tabs[state.tabs.length - 1] || null;
 }
 
 function renderComparisonTabs() {
@@ -126,6 +182,7 @@ function renderComparisonTabs() {
       const tabId = button.dataset.closeComparisonTab || "";
       state.tabs = state.tabs.filter((tab, index) => index === 0 || tab.id !== tabId);
       if (!state.tabs.some((tab) => tab.id === state.activeTabId)) state.activeTabId = state.tabs[0]?.id || "";
+      rememberComparisonTabs();
       renderComparisonTabs();
       clearComparisonDisplayForSwitch();
       refreshComparisonData().catch(showError);
@@ -140,6 +197,7 @@ function renderComparisonTabs() {
       tab.result = "";
       clearComparisonDisplayForSwitch();
       await loadResultFilesForTab(tab);
+      rememberComparisonTabs();
       renderComparisonTabs();
       refreshComparisonData().catch(showError);
     });
@@ -150,6 +208,7 @@ function renderComparisonTabs() {
       const tab = tabById(resultSelect.dataset.resultSelect);
       if (!tab) return;
       tab.result = resultSelect.value;
+      rememberComparisonTabs();
       clearComparisonDisplayForSwitch();
       refreshComparisonData().catch(showError);
     });
@@ -216,6 +275,7 @@ function moveComparisonTab(sourceId, targetId) {
   if (sourceIndex < 0 || targetIndex < 0) return;
   const [tab] = state.tabs.splice(sourceIndex, 1);
   state.tabs.splice(targetIndex, 0, tab);
+  rememberComparisonTabs();
   renderComparisonTabs();
   clearComparisonDisplayForSwitch();
   refreshComparisonData().catch(showError);
@@ -300,7 +360,7 @@ function renderTable(id, rows, emptyText) {
   }
   const headers = Object.keys(rows[0]);
   target.innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? ""))}</td>`).join("")}</tr>`)
+    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? "", row, header))}</td>`).join("")}</tr>`)
     .join("")}</tbody></table>`;
 }
 
@@ -531,7 +591,7 @@ function bindComparisonTableColumnResizeHandles() {
       const startX = event.clientX;
       const startWidths = [...state.tableColumnWidths];
       const totalPixelWidth = grid.getBoundingClientRect().width - 20;
-      const totalFr = startWidths.reduce((sum, value) => sum + value, 0);
+      const totalFr = startWidths.reduce((sum, value) => sum + value, 0) || 1;
       const pixelsPerFr = Math.max(totalPixelWidth / totalFr, 1);
       handle.classList.add("dragging");
       handle.setPointerCapture?.(event.pointerId);
@@ -566,8 +626,10 @@ function bindComparisonTableColumnResizeHandles() {
 }
 
 function normalizeTableColumnWidths(widths) {
-  const minWidth = 0.45;
-  return widths.map((value) => Math.max(Number(value) || 1, minWidth));
+  return widths.map((value) => {
+    const numericValue = Number(value);
+    return Math.max(Number.isFinite(numericValue) ? numericValue : 1, MIN_COMPARISON_TABLE_FR);
+  });
 }
 
 function bindComparisonTableCurveResizeHandle() {
@@ -575,7 +637,7 @@ function bindComparisonTableCurveResizeHandle() {
   const panel = document.querySelector(".comparison-panel");
   if (!handle || !panel) return;
   const applyHeight = (height) => {
-    const safeHeight = Math.min(Math.max(Number(height) || 320, 220), Math.max(220, panel.clientHeight - 260));
+    const safeHeight = Math.max(COLLAPSED_PANEL_SIZE, Math.min(Number(height) || 320, Math.max(COLLAPSED_PANEL_SIZE, panel.clientHeight)));
     state.tableHeight = safeHeight;
     document.documentElement.style.setProperty("--comparison-table-height", `${Math.round(safeHeight)}px`);
     handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
@@ -621,8 +683,17 @@ function formatAxis(value) {
 }
 
 function formatDisplayValue(value) {
+  const row = arguments[1] || null;
+  const header = arguments[2] || "";
+  if (row?.["指标"] === "度电成本" && header !== "指标") return formatLevelizedCostValue(value);
   if (typeof value !== "number" || !Number.isFinite(value)) return value ?? "";
   return Number.isInteger(value) ? value.toLocaleString("zh-CN") : formatAxis(value);
+}
+
+function formatLevelizedCostValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return value ?? "";
+  return number.toLocaleString("zh-CN", { minimumSignificantDigits: 3, maximumSignificantDigits: 3 });
 }
 
 function escapeHtml(value) {
