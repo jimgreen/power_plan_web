@@ -272,6 +272,8 @@ class PlanningStoreTest(unittest.TestCase):
         pcs_headers = planning_store.SHEET_SPECS["storage_pcs"][1]
         battery_headers = planning_store.SHEET_SPECS["storage_battery_packs"][1]
 
+        self.assertNotIn("charge_power_upper", pcs_headers)
+        self.assertNotIn("discharge_power_upper", pcs_headers)
         self.assertIn("is_grid_forming", pcs_headers)
         self.assertEqual(pcs_headers.index("is_grid_forming"), 5)
         self.assertLess(pcs_headers.index("storage_discharge_efficiency"), pcs_headers.index("is_grid_forming"))

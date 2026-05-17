@@ -214,7 +214,6 @@ async function loadSchemes() {
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
   renderSchemes();
   renderCurrentScheme();
-  renderEvaluationCurrentScheme();
 }
 
 function renderSchemes() {
@@ -230,7 +229,6 @@ function renderSchemes() {
     bindSchemeListItem(item, () => {
       state.currentScheme = item.dataset.name || "";
       renderSchemes();
-      renderEvaluationCurrentScheme();
       clearEvaluationDisplayForSchemeSwitch(state.currentScheme);
       loadEvaluationResults()
         .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
@@ -256,12 +254,6 @@ function renderCurrentScheme() {
   const current = document.getElementById("optimizationCurrentScheme");
   if (!current) return;
   current.textContent = currentEvaluationResultLabel();
-}
-
-function renderEvaluationCurrentScheme() {
-  const current = document.getElementById("evaluationCurrentScheme");
-  if (!current) return;
-  current.textContent = `当前: ${state.currentScheme || "未选择方案"}`;
 }
 
 function bindOptimizationActions() {

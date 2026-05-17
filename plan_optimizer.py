@@ -188,6 +188,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     renewable_devices = [*wind_devices, *pv_devices]
     storage_pcs_devices = model["device_rows"]["storage_pcs"]
     grid_storage_pcs_devices = [device for device in storage_pcs_devices if device.get("is_grid_forming")]
+    following_storage_pcs_devices = [device for device in storage_pcs_devices if not device.get("is_grid_forming")]
     storage_battery_devices = model["device_rows"]["storage_battery_packs"]
     electrolyzer_devices = active_devices(model, "hydrogen_electrolyzers")
     hydrogen_tank_devices = model["device_rows"]["hydrogen_tanks"]
@@ -197,6 +198,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         wind_upper = sum(model["wind_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in wind_devices)
         pv_upper = sum(model["pv_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in pv_devices)
         storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_pcs_devices)
+        grid_storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in grid_storage_pcs_devices)
         storage_energy_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_battery_devices)
         hydrogen_tank_upper = sum(device["capacity"] * device["quantity_upper"] for device in hydrogen_tank_devices)
 
@@ -207,6 +209,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         add_renewable_hour_variables(builder, hour, renewable_devices)
         builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper))
         builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper))
+        builder.add_var(("grid_storage_charge", hour), 0.0, max(0.0, grid_storage_power_upper))
+        builder.add_var(("grid_storage_discharge", hour), 0.0, max(0.0, grid_storage_power_upper))
         builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_discharge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_soc", hour), 0.0, max(0.0, storage_energy_upper))
@@ -353,6 +357,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             )
 
         storage_power_terms = qty_terms(storage_pcs_devices)
+        grid_storage_power_terms = qty_terms(grid_storage_pcs_devices)
+        following_storage_power_terms = qty_terms(following_storage_pcs_devices)
         storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_pcs_devices)
         storage_energy_terms = qty_terms(storage_battery_devices)
         storage_flags = dispatch_milp.add_storage_constraints(
@@ -372,6 +378,36 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             soc_lower_ratio=model["storage_soc_lower_ratio"],
             soc_upper_ratio=model["storage_soc_upper_ratio"],
             self_discharge_rate_per_hour=storage_self_discharge_per_hour,
+        )
+        builder.add_constraint({var(("grid_storage_charge", hour)): 1.0, var(("storage_charge", hour)): -1.0}, -np.inf, 0.0)
+        builder.add_constraint({var(("grid_storage_discharge", hour)): 1.0, var(("storage_discharge", hour)): -1.0}, -np.inf, 0.0)
+        dispatch_milp.add_capacity_upper_constraint(
+            builder,
+            var(("grid_storage_charge", hour)),
+            capacity_terms=grid_storage_power_terms,
+        )
+        dispatch_milp.add_capacity_upper_constraint(
+            builder,
+            var(("grid_storage_discharge", hour)),
+            capacity_terms=grid_storage_power_terms,
+        )
+        builder.add_constraint(
+            {
+                var(("storage_charge", hour)): 1.0,
+                var(("grid_storage_charge", hour)): -1.0,
+                **{index: -value for index, value in following_storage_power_terms.items()},
+            },
+            -np.inf,
+            0.0,
+        )
+        builder.add_constraint(
+            {
+                var(("storage_discharge", hour)): 1.0,
+                var(("grid_storage_discharge", hour)): -1.0,
+                **{index: -value for index, value in following_storage_power_terms.items()},
+            },
+            -np.inf,
+            0.0,
         )
         for index, upper_count in grid_storage_up_soc_limits.items():
             builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -float(upper_count)}, -np.inf, 0.0)
@@ -399,8 +435,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                     var(("diesel_on_count", hour, device["index"])): device["power_upper"]
                     for device in diesel_devices
                 },
-                grid_storage_charge_index=var(("storage_charge", hour)),
-                grid_storage_discharge_index=var(("storage_discharge", hour)),
+                grid_storage_charge_index=var(("grid_storage_charge", hour)),
+                grid_storage_discharge_index=var(("grid_storage_discharge", hour)),
                 grid_storage_up_on_terms=grid_storage_up_on_terms,
                 grid_storage_down_on_terms=grid_storage_down_on_terms,
                 wind_power_indices=[var(("wind_power", hour))],
@@ -1102,6 +1138,9 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
         storage_charge = value(("storage_charge", hour))
         storage_discharge = value(("storage_discharge", hour))
         storage_power = storage_discharge - storage_charge
+        grid_storage_charge = optional_value(("grid_storage_charge", hour), 0.0)
+        grid_storage_discharge = optional_value(("grid_storage_discharge", hour), 0.0)
+        grid_storage_power = grid_storage_discharge - grid_storage_charge
         diesel_capacity = sum(
             optional_value(("diesel_on_count", hour, device["index"])) * device["power_upper"]
             for device in diesel_devices
@@ -1122,7 +1161,7 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
             renewable_single_unit_power_max=renewable_single_unit_power_max(hour),
             diesel_capacity=diesel_capacity,
             diesel_power=diesel_power,
-            grid_storage_power=storage_power,
+            grid_storage_power=grid_storage_power,
             grid_storage_up_capacity=grid_storage_up_capacity,
             grid_storage_down_capacity=grid_storage_down_capacity,
         )
