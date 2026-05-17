@@ -80,12 +80,9 @@ CHINESE_PLACE_ALIASES = {
     "台北": "taipei",
 }
 OPTIMIZATION_RESULT_WORKBOOK_NAME = "opt_results.xlsx"
-EVALUATION_RESULT_WORKBOOK_SUFFIX = "_estimate.xlsx"
-LEGACY_RESULT_WORKBOOK_SUFFIX = "_results.xlsx"
-RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_(?:results|estimate)\.xlsx$")
+RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
 PLANNING_RESULT_SHEET_NAME = "规划结果"
-PLANNING_RESULT_HEADERS = ["设备类型", "名称", "设计台数", "单台容量", "总容量", "单位"]
-PLANNING_RESULT_NUMERIC_FIELDS = {"设计台数", "单台容量", "总容量"}
+PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
 COMPARISON_CURVE_GROUPS = {
     "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
     "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
@@ -1172,7 +1169,6 @@ def export_optimization_results_workbook(payload: dict) -> Path:
     scheme = str(payload.get("scheme") or "未选择方案")
     result_path = optimization_result_workbook_path(scheme)
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    write_planning_result_csv(result_path, planning_result_rows_from_payload(payload))
     workbook = build_optimization_results_workbook(payload)
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
     try:
@@ -1194,7 +1190,6 @@ def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict])
     if result_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
         raise ValueError("默认结果文件不允许修改")
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    write_planning_result_csv(result_path, planning_result_rows_from_payload(payload))
     workbook = build_optimization_results_workbook(payload)
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
     try:
@@ -1242,8 +1237,6 @@ def build_optimization_results_workbook(payload: dict) -> Workbook:
     )
 
     for table in results.get("overview_tables", []):
-        if str(table.get("title", "")).strip() == PLANNING_RESULT_SHEET_NAME:
-            continue
         append_rows_sheet(workbook, str(table.get("title", "结果表")), table.get("rows", []))
     append_rows_sheet(workbook, "供能分析", results.get("green_table", []))
     append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
@@ -1381,7 +1374,7 @@ def list_evaluation_result_files(scheme: str) -> list[dict]:
     if not folder.exists():
         raise FileNotFoundError(f"方案不存在: {scheme}")
     files = []
-    for path in sorted(folder.glob("*.xlsx"), key=lambda item: item.name):
+    for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
         if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
             item = {"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""}
             error_message = result_workbook_error_message(path)
@@ -1418,103 +1411,12 @@ def evaluation_result_path(scheme: str, filename: str) -> Path:
 def evaluation_result_path_with_store(store: planning_store.PlanningStore, scheme: str, filename: str) -> Path:
     name = str(filename or "").strip()
     if not RESULT_WORKBOOK_RE.fullmatch(name):
-        raise ValueError("结果文件名必须符合 xxxx_estimate.xlsx")
+        raise ValueError("结果文件名必须符合 xxxx_results.xlsx")
     folder = store.scheme_dir(scheme)
     path = (folder / name).resolve()
     if folder not in path.parents or path.parent != folder:
         raise ValueError("结果文件路径越界")
     return path
-
-
-def planning_result_csv_path_for_workbook(path: Path) -> Path:
-    stem = path.stem
-    if stem.endswith("_estimate"):
-        return path.with_name(f"{stem[:-len('_estimate')]}_results.csv")
-    return path.with_suffix(".csv")
-
-
-def planning_result_rows_from_payload(payload: dict) -> list[dict]:
-    results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
-    for table in results.get("overview_tables", []) if isinstance(results.get("overview_tables"), list) else []:
-        if isinstance(table, dict) and str(table.get("title", "")).strip() == PLANNING_RESULT_SHEET_NAME:
-            rows = table.get("rows")
-            return [dict(row) for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
-    return []
-
-
-def planning_result_headers_for_rows(rows: list[dict]) -> list[str]:
-    headers = list(PLANNING_RESULT_HEADERS)
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        for key in row:
-            if key not in headers:
-                headers.append(str(key))
-    return headers
-
-
-def write_planning_result_csv(result_path: Path, rows: list[dict]) -> Path:
-    csv_path = planning_result_csv_path_for_workbook(result_path)
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    normalized_rows = [normalize_planning_result_total_capacity(dict(row)) for row in rows if isinstance(row, dict)]
-    headers = planning_result_headers_for_rows(normalized_rows)
-    tmp_path = csv_path.with_name(f".{csv_path.name}.tmp")
-
-    def write_tmp() -> None:
-        with tmp_path.open("w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.DictWriter(file, fieldnames=headers, extrasaction="ignore")
-            writer.writeheader()
-            for row in normalized_rows:
-                writer.writerow({header: row.get(header, "") for header in headers})
-
-    file_ops.retry_file_operation(
-        write_tmp,
-        f"规划结果CSV临时文件被占用，无法写入：{tmp_path.name}。请关闭正在打开的文件或预览窗口后重试。",
-    )
-    file_ops.replace_file_with_retry(tmp_path, csv_path, "规划结果CSV")
-    return csv_path
-
-
-def read_planning_result_csv(path: Path) -> list[dict]:
-    if not path.exists():
-        return []
-    try:
-        with path.open("r", encoding="utf-8-sig", newline="") as file:
-            rows = []
-            for row in csv.DictReader(file):
-                item = {
-                    str(key or "").strip(): normalize_planning_result_csv_value(str(key or "").strip(), value)
-                    for key, value in row.items()
-                    if str(key or "").strip()
-                }
-                if any(value not in (None, "") for value in item.values()):
-                    normalize_planning_result_total_capacity(item)
-                    rows.append(item)
-            return rows
-    except OSError as exc:
-        raise ValueError(f"规划结果CSV无法读取: {path.name}") from exc
-
-
-def normalize_planning_result_csv_value(header: str, value):
-    if header not in PLANNING_RESULT_NUMERIC_FIELDS:
-        return "" if value is None else value
-    number = _numeric_or_none(value)
-    if number is None:
-        return "" if value in (None, "") else value
-    if header == "设计台数" and abs(float(number) - round(float(number))) <= 1e-9:
-        return int(round(float(number)))
-    if abs(float(number) - round(float(number))) <= 1e-9:
-        return int(round(float(number)))
-    return float(number)
-
-
-def read_planning_result_sheet_rows(workbook) -> list[dict]:
-    if PLANNING_RESULT_SHEET_NAME not in workbook.sheetnames:
-        return []
-    rows = read_named_sheet_rows(workbook, PLANNING_RESULT_SHEET_NAME)
-    for row in rows:
-        normalize_planning_result_total_capacity(row)
-    return rows
 
 
 def read_evaluation_planning_result_rows(scheme: str, filename: str) -> list[dict]:
@@ -1531,15 +1433,28 @@ def read_evaluation_planning_result_rows_with_store(
     result_path = evaluation_result_path_with_store(store, scheme, filename)
     if not result_path.exists():
         return []
-    csv_rows = read_planning_result_csv(planning_result_csv_path_for_workbook(result_path))
-    if csv_rows:
-        return csv_rows
     try:
         workbook = load_workbook(result_path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
         raise ValueError(f"结果文件无法读取: {result_path.name}") from exc
     try:
-        return read_planning_result_sheet_rows(workbook)
+        if PLANNING_RESULT_SHEET_NAME not in workbook.sheetnames:
+            return []
+        sheet = workbook[PLANNING_RESULT_SHEET_NAME]
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return []
+        headers = [str(value or "").strip() for value in rows[0]]
+        result_rows = []
+        for row in rows[1:]:
+            item = {}
+            for index, header in enumerate(headers):
+                if header:
+                    item[header] = row[index] if index < len(row) else ""
+            if any(value not in (None, "") for value in item.values()):
+                normalize_planning_result_total_capacity(item)
+                result_rows.append(item)
+        return result_rows
     finally:
         workbook.close()
 
@@ -1631,7 +1546,6 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
 
 
 def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> dict:
-    capacity_rows = read_planning_result_csv(planning_result_csv_path_for_workbook(path))
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -1643,10 +1557,8 @@ def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> 
                 curve_groups[key] = {}
             else:
                 curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
-        if not capacity_rows:
-            capacity_rows = read_planning_result_sheet_rows(workbook)
         return {
-            "capacity": capacity_rows,
+            "capacity": read_named_sheet_rows(workbook, "规划结果"),
             "energy": read_named_sheet_rows(workbook, "供能分析"),
             "safety": read_named_sheet_rows(workbook, "安全评估"),
             "annual": read_annual_comparison_rows(workbook),
@@ -1672,9 +1584,9 @@ def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool
     except RESULT_WORKBOOK_READ_ERRORS as exc:
         raise ValueError(f"结果文件无法读取: {path.name}") from exc
     try:
-        planning_rows = read_planning_result_csv(planning_result_csv_path_for_workbook(path))
-        if not planning_rows:
-            planning_rows = read_planning_result_sheet_rows(workbook)
+        planning_rows = read_named_sheet_rows(workbook, "规划结果")
+        for row in planning_rows:
+            normalize_planning_result_total_capacity(row)
         annual_rows = read_named_sheet_rows(workbook, "规划年指标")
         green_daily = read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365)
         green_monthly = read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12)
@@ -1945,7 +1857,7 @@ def merge_comparison_rows(tables: list[list[dict]], items: list[dict], key_field
 
 
 def result_display_name_from_filename(filename: str) -> str:
-    return re.sub(r"_(?:results|estimate)\.xlsx$", "", str(filename or ""))
+    return re.sub(r"_results\.xlsx$", "", str(filename or ""))
 
 
 def _numeric_or_none(value):
@@ -1976,22 +1888,38 @@ def write_evaluation_planning_counts(scheme: str, filename: str, planning_rows: 
             continue
         counts_by_device[device_type] = row.get("设计台数")
 
-    existing_rows = read_evaluation_planning_result_rows(scheme, filename)
-    if not existing_rows:
-        existing_rows = [dict(row) for row in planning_rows if isinstance(row, dict)] if isinstance(planning_rows, list) else []
-    if existing_rows and ("设备类型" not in existing_rows[0] or "设计台数" not in existing_rows[0]):
-        raise ValueError("规划结果CSV缺少设备类型或设计台数列")
+    workbook = load_workbook(result_path)
+    try:
+        if PLANNING_RESULT_SHEET_NAME not in workbook.sheetnames:
+            sheet = workbook.create_sheet(PLANNING_RESULT_SHEET_NAME)
+            sheet.append(PLANNING_RESULT_HEADERS)
+        else:
+            sheet = workbook[PLANNING_RESULT_SHEET_NAME]
+            if sheet.max_row < 1:
+                sheet.append(PLANNING_RESULT_HEADERS)
 
-    for row in existing_rows:
-        device_type = str(row.get("设备类型", "")).strip()
-        if device_type in counts_by_device:
-            count = normalize_planning_count(counts_by_device[device_type])
-            row["设计台数"] = count
-            if count != "":
-                unit_capacity = estimate.numeric(row.get("单台容量"), 0.0)
-                row["总容量"] = round(count * unit_capacity, 4)
+        headers = [str(cell.value or "").strip() for cell in sheet[1]]
+        if "设备类型" not in headers or "设计台数" not in headers:
+            raise ValueError("规划结果工作表缺少设备类型或设计台数列")
+        device_column = headers.index("设备类型") + 1
+        count_column = headers.index("设计台数") + 1
+        unit_capacity_column = headers.index("单台容量") + 1 if "单台容量" in headers else None
+        total_capacity_column = headers.index("总容量") + 1 if "总容量" in headers else None
 
-    write_planning_result_csv(result_path, existing_rows)
+        for row_index in range(2, sheet.max_row + 1):
+            device_type = str(sheet.cell(row=row_index, column=device_column).value or "").strip()
+            if device_type in counts_by_device:
+                count = normalize_planning_count(counts_by_device[device_type])
+                sheet.cell(row=row_index, column=count_column).value = count
+                if total_capacity_column and unit_capacity_column and count != "":
+                    unit_capacity = estimate.numeric(sheet.cell(row=row_index, column=unit_capacity_column).value, 0.0)
+                    sheet.cell(row=row_index, column=total_capacity_column).value = round(count * unit_capacity, 4)
+
+        tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, result_path)
     return read_evaluation_planning_result_rows(scheme, filename)
 
 
@@ -2010,7 +1938,7 @@ def evaluation_result_filename_from_name(name: str) -> str:
         raise ValueError("结果名称不能为空")
     if clean_name.endswith(".xlsx"):
         raise ValueError("结果名称只需输入 xxxx，不要输入扩展名")
-    return f"{clean_name}{EVALUATION_RESULT_WORKBOOK_SUFFIX}"
+    return f"{clean_name}_results.xlsx"
 
 
 def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
@@ -2055,7 +1983,6 @@ def handle_evaluation_results_api_path(
                 raise ValueError("默认结果文件不允许删除")
             if result_path.exists():
                 file_ops.delete_file_with_retry(result_path, "结果文件")
-            file_ops.delete_file_if_exists_with_retry(planning_result_csv_path_for_workbook(result_path), "规划结果CSV")
             selected = selected_evaluation_result_filename(scheme)
             return _json_response(
                 {
@@ -2082,14 +2009,7 @@ def handle_evaluation_results_api_path(
                     )
                 if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
                     raise ValueError("默认结果文件不允许覆盖")
-            planning_result_rows = read_evaluation_planning_result_rows(scheme, source_path.name)
             file_ops.copy_file_with_retry(source_path, target_path, "结果文件")
-            source_csv_path = planning_result_csv_path_for_workbook(source_path)
-            target_csv_path = planning_result_csv_path_for_workbook(target_path)
-            if source_csv_path.exists():
-                file_ops.copy_file_with_retry(source_csv_path, target_csv_path, "规划结果CSV")
-            else:
-                write_planning_result_csv(target_path, planning_result_rows)
             return _json_response(
                 {
                     "selected": target_path.name,

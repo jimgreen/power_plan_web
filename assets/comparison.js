@@ -673,7 +673,7 @@ function tabById(id) {
 }
 
 function resultDisplayName(filename) {
-  return String(filename || "").replace(/_(?:results|estimate)\.xlsx$/, "");
+  return String(filename || "").replace(/_results\.xlsx$/, "");
 }
 
 function formatAxis(value) {
