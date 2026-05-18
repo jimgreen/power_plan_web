@@ -228,7 +228,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-log-light-surface", page_html)
+            self.assertIn("assets/planning.css?v=20260518-curve-list-theme", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -288,6 +288,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .auth-card label,', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .task-table,', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-chart text,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .optimization-curve-name-list', css)
+        theme_curve_name_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .optimization-curve-name-list,', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-panel-bg) !important", theme_curve_name_css)
+        self.assertIn("color: var(--theme-text) !important", theme_curve_name_css)
         self.assertIn("--control-bg:", css)
         self.assertIn("--control-primary-bg:", css)
         self.assertIn("--control-danger-bg:", css)
@@ -6420,15 +6424,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(resolved.name, "index.html")
         self.assertTrue(resolved.exists())
 
-    def test_planning_assets_are_cache_busted_and_static_js_css_png_are_no_cache(self):
+    def test_planning_assets_are_cache_busted_and_static_assets_are_browser_cacheable(self):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
 
         self.assertIn("assets/planning.css?v=", html)
         self.assertIn("assets/planning.js?v=", html)
         self.assertEqual(server.resolve_static_path("/assets/planning.js?v=test").name, "planning.js")
         server_text = (WEB_ROOT / "server.py").read_text(encoding="utf-8")
+        self.assertIn("STATIC_BROWSER_CACHE_SUFFIXES", server_text)
         self.assertIn('".css", ".js"', server_text)
         self.assertIn('".png"', server_text)
+        self.assertIn("STATIC_ASSET_CACHE_CONTROL", server_text)
 
     def test_redirect_response_disables_cache_and_varies_on_cookie(self):
         status, headers, body = server._redirect_response("/login.html?next=%2Ftasks.html")
@@ -6442,23 +6448,35 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(headers["Vary"], "Cookie")
         self.assertEqual(body, b"")
 
-    def test_static_headers_disable_cache_for_html_and_task_assets(self):
+    def test_static_headers_disable_cache_for_html_and_cache_versioned_assets(self):
         html_headers = server._static_headers(WEB_ROOT / "tasks.html", authenticated_html=True)
         js_headers = server._static_headers(WEB_ROOT / "assets" / "tasks.js")
 
-        for headers in (html_headers, js_headers):
-            self.assertEqual(headers["Cache-Control"], "no-store, no-cache, max-age=0, must-revalidate")
-            self.assertEqual(headers["Pragma"], "no-cache")
-            self.assertEqual(headers["Expires"], "0")
+        self.assertEqual(html_headers["Cache-Control"], "no-store, no-cache, max-age=0, must-revalidate")
+        self.assertEqual(html_headers["Pragma"], "no-cache")
+        self.assertEqual(html_headers["Expires"], "0")
         self.assertEqual(html_headers["Vary"], "Cookie")
         self.assertTrue(html_headers["Content-Type"].startswith("text/html"))
+        self.assertEqual(js_headers["Cache-Control"], "public, max-age=86400, stale-while-revalidate=3600")
+        self.assertIn("ETag", js_headers)
+        self.assertIn("Last-Modified", js_headers)
+        self.assertNotIn("Pragma", js_headers)
         self.assertIn("javascript", js_headers["Content-Type"])
+
+    def test_static_validator_headers_support_not_modified_checks(self):
+        headers = server._static_headers(WEB_ROOT / "assets" / "planning.js")
+
+        self.assertTrue(server._static_request_not_modified({"If-None-Match": headers["ETag"]}, headers))
+        self.assertTrue(server._static_request_not_modified({"If-Modified-Since": headers["Last-Modified"]}, headers))
+        self.assertFalse(server._static_request_not_modified({"If-None-Match": 'W/"stale"'}, headers))
 
     def test_static_headers_keep_regular_data_files_publicly_cacheable(self):
         headers = server._static_headers(WEB_ROOT / "data" / "load_curve_templates.csv")
 
         self.assertEqual(headers["Cache-Control"], "public, max-age=3600")
         self.assertTrue(headers["Content-Type"])
+        self.assertIn("ETag", headers)
+        self.assertIn("Last-Modified", headers)
         self.assertNotIn("Vary", headers)
 
     def test_static_path_rejects_directory_traversal(self):

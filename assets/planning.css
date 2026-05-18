@@ -6053,7 +6053,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .optimization-log-card,
 body[data-home-theme]:not([data-home-theme="default"]) .planning-parameters-card,
 body[data-home-theme]:not([data-home-theme="default"]) .device-card,
 body[data-home-theme]:not([data-home-theme="default"]) .table-card,
-body[data-home-theme]:not([data-home-theme="default"]) .chart-card {
+body[data-home-theme]:not([data-home-theme="default"]) .chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-curve-name-list {
   border-color: var(--theme-panel-line);
   background: var(--theme-panel-bg);
   color: var(--theme-text);
@@ -6740,6 +6741,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-card,
 body[data-home-theme]:not([data-home-theme="default"]) .green-chart-card,
 body[data-home-theme]:not([data-home-theme="default"]) .safety-chart-card,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-curve-name-list,
 body[data-home-theme]:not([data-home-theme="default"]) .status-tile {
   border-color: var(--theme-panel-line) !important;
   background: var(--theme-panel-bg) !important;

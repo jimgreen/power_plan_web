@@ -8,6 +8,7 @@ import base64
 import binascii
 from http.cookies import SimpleCookie
 import csv
+from email.utils import formatdate
 import hashlib
 import hmac
 import json
@@ -162,8 +163,11 @@ RESULT_WORKBOOK_HEADER_TO_FIELD.update(
         "月份": "month",
     }
 )
-STATIC_NO_STORE_SUFFIXES = {".html", ".css", ".js", ".png", ".svg", ".ico", ".map"}
+STATIC_NO_STORE_SUFFIXES = {".html"}
+STATIC_BROWSER_CACHE_SUFFIXES = {".css", ".js", ".png", ".svg", ".ico", ".map", ".jpg", ".jpeg", ".webp", ".woff", ".woff2"}
 NO_STORE_CACHE_CONTROL = "no-store, no-cache, max-age=0, must-revalidate"
+STATIC_ASSET_CACHE_CONTROL = "public, max-age=86400, stale-while-revalidate=3600"
+STATIC_DATA_CACHE_CONTROL = "public, max-age=3600"
 RESULT_WORKBOOK_READ_ERRORS = (BadZipFile, zlib.error, OSError, EOFError, KeyError, InvalidFileException)
 TIME_SERIES_IMPORT_ROW_COUNT = 8760
 TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
@@ -3390,14 +3394,36 @@ def _no_store_headers(*, vary_cookie: bool = False) -> dict[str, str]:
 
 def _static_headers(path: Path, *, authenticated_html: bool = False) -> dict[str, str]:
     content_type = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-    if path.suffix.lower() in STATIC_NO_STORE_SUFFIXES:
-        headers = {"Content-Type": content_type}
+    suffix = path.suffix.lower()
+    headers = {"Content-Type": content_type}
+    if suffix in STATIC_NO_STORE_SUFFIXES:
         headers.update(_no_store_headers(vary_cookie=authenticated_html or path.suffix.lower() == ".html"))
         return headers
+    if suffix in STATIC_BROWSER_CACHE_SUFFIXES:
+        headers["Cache-Control"] = STATIC_ASSET_CACHE_CONTROL
+        headers.update(_static_validator_headers(path))
+        return headers
+    headers["Cache-Control"] = STATIC_DATA_CACHE_CONTROL
+    headers.update(_static_validator_headers(path))
+    return headers
+
+
+def _static_validator_headers(path: Path) -> dict[str, str]:
+    stat = path.stat()
     return {
-        "Content-Type": content_type,
-        "Cache-Control": "public, max-age=3600",
+        "ETag": f'W/"{stat.st_mtime_ns:x}-{stat.st_size:x}"',
+        "Last-Modified": formatdate(stat.st_mtime, usegmt=True),
     }
+
+
+def _static_request_not_modified(request_headers, response_headers: dict[str, str]) -> bool:
+    etag = response_headers.get("ETag")
+    if etag and request_headers.get("If-None-Match") == etag:
+        return True
+    last_modified = response_headers.get("Last-Modified")
+    if last_modified and request_headers.get("If-Modified-Since") == last_modified:
+        return True
+    return False
 
 
 def _read_json_body(body: bytes) -> dict:
@@ -4941,6 +4967,9 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 return
 
         headers = _static_headers(path, authenticated_html=path.suffix == ".html")
+        if _static_request_not_modified(self.headers, headers):
+            self._send(HTTPStatus.NOT_MODIFIED, headers, b"")
+            return
         body = STATIC_FILE_BYTES_CACHE.get(path, lambda resolved: resolved.read_bytes(), variant="static_bytes")
         self._send(HTTPStatus.OK, headers, body)
 
