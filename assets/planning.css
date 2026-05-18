@@ -1000,9 +1000,11 @@ button:disabled {
   padding-bottom: 8px;
   margin-bottom: 8px;
   background: rgba(246, 250, 249, 0.96);
+  pointer-events: none;
 }
 
 .curve-group-tab {
+  pointer-events: auto;
   min-width: 0;
   min-height: 30px;
   padding: 6px 8px;
@@ -1236,9 +1238,9 @@ button:disabled {
 
 .annual-comparison-head {
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
@@ -1250,7 +1252,7 @@ button:disabled {
   white-space: nowrap;
 }
 
-.annual-comparison-head span {
+.annual-axis-note {
   min-width: 0;
   color: #5a716e;
   font-size: 11px;
@@ -1372,27 +1374,52 @@ button:disabled {
 }
 
 .annual-comparison-legend {
-  position: absolute;
-  top: 4px;
-  left: 74px;
-  right: 66px;
-  z-index: 2;
   display: flex;
   align-items: center;
   gap: 6px 10px;
-  flex-wrap: wrap;
+  min-width: 0;
+  overflow-x: auto;
+  flex-wrap: nowrap;
   color: #405b58;
   font-size: 11px;
   font-weight: 800;
-  pointer-events: none;
+  pointer-events: auto !important;
+  scrollbar-width: thin;
 }
 
-.annual-comparison-legend span {
+.annual-comparison-legend span,
+.annual-comparison-legend button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
   white-space: nowrap;
+}
+
+.annual-comparison-legend button {
+  position: relative;
+  z-index: 1;
+  padding: 2px 6px;
+  min-height: 22px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  color: inherit;
+  cursor: pointer;
+  line-height: 1.1;
+  pointer-events: auto !important;
+}
+
+.annual-comparison-legend button:hover,
+.annual-comparison-legend button:focus-visible {
+  outline: none;
+  border-color: rgba(13, 92, 89, 0.24);
+  background: rgba(13, 92, 89, 0.1);
+}
+
+.annual-comparison-legend button.is-hidden {
+  opacity: 0.46;
+  text-decoration: line-through;
 }
 
 .annual-comparison-legend i {
@@ -2023,11 +2050,11 @@ button:disabled {
 
 .composition-bar-card {
   flex: 1 1 0;
-  min-height: 150px;
+  min-height: 128px;
   display: grid;
-  grid-template-rows: auto auto auto;
+  grid-template-rows: auto auto;
   align-content: center;
-  gap: 12px;
+  gap: 10px;
   padding: 14px;
   border: 1px solid #d7e4e0;
   border-radius: 16px;
@@ -2043,24 +2070,43 @@ button:disabled {
 .composition-bar-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .composition-bar-card.multi-segment {
-  gap: 10px;
+  gap: 8px;
 }
 
 .composition-bar-card.multi-segment .composition-bar-summary {
-  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(68px, 1fr));
 }
 
 .composition-bar-summary span {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 2px;
   color: #405b58;
   font-size: 12px;
   font-weight: 800;
+}
+
+.composition-bar-summary-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  color: inherit;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composition-bar-summary-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
 }
 
 .composition-bar-summary strong {
@@ -2068,13 +2114,21 @@ button:disabled {
   overflow: hidden;
   font-size: 14px;
   font-weight: 900;
+  line-height: 1.08;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.composition-bar-percent {
+  color: #627d79;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
 .composition-bar-track {
   width: 100%;
-  height: 24px;
+  height: 22px;
   display: flex;
   overflow: hidden;
   border: 1px solid rgba(16, 43, 42, 0.12);
@@ -4908,6 +4962,8 @@ h2,
 }
 
 .composition-bar-summary span,
+.composition-bar-summary-label,
+.composition-bar-percent,
 .composition-bar-legend div {
   color: var(--hud-muted-strong);
 }
@@ -6594,6 +6650,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter,
 body[data-home-theme]:not([data-home-theme="default"]) .task-scheme-filter span,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary span,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary-label,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-percent,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend div,
 body[data-home-theme]:not([data-home-theme="default"]) .status-tile span,
@@ -6864,6 +6922,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .overview-item strong,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary span,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary strong,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-summary-label,
+body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-percent,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend div,
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-legend strong,
@@ -6906,6 +6966,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row b
 body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button,
 body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot button,
 body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-legend button,
 body[data-home-theme]:not([data-home-theme="default"]) .task-actions button {
   border-color: color-mix(in srgb, var(--theme-accent) 46%, transparent) !important;
   background: var(--theme-control-bg) !important;
@@ -6941,6 +7002,16 @@ body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle.activ
   border-color: var(--theme-accent) !important;
   background: var(--theme-active-bg) !important;
   color: var(--theme-active-text) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-legend button:hover,
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-legend button:focus-visible {
+  border-color: var(--theme-accent) !important;
+  background: var(--theme-active-bg) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-legend button.is-hidden {
+  opacity: 0.48;
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .scheme-item,

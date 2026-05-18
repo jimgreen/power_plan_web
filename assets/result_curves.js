@@ -74,6 +74,7 @@
       annualTable: [],
       selectedCurvesByGroup: { hourly: [], daily: [], monthly: [] },
       hiddenSeriesByGroup: { hourly: [], daily: [], monthly: [] },
+      annualHiddenSeries: [],
       curveRangeFilter: defaultCurveRangeFilter(),
       activeGroup: "hourly",
       annualViewMode: "table",
@@ -91,6 +92,7 @@
     function setData(payload) {
       state.groups = normalizeGroups(payload);
       state.annualTable = Array.isArray(payload?.annual_table) ? payload.annual_table : [];
+      state.annualHiddenSeries = state.annualHiddenSeries.filter((seriesId) => availableAnnualSeriesIds().includes(seriesId));
       state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
       GROUP_DEFINITIONS.filter((group) => group.key !== "annual").forEach((group) => {
         const curveNames = state.groups[group.key]?.curves || [];
@@ -112,6 +114,7 @@
       state.annualTable = [];
       state.selectedCurvesByGroup = { hourly: [], daily: [], monthly: [] };
       state.hiddenSeriesByGroup = { hourly: [], daily: [], monthly: [] };
+      state.annualHiddenSeries = [];
       state.curveRangeFilter = defaultCurveRangeFilter();
       state.activeGroup = "hourly";
       state.annualViewMode = "table";
@@ -388,35 +391,54 @@
         : `<div class="empty-summary">${escapeHtml(message || "暂无柱图对比数据")}</div>`;
       bindAnnualGridResizers(target);
       bindAnnualChartHover(target);
+      bindAnnualLegendToggles(target);
     }
 
     function renderAnnualComparisonChart(definition, caseHeaders) {
-      const barMetrics = (definition.bars || []).map((item) => annualMetricFromDefinition(item, caseHeaders)).filter(Boolean);
-      const lineMetric = definition.line ? annualMetricFromDefinition(definition.line, caseHeaders) : null;
+      const barMetrics = (definition.bars || [])
+        .map((item) => annualMetricFromDefinition(item, caseHeaders))
+        .filter(Boolean)
+        .map((metric) => ({ ...metric, seriesId: annualSeriesId(definition.title, metric.label) }));
+      const lineMetric = definition.line
+        ? (() => {
+            const metric = annualMetricFromDefinition(definition.line, caseHeaders);
+            return metric ? { ...metric, seriesId: annualSeriesId(definition.title, metric.label) } : null;
+          })()
+        : null;
       if (!barMetrics.length && !lineMetric) {
         return `<section class="annual-comparison-card"><h3>${escapeHtml(definition.title)}</h3><div class="empty-summary">暂无柱图对比数据</div></section>`;
+      }
+      const visibleBarMetrics = barMetrics.filter((metric) => !isAnnualSeriesHidden(metric.seriesId));
+      const visibleLineMetric = lineMetric && !isAnnualSeriesHidden(lineMetric.seriesId) ? lineMetric : null;
+      if (!visibleBarMetrics.length && !visibleLineMetric) {
+        return `<section class="annual-comparison-card">
+          ${renderAnnualComparisonHead(definition, barMetrics, lineMetric)}
+          <div class="annual-comparison-chart">
+            <div class="empty-summary">暂无可显示曲线</div>
+          </div>
+        </section>`;
       }
 
       const width = 920;
       const height = 220;
-      const margin = { top: 18, right: lineMetric ? 64 : 24, bottom: 44, left: 68 };
+      const margin = { top: 18, right: visibleLineMetric ? 64 : 24, bottom: 44, left: 68 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
-      const leftValues = barMetrics.flatMap((metric) => metric.values).filter(Number.isFinite);
-      const rightValues = lineMetric ? lineMetric.values.filter(Number.isFinite) : [];
+      const leftValues = visibleBarMetrics.flatMap((metric) => metric.values).filter(Number.isFinite);
+      const rightValues = visibleLineMetric ? visibleLineMetric.values.filter(Number.isFinite) : [];
       const leftMax = Math.max(...leftValues, 1);
       const rightMax = Math.max(...rightValues, 1);
       const groupWidth = plotWidth / Math.max(caseHeaders.length, 1);
       const gap = Math.min(8, Math.max(3, groupWidth * 0.04));
-      const barWidth = Math.max(5, Math.min(26, (groupWidth - 22) / Math.max(barMetrics.length + 0.5, 1)));
-      const groupedWidth = barMetrics.length * barWidth + Math.max(barMetrics.length - 1, 0) * gap;
+      const barWidth = Math.max(5, Math.min(26, (groupWidth - 22) / Math.max(visibleBarMetrics.length + 0.5, 1)));
+      const groupedWidth = visibleBarMetrics.length * barWidth + Math.max(visibleBarMetrics.length - 1, 0) * gap;
       const xCenter = (index) => margin.left + groupWidth * index + groupWidth / 2;
       const yLeft = (value) => margin.top + plotHeight - (Math.max(Number(value) || 0, 0) / leftMax) * plotHeight;
       const yRight = (value) => margin.top + plotHeight - (Math.max(Number(value) || 0, 0) / rightMax) * plotHeight;
-      const linePoints = lineMetric
-        ? lineMetric.values.map((value, index) => `${xCenter(index).toFixed(2)},${yRight(value).toFixed(2)}`)
+      const linePoints = visibleLineMetric
+        ? visibleLineMetric.values.map((value, index) => `${xCenter(index).toFixed(2)},${yRight(value).toFixed(2)}`)
         : [];
-      const linePointOverlays = lineMetric ? renderAnnualLinePoints({ width, height, xCenter, yRight, lineMetric, caseHeaders }) : "";
+      const linePointOverlays = visibleLineMetric ? renderAnnualLinePoints({ width, height, xCenter, yRight, lineMetric: visibleLineMetric, caseHeaders }) : "";
       const overlays = renderAnnualChartLabels({
         width,
         height,
@@ -426,24 +448,21 @@
         caseHeaders,
         leftMax,
         rightMax,
-        lineMetric,
+        lineMetric: visibleLineMetric,
       });
 
       return `<section class="annual-comparison-card">
-        <div class="annual-comparison-head">
-          <h3>${escapeHtml(definition.title)}</h3>
-          <span>${escapeHtml(translateDisplay("左轴"))} ${escapeHtml(barMetrics[0]?.unit || "")}${lineMetric ? ` / ${escapeHtml(translateDisplay("右轴"))} ${escapeHtml(lineMetric.unit || "")}` : ""}</span>
-        </div>
+        ${renderAnnualComparisonHead(definition, barMetrics, lineMetric)}
         <div class="annual-comparison-chart">
           <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(definition.title)}">
             <line class="annual-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
             <line class="annual-axis-line" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
-            ${lineMetric ? `<line class="annual-axis-line" x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>` : ""}
+            ${visibleLineMetric ? `<line class="annual-axis-line" x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>` : ""}
             ${[0, 0.5, 1].map((ratio) => {
               const y = margin.top + plotHeight - ratio * plotHeight;
               return `<line class="annual-grid-line" x1="${margin.left}" y1="${y.toFixed(2)}" x2="${width - margin.right}" y2="${y.toFixed(2)}"></line>`;
             }).join("")}
-            ${barMetrics.map((metric, metricIndex) =>
+            ${visibleBarMetrics.map((metric, metricIndex) =>
               metric.values
                 .map((value, caseIndex) => {
                   const safeValue = Math.max(Number(value) || 0, 0);
@@ -454,14 +473,22 @@
                 })
                 .join(""),
             ).join("")}
-            ${lineMetric ? `<polyline class="annual-line" points="${linePoints.join(" ")}"></polyline>` : ""}
+            ${visibleLineMetric ? `<polyline class="annual-line" points="${linePoints.join(" ")}"></polyline>` : ""}
           </svg>
           ${overlays}
           ${linePointOverlays}
-          ${renderAnnualComparisonLegend(barMetrics, lineMetric)}
           <div class="comparison-chart-tooltip annual-chart-tooltip" data-annual-chart-tooltip hidden></div>
         </div>
       </section>`;
+    }
+
+    function renderAnnualComparisonHead(definition, barMetrics, lineMetric) {
+      const axisText = `${translateDisplay("左轴")} ${barMetrics[0]?.unit || ""}${lineMetric ? ` / ${translateDisplay("右轴")} ${lineMetric.unit || ""}` : ""}`;
+      return `<div class="annual-comparison-head">
+        <h3>${escapeHtml(definition.title)}</h3>
+        ${renderAnnualComparisonLegend(barMetrics, lineMetric)}
+        <span class="annual-axis-note">${escapeHtml(axisText)}</span>
+      </div>`;
     }
 
     function renderAnnualChartLabels({ width, height, margin, groupWidth, xCenter, caseHeaders, leftMax, rightMax, lineMetric }) {
@@ -502,10 +529,57 @@
 
     function renderAnnualComparisonLegend(barMetrics, lineMetric) {
       const barLegends = barMetrics
-        .map((metric, index) => `<span><i style="background:${ANNUAL_BAR_COLORS[index % ANNUAL_BAR_COLORS.length]}"></i>${escapeHtml(metric.label)}</span>`)
+        .map((metric, index) => renderAnnualLegendButton(metric, ANNUAL_BAR_COLORS[index % ANNUAL_BAR_COLORS.length]))
         .join("");
-      const lineLegend = lineMetric ? `<span><i class="line" style="background:${ANNUAL_LINE_COLOR}"></i>${escapeHtml(lineMetric.label)}</span>` : "";
+      const lineLegend = lineMetric ? renderAnnualLegendButton(lineMetric, ANNUAL_LINE_COLOR, "line") : "";
       return `<div class="annual-comparison-legend">${barLegends}${lineLegend}</div>`;
+    }
+
+    function renderAnnualLegendButton(metric, color, iconClass = "") {
+      const hidden = isAnnualSeriesHidden(metric.seriesId);
+      return `<button type="button" class="${hidden ? "is-hidden" : ""}" data-annual-series-toggle="${escapeHtml(metric.seriesId)}" aria-pressed="${hidden ? "false" : "true"}" title="显示/隐藏曲线">
+        <i class="${escapeHtml(iconClass)}" style="background:${escapeHtml(color)}"></i>${escapeHtml(metric.label)}
+      </button>`;
+    }
+
+    function bindAnnualLegendToggles(target) {
+      target.querySelectorAll("[data-annual-series-toggle]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleAnnualSeriesVisibility(button.dataset.annualSeriesToggle || "");
+        });
+      });
+    }
+
+    function toggleAnnualSeriesVisibility(seriesId) {
+      if (!seriesId) return;
+      const hidden = new Set(state.annualHiddenSeries || []);
+      if (hidden.has(seriesId)) hidden.delete(seriesId);
+      else hidden.add(seriesId);
+      state.annualHiddenSeries = Array.from(hidden);
+      render();
+    }
+
+    function isAnnualSeriesHidden(seriesId) {
+      return Boolean(seriesId && (state.annualHiddenSeries || []).includes(seriesId));
+    }
+
+    function annualSeriesId(chartTitle, label) {
+      return `${chartTitle || ""}::${label || ""}`;
+    }
+
+    function availableAnnualSeriesIds() {
+      if (!state.annualTable.length) return [];
+      const caseHeaders = annualCaseHeaders();
+      return ANNUAL_COMPARISON_DEFINITIONS.flatMap((definition) => {
+        const barIds = (definition.bars || [])
+          .map((item) => annualMetricFromDefinition(item, caseHeaders))
+          .filter(Boolean)
+          .map((metric) => annualSeriesId(definition.title, metric.label));
+        const lineMetric = definition.line ? annualMetricFromDefinition(definition.line, caseHeaders) : null;
+        return lineMetric ? [...barIds, annualSeriesId(definition.title, lineMetric.label)] : barIds;
+      });
     }
 
     function renderAnnualGridResizers() {

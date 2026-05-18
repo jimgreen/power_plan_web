@@ -232,7 +232,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-stats-fit", page_html)
+            self.assertIn("assets/planning.css?v=20260518-legend-pct6", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -4835,6 +4835,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
         self.assertIn("assets/comparison.js?v=20260518-hourly-preload", html)
+        self.assertIn("assets/result_curves.js?v=20260518-annual-legend3", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
@@ -4986,6 +4987,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".annual-comparison-chart", css)
         self.assertIn(".annual-chart-axis-label", css)
         self.assertIn(".annual-chart-x-axis", css)
+        annual_comparison_card_css = css.split(".annual-comparison-card {", 1)[1].split("}", 1)[0]
+        self.assertIn("grid-template-rows: auto minmax(0, 1fr)", annual_comparison_card_css)
+        annual_comparison_head_css = css.split(".annual-comparison-head {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: grid", annual_comparison_head_css)
+        self.assertIn("grid-template-columns: max-content minmax(0, 1fr) max-content", annual_comparison_head_css)
         annual_comparison_grid_css = css.split(".annual-comparison-grid {", 1)[1].split("}", 1)[0]
         self.assertIn("grid-template-columns: minmax(0, var(--annual-grid-left", annual_comparison_grid_css)
         self.assertIn("grid-template-rows: minmax(0, var(--annual-grid-top", annual_comparison_grid_css)
@@ -4995,6 +5001,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".annual-grid-resizer-col", css)
         self.assertIn(".annual-grid-resizer-row", css)
         self.assertIn(".annual-chart-tooltip", css)
+        self.assertIn(".annual-comparison-legend button", css)
+        self.assertIn(".annual-comparison-legend button.is-hidden", css)
+        annual_comparison_legend_css = css.split(".annual-comparison-legend {", 1)[1].split("}", 1)[0]
+        self.assertIn("flex-wrap: nowrap", annual_comparison_legend_css)
+        self.assertIn("overflow-x: auto", annual_comparison_legend_css)
         self.assertIn(".annual-line-point", css)
         annual_line_point_css = css.split(".annual-line-point {", 1)[1].split("}", 1)[0]
         self.assertIn("position: absolute", annual_line_point_css)
@@ -5011,6 +5022,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("position: sticky", curve_group_tabs_css)
         self.assertIn("top: 0", curve_group_tabs_css)
         self.assertIn("z-index:", curve_group_tabs_css)
+        self.assertIn("pointer-events: none", curve_group_tabs_css)
+        curve_group_tab_css = css.split(".curve-group-tab {", 1)[1].split("}", 1)[0]
+        self.assertIn("pointer-events: auto", curve_group_tab_css)
         self.assertNotIn(".comparison-curve-name-list button", css)
         comparison_curve_name_item_css = css.split(".comparison-curve-name-item {", 1)[1].split("}", 1)[0]
         self.assertIn("cursor: pointer", comparison_curve_name_item_css)
@@ -5034,6 +5048,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("表格显示", result_curve_script)
         self.assertIn("柱图对比", result_curve_script)
         self.assertIn("renderAnnualBarComparison", result_curve_script)
+        self.assertIn("renderAnnualComparisonHead", result_curve_script)
+        self.assertIn("renderAnnualComparisonHead(definition, barMetrics, lineMetric)", result_curve_script)
         self.assertIn("annual-comparison-grid", result_curve_script)
         self.assertIn("renderAnnualChartLabels", result_curve_script)
         self.assertIn("annual-chart-axis-label", result_curve_script)
@@ -5046,6 +5062,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("renderAnnualChartHover", result_curve_script)
         self.assertIn("data-annual-chart-hit", result_curve_script)
         self.assertIn("data-annual-chart-tooltip", result_curve_script)
+        self.assertIn("annualHiddenSeries", result_curve_script)
+        self.assertIn("bindAnnualLegendToggles", result_curve_script)
+        self.assertIn("data-annual-series-toggle", result_curve_script)
+        self.assertIn("toggleAnnualSeriesVisibility", result_curve_script)
         self.assertIn("formatAnnualMetricValue", result_curve_script)
         self.assertNotIn('<text class="annual-axis-label', result_curve_script)
         self.assertNotIn('<text class="annual-x-label', result_curve_script)
@@ -5205,6 +5225,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn('data-overview-column-resize="middle-right"', evaluation_script)
         self.assertIn("composition-bar-track", script)
         self.assertIn("composition-bar-segment", script)
+        self.assertIn("composition-bar-percent", script)
+        self.assertIn("composition-bar-summary-dot", script)
+        self.assertIn("buildOverviewCompositionSummary(segments, positiveTotal)", script)
+        self.assertNotIn('<div class="composition-bar-legend">', script)
         self.assertIn("overview_disks", script)
         self.assertIn("overview-composition-stack", script)
         self.assertIn("formatOverviewTableForDisplay", script)
@@ -5222,6 +5246,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("normalizeOverviewCompositionValue", evaluation_script)
         self.assertIn("formatOverviewCompositionNumber", evaluation_script)
         self.assertIn("composition-bar-track", evaluation_script)
+        self.assertIn("composition-bar-percent", evaluation_script)
+        self.assertIn("composition-bar-summary-dot", evaluation_script)
+        self.assertIn("buildOverviewCompositionSummary(segments, positiveTotal)", evaluation_script)
+        self.assertNotIn('<div class="composition-bar-legend">', evaluation_script)
         self.assertIn("optimization-overview-grid", script)
         self.assertIn("规划结果", script)
         self.assertNotIn("规划年指标", script)
@@ -5244,13 +5272,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("grid-template-columns: minmax(0, 1fr)", composition_stack_css)
         self.assertIn("overflow: auto", composition_stack_css)
         composition_card_css = css.split(".composition-bar-card {", 1)[1].split("}", 1)[0]
-        self.assertIn("grid-template-rows: auto auto auto", composition_card_css)
-        self.assertIn("min-height: 150px", composition_card_css)
+        self.assertIn("grid-template-rows: auto auto", composition_card_css)
+        self.assertIn("min-height: 128px", composition_card_css)
         self.assertIn("border: 1px solid #d7e4e0", composition_card_css)
         self.assertIn(".composition-bar-track", css)
+        self.assertIn(".composition-bar-percent", css)
+        self.assertIn(".composition-bar-summary-dot", css)
         composition_track_css = css.split(".composition-bar-track {", 1)[1].split("}", 1)[0]
         self.assertIn("display: flex", composition_track_css)
-        self.assertIn("height: 24px", composition_track_css)
+        self.assertIn("height: 22px", composition_track_css)
         composition_segment_css = css.split(".composition-bar-segment {", 1)[1].split("}", 1)[0]
         self.assertIn("height: 100%", composition_segment_css)
         self.assertIn("min-height: 0 !important", composition_segment_css)

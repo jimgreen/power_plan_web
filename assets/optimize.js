@@ -651,29 +651,25 @@ function renderOverviewCompositionBar(disk) {
   const displayDisk = normalizeOverviewCompositionDisplay(disk);
   const segments = displayDisk.segments;
   const positiveTotal = segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0);
-  const summarySegments = buildOverviewCompositionSummary(segments);
+  const summarySegments = buildOverviewCompositionSummary(segments, positiveTotal);
   const multiClass = segments.length > 2 ? " multi-segment" : "";
   return `
     <div class="composition-bar-card${multiClass}">
       <h2>${escapeHtml(displayDisk.title)}</h2>
       <div class="composition-bar-summary">
         ${summarySegments
-          .map((segment) => `<span>${escapeHtml(segment.label)}<strong>${escapeHtml(formatOverviewCompositionNumber(segment.value, displayDisk.type))}${escapeHtml(segment.unit)}</strong></span>`)
+          .map((segment) => `<span class="${segment.isTotal ? "total" : ""}">
+            <em class="composition-bar-summary-label">${segment.isTotal ? "" : `<i class="composition-bar-summary-dot" style="background:${escapeHtml(segment.color)}"></i>`}${escapeHtml(segment.label)}</em>
+            <strong>${escapeHtml(formatOverviewCompositionNumber(segment.value, displayDisk.type))}${escapeHtml(segment.unit)}</strong>
+            ${Number.isFinite(segment.percent) ? `<small class="composition-bar-percent">${Math.round(segment.percent)}%</small>` : ""}
+          </span>`)
           .join("")}
       </div>
       <div class="composition-bar-track" aria-label="${escapeHtml(displayDisk.title)}">
         ${segments
           .map((segment) => {
             const percent = positiveTotal > 0 ? Math.max(0, (segment.value / positiveTotal) * 100) : 100 / segments.length;
-            return `<div class="composition-bar-segment ${escapeHtml(segment.className)}" style="width:${percent.toFixed(2)}%;--composition-segment-color:${escapeHtml(segment.color)}"><span>${Math.round(percent)}%</span></div>`;
-          })
-          .join("")}
-      </div>
-      <div class="composition-bar-legend">
-        ${segments
-          .map((segment) => {
-            const percent = positiveTotal > 0 ? Math.max(0, (segment.value / positiveTotal) * 100) : 100 / segments.length;
-            return `<div><span class="legend-dot ${escapeHtml(segment.dotClass)}" style="background:${escapeHtml(segment.color)}"></span><span>${escapeHtml(segment.label)}</span><strong>${Math.round(percent)}%</strong></div>`;
+            return `<div class="composition-bar-segment ${escapeHtml(segment.className)}" style="width:${percent.toFixed(2)}%;--composition-segment-color:${escapeHtml(segment.color)}"></div>`;
           })
           .join("")}
       </div>
@@ -773,14 +769,20 @@ function normalizeOverviewCompositionSegments(disk = {}) {
   ];
 }
 
-function buildOverviewCompositionSummary(segments) {
+function buildOverviewCompositionSummary(segments, positiveTotal) {
   const usedUnits = [...new Set(segments.map((segment) => segment.unit).filter(Boolean))];
-  const summary = [...segments];
+  const summary = segments.map((segment) => ({
+    ...segment,
+    percent: positiveTotal > 0 ? Math.max(0, (segment.value / positiveTotal) * 100) : 100 / Math.max(segments.length, 1),
+    isTotal: false,
+  }));
   if (usedUnits.length <= 1 && segments.length <= 2) {
     summary.push({
       label: "合计",
       value: segments.reduce((sum, segment) => sum + segment.value, 0),
       unit: usedUnits[0] || "",
+      percent: null,
+      isTotal: true,
     });
   }
   return summary;
