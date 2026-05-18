@@ -2400,6 +2400,49 @@ class PowerPlanServerTest(unittest.TestCase):
             server.OPTIMIZATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
+    def test_result_workbook_display_payload_uses_file_cache_until_file_changes(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_result_workbook_cache"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        result_path = planning_root / "case_results.xlsx"
+        workbook = Workbook()
+        workbook.active.title = "总体指标"
+        workbook.active.append(["指标", "数值", "单位"])
+        workbook.active.append(["度电成本", 1.23, "元/kWh"])
+        planning_sheet = workbook.create_sheet("规划结果")
+        planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+        planning_sheet.append(["柴发", 1, 100, 100, "kW"])
+        workbook.save(result_path)
+        workbook.close()
+        server.RESULT_DISPLAY_PAYLOAD_CACHE.clear()
+        original_load_workbook = server.load_workbook
+        load_count = 0
+
+        def counting_load_workbook(*args, **kwargs):
+            nonlocal load_count
+            load_count += 1
+            return original_load_workbook(*args, **kwargs)
+
+        try:
+            with patch.object(server, "load_workbook", side_effect=counting_load_workbook):
+                first = server.read_result_workbook_display_payload(result_path)
+                first["results"]["overview_tables"][0]["rows"][0]["设备类型"] = "外部修改"
+                second = server.read_result_workbook_display_payload(result_path)
+                self.assertEqual(load_count, 1)
+                self.assertEqual(second["results"]["overview_tables"][0]["rows"][0]["设备类型"], "柴发")
+
+                time.sleep(0.02)
+                changed_workbook = load_workbook(result_path)
+                changed_workbook["规划结果"]["A2"] = "风机"
+                changed_workbook.save(result_path)
+                changed_workbook.close()
+                third = server.read_result_workbook_display_payload(result_path)
+
+            self.assertEqual(load_count, 2)
+            self.assertEqual(third["results"]["overview_tables"][0]["rows"][0]["设备类型"], "风机")
+        finally:
+            shutil.rmtree(planning_root, ignore_errors=True)
+
     def test_light_optimization_status_skips_hourly_dispatch_sheet(self):
         planning_root = WEB_ROOT / "tests" / "tmp_optimization_status_light"
         shutil.rmtree(planning_root, ignore_errors=True)

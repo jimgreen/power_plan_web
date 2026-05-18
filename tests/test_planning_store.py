@@ -187,6 +187,31 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("diesel_generators", payload)
         self.assertNotIn("planning_parameters", payload)
 
+    def test_read_scheme_reuses_cached_workbook_until_file_changes(self):
+        payload = self.store.create_scheme("方案A")
+        planning_store.PARAMETER_WORKBOOK_CACHE.clear()
+        original_load_workbook = planning_store.load_workbook
+        load_count = 0
+
+        def counting_load_workbook(*args, **kwargs):
+            nonlocal load_count
+            load_count += 1
+            return original_load_workbook(*args, **kwargs)
+
+        with patch.object(planning_store, "load_workbook", side_effect=counting_load_workbook):
+            first = self.store.read_scheme("方案A")
+            first["diesel_generators"][0]["name"] = "缓存外部修改"
+            second = self.store.read_scheme("方案A")
+            self.assertEqual(load_count, 1)
+            self.assertNotEqual(second["diesel_generators"][0]["name"], "缓存外部修改")
+
+            payload["diesel_generators"][0]["name"] = "缓存失效后重新读取"
+            self.store.write_scheme("方案A", payload)
+            third = self.store.read_scheme("方案A")
+
+        self.assertEqual(load_count, 2)
+        self.assertEqual(third["diesel_generators"][0]["name"], "缓存失效后重新读取")
+
     def test_read_scheme_repairs_corrupted_time_series_sheet_and_keeps_other_parameters(self):
         self.store.create_scheme("方案A")
         payload = self.store.read_scheme("方案A")

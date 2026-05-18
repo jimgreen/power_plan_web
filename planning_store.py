@@ -15,6 +15,7 @@ from xml.etree import ElementTree
 
 from openpyxl import Workbook, load_workbook
 
+import file_cache
 import file_ops
 
 
@@ -26,6 +27,8 @@ WORKBOOK_RELS_XML = "xl/_rels/workbook.xml.rels"
 MAIN_XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_XML_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL_XML_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+PARAMETER_WORKBOOK_CACHE = file_cache.FileCache("parameter_workbook", max_entries=96)
+SHEET_ROW_COUNT_CACHE = file_cache.FileCache("sheet_row_count", max_entries=96)
 
 # Sheet order and column order are part of the on-disk contract. The browser,
 # workbook reader, and workbook writer all depend on this exact schema.
@@ -625,6 +628,15 @@ class TimeSeriesSheetReadError(Exception):
 
 def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None) -> dict[str, Any]:
     selected_keys = set(include_keys) if include_keys is not None else set(SHEET_SPECS)
+    variant = ("scheme_workbook", tuple(sorted(selected_keys)))
+    return PARAMETER_WORKBOOK_CACHE.get(
+        path,
+        lambda resolved: read_workbook_uncached(resolved, scheme, selected_keys),
+        variant=variant,
+    )
+
+
+def read_workbook_uncached(path: Path, scheme: str, selected_keys: set[str]) -> dict[str, Any]:
     repair_messages: list[dict[str, str]] = []
     if is_time_series_zip_member_corrupted(path):
         repair_messages.append(repair_time_series_sheet(path, "8760时序数据工作表压缩内容损坏"))
@@ -841,6 +853,8 @@ def replace_workbook_with_retry(source: Path, target: Path, attempts: int = 20, 
         attempts=attempts,
         delay_seconds=delay_seconds,
     )
+    file_cache.invalidate_path(source)
+    file_cache.invalidate_path(target)
 
 
 def backup_corrupted_workbook(path: Path) -> Path:
@@ -922,6 +936,14 @@ def column_name(index: int) -> str:
 
 
 def count_sheet_rows(path: Path, sheet_name: str) -> int:
+    return SHEET_ROW_COUNT_CACHE.get(
+        path,
+        lambda resolved: count_sheet_rows_uncached(resolved, sheet_name),
+        variant=("sheet_rows", sheet_name),
+    )
+
+
+def count_sheet_rows_uncached(path: Path, sheet_name: str) -> int:
     workbook = load_workbook(path, data_only=True, read_only=True)
     try:
         if sheet_name not in workbook.sheetnames:

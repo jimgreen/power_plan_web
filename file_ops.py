@@ -14,6 +14,8 @@ import time
 from pathlib import Path
 from typing import Callable, TypeVar
 
+import file_cache
+
 
 DEFAULT_ATTEMPTS = 20
 DEFAULT_DELAY_SECONDS = 0.1
@@ -50,6 +52,8 @@ def replace_file_with_retry(source: Path, target: Path, label: str) -> None:
         lambda: source.replace(target),
         f"{label}被占用，无法保存：{target.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
     )
+    file_cache.invalidate_path(source)
+    file_cache.invalidate_path(target)
 
 
 def save_workbook_with_retry(workbook, path: Path, label: str) -> None:
@@ -57,6 +61,7 @@ def save_workbook_with_retry(workbook, path: Path, label: str) -> None:
         lambda: workbook.save(path),
         f"{label}临时文件被占用，无法写入：{path.name}。请关闭正在打开的文件或预览窗口后重试。",
     )
+    file_cache.invalidate_path(path)
 
 
 def copy_file_with_retry(source: Path, target: Path, label: str) -> None:
@@ -64,6 +69,7 @@ def copy_file_with_retry(source: Path, target: Path, label: str) -> None:
         lambda: shutil.copy2(source, target),
         f"{label}被占用，无法复制到：{target.name}。请关闭正在打开的文件或预览窗口后重试。",
     )
+    file_cache.invalidate_path(target)
 
 
 def delete_file_if_exists_with_retry(path: Path, label: str) -> None:
@@ -76,6 +82,7 @@ def delete_file_with_retry(path: Path, label: str) -> None:
         lambda: path.unlink(),
         f"{label}被占用，无法删除：{path.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
     )
+    file_cache.invalidate_path(path)
 
 
 def replace_directory_with_retry(source: Path, target: Path, label: str) -> None:
@@ -83,6 +90,8 @@ def replace_directory_with_retry(source: Path, target: Path, label: str) -> None
         lambda: source.rename(target),
         f"{label}被占用，无法重命名：{source.name}。请关闭相关文件或资源管理器窗口后重试。",
     )
+    file_cache.invalidate_under(source)
+    file_cache.invalidate_under(target)
 
 
 def copy_directory_with_retry(source: Path, target: Path, label: str) -> None:
@@ -90,6 +99,7 @@ def copy_directory_with_retry(source: Path, target: Path, label: str) -> None:
         lambda: shutil.copytree(source, target),
         f"{label}被占用，无法复制到：{target.name}。请关闭相关文件或资源管理器窗口后重试。",
     )
+    file_cache.invalidate_under(target)
 
 
 def delete_directory_with_retry(path: Path, label: str) -> None:
@@ -97,3 +107,4 @@ def delete_directory_with_retry(path: Path, label: str) -> None:
         lambda: shutil.rmtree(path),
         f"{label}被占用，无法删除：{path.name}。请关闭相关文件或资源管理器窗口后重试。",
     )
+    file_cache.invalidate_under(path)

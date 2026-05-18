@@ -43,6 +43,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 import calculation_precheck
 import estimate
+import file_cache
 import file_ops
 import milp_solver
 import plan_optimizer
@@ -85,6 +86,13 @@ OPTIMIZATION_RESULT_WORKBOOK_NAME = "opt_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
 PLANNING_RESULT_SHEET_NAME = "规划结果"
 PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
+CSV_ROWS_CACHE = file_cache.FileCache("dashboard_csv_rows", max_entries=32)
+RESULT_WORKBOOK_HEALTH_CACHE = file_cache.FileCache("result_workbook_health", max_entries=256)
+EVALUATION_PLANNING_RESULT_CACHE = file_cache.FileCache("evaluation_planning_result", max_entries=256)
+RESULT_DISPLAY_PAYLOAD_CACHE = file_cache.FileCache("result_display_payload", max_entries=128)
+COMPARISON_WORKBOOK_CACHE = file_cache.FileCache("comparison_workbook", max_entries=128)
+LOAD_CURVE_TEMPLATE_CACHE = file_cache.FileCache("load_curve_templates", max_entries=8)
+STATIC_FILE_BYTES_CACHE = file_cache.FileCache("static_file_bytes", max_entries=256, copy_values=False)
 COMPARISON_CURVE_GROUPS = {
     "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
     "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
@@ -1239,6 +1247,8 @@ def replace_result_workbook_with_retry(source: Path, target: Path, attempts: int
         attempts=attempts,
         delay_seconds=delay_seconds,
     )
+    file_cache.invalidate_path(source)
+    file_cache.invalidate_path(target)
 
 
 def build_optimization_results_workbook(payload: dict) -> Workbook:
@@ -1444,6 +1454,10 @@ def selected_evaluation_result_filename(scheme: str, filename: str = "") -> str:
 
 
 def result_workbook_error_message(path: Path) -> str:
+    return RESULT_WORKBOOK_HEALTH_CACHE.get(path, result_workbook_error_message_uncached)
+
+
+def result_workbook_error_message_uncached(path: Path) -> str:
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
         workbook.close()
@@ -1481,6 +1495,14 @@ def read_evaluation_planning_result_rows_with_store(
     result_path = evaluation_result_path_with_store(store, scheme, filename)
     if not result_path.exists():
         return []
+    return EVALUATION_PLANNING_RESULT_CACHE.get(
+        result_path,
+        read_evaluation_planning_result_rows_from_path,
+        variant="planning_result_rows",
+    )
+
+
+def read_evaluation_planning_result_rows_from_path(result_path: Path) -> list[dict]:
     try:
         workbook = load_workbook(result_path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -1594,6 +1616,14 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
 
 
 def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> dict:
+    return COMPARISON_WORKBOOK_CACHE.get(
+        path,
+        lambda resolved: read_comparison_workbook_uncached(resolved, include_hourly_curves=include_hourly_curves),
+        variant=("comparison", bool(include_hourly_curves)),
+    )
+
+
+def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = True) -> dict:
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -1627,6 +1657,14 @@ def read_result_workbook_display_payload_for_response(path: Path, include_hourly
 
 
 def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool = True) -> dict:
+    return RESULT_DISPLAY_PAYLOAD_CACHE.get(
+        path,
+        lambda resolved: read_result_workbook_display_payload_uncached(resolved, include_hourly_curves=include_hourly_curves),
+        variant=("display", bool(include_hourly_curves)),
+    )
+
+
+def read_result_workbook_display_payload_uncached(path: Path, include_hourly_curves: bool = True) -> dict:
     try:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -2992,6 +3030,11 @@ def normalize_task_type_key(value: str) -> str:
     return ""
 
 
+def read_csv_rows_from_path(path: Path) -> list[dict[str, str]]:
+    with path.open("r", encoding="utf-8-sig", newline="") as file:
+        return [dict(row) for row in csv.DictReader(file)]
+
+
 class CsvDataSource:
     """Periodically reload dashboard data from CSV files."""
 
@@ -3015,8 +3058,7 @@ class CsvDataSource:
         path = self.data_dir / filename
         if not path.exists():
             return []
-        with path.open("r", encoding="utf-8-sig", newline="") as file:
-            return [dict(row) for row in csv.DictReader(file)]
+        return CSV_ROWS_CACHE.get(path, read_csv_rows_from_path, variant="dashboard_csv")
 
     def _by_page(self, rows: list[dict[str, str]], page: str) -> list[dict[str, str]]:
         return [row for row in rows if row.get("page") == page]
@@ -4367,8 +4409,16 @@ def save_load_curve_template(name: str, rows: object, overwrite: object = False)
 def read_load_curve_templates() -> list[dict]:
     if not LOAD_CURVE_TEMPLATE_PATH.exists():
         return []
+    return LOAD_CURVE_TEMPLATE_CACHE.get(
+        LOAD_CURVE_TEMPLATE_PATH,
+        read_load_curve_templates_from_path,
+        variant="load_curve_templates",
+    )
+
+
+def read_load_curve_templates_from_path(path: Path) -> list[dict]:
     try:
-        with LOAD_CURVE_TEMPLATE_PATH.open("r", encoding="utf-8-sig", newline="") as handle:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             headers = [header for header in (reader.fieldnames or []) if str(header or "").strip()]
             template_names = [header for header in headers if header != "hour_index"]
@@ -4891,7 +4941,8 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 return
 
         headers = _static_headers(path, authenticated_html=path.suffix == ".html")
-        self._send(HTTPStatus.OK, headers, path.read_bytes())
+        body = STATIC_FILE_BYTES_CACHE.get(path, lambda resolved: resolved.read_bytes(), variant="static_bytes")
+        self._send(HTTPStatus.OK, headers, body)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
