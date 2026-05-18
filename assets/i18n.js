@@ -422,6 +422,7 @@
     "暂无小时级曲线": "No hourly curves",
     "请选择小时级曲线": "Please select hourly curves",
     "正在加载小时级曲线": "Loading hourly curves",
+    "小时级曲线正在后台加载": "Hourly curves are loading in the background",
     "暂无日曲线": "No daily curve",
     "暂无可显示曲线": "No visible curves",
     "暂无曲线": "No curves",

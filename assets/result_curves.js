@@ -81,6 +81,7 @@
       hoverIndex: null,
       emptyText: options.emptyText || "暂无小时级曲线",
       promptText: options.promptText || "请选择小时级曲线",
+      loadingText: options.loadingText || "小时级曲线正在后台加载",
     };
 
     function setData(payload) {
@@ -180,6 +181,7 @@
           state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
           state.hoverIndex = null;
           render();
+          notifySelectionChange();
         });
       });
     }
@@ -207,6 +209,7 @@
           : [...selected, name];
       }
       render();
+      notifySelectionChange();
     }
 
     function selectedCurveNames() {
@@ -251,7 +254,10 @@
       const visibleSeries = allSeries.filter((item) => !isSeriesHidden(item.seriesId));
       const controls = renderRangeControls();
       if (!curveNames.length || !allSeries.length) {
-        target.innerHTML = `${controls}<div class="empty-summary">${escapeHtml(message || groupPromptText())}</div>`;
+        const emptyMessage = curveNames.length && !allSeries.length && state.activeGroup === "hourly"
+          ? state.loadingText
+          : message || groupPromptText();
+        target.innerHTML = `${controls}<div class="empty-summary">${escapeHtml(emptyMessage)}</div>`;
         bindRangeControls(target);
         return;
       }
@@ -836,8 +842,21 @@
       return Boolean(event?.ctrlKey || event?.shiftKey || event?.metaKey);
     }
 
+    function currentSelection() {
+      return {
+        group: state.activeGroup,
+        curves: selectedCurveNames(),
+      };
+    }
+
+    function notifySelectionChange() {
+      if (typeof options.onSelectionChange === "function") {
+        options.onSelectionChange(currentSelection());
+      }
+    }
+
     clear();
-    return { setData, clear, render };
+    return { setData, clear, render, getSelection: currentSelection };
   }
 
   function emptyGroups() {

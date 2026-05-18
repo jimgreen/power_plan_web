@@ -26,6 +26,11 @@ class FileOperationLockedError(PermissionError):
     """Raised when a filesystem write operation cannot finish after retries."""
 
 
+def invalidate_file_and_parent(path: Path) -> None:
+    file_cache.invalidate_path(path)
+    file_cache.invalidate_path(path.parent)
+
+
 def retry_file_operation(
     operation: Callable[[], T],
     message: str,
@@ -53,7 +58,7 @@ def replace_file_with_retry(source: Path, target: Path, label: str) -> None:
         f"{label}被占用，无法保存：{target.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
     )
     file_cache.invalidate_path(source)
-    file_cache.invalidate_path(target)
+    invalidate_file_and_parent(target)
 
 
 def save_workbook_with_retry(workbook, path: Path, label: str) -> None:
@@ -61,7 +66,7 @@ def save_workbook_with_retry(workbook, path: Path, label: str) -> None:
         lambda: workbook.save(path),
         f"{label}临时文件被占用，无法写入：{path.name}。请关闭正在打开的文件或预览窗口后重试。",
     )
-    file_cache.invalidate_path(path)
+    invalidate_file_and_parent(path)
 
 
 def copy_file_with_retry(source: Path, target: Path, label: str) -> None:
@@ -69,7 +74,7 @@ def copy_file_with_retry(source: Path, target: Path, label: str) -> None:
         lambda: shutil.copy2(source, target),
         f"{label}被占用，无法复制到：{target.name}。请关闭正在打开的文件或预览窗口后重试。",
     )
-    file_cache.invalidate_path(target)
+    invalidate_file_and_parent(target)
 
 
 def delete_file_if_exists_with_retry(path: Path, label: str) -> None:
@@ -82,7 +87,7 @@ def delete_file_with_retry(path: Path, label: str) -> None:
         lambda: path.unlink(),
         f"{label}被占用，无法删除：{path.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
     )
-    file_cache.invalidate_path(path)
+    invalidate_file_and_parent(path)
 
 
 def replace_directory_with_retry(source: Path, target: Path, label: str) -> None:

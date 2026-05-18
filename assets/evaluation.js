@@ -1,5 +1,8 @@
 const EVALUATION_SELECTION_STORAGE_KEY = "powerPlanLastEvaluationSelection";
 const COLLAPSED_PANEL_SIZE = 0;
+const HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8;
+const HOURLY_CURVE_PRELOAD_DELAY_MS = 300;
+const HOURLY_CURVE_PRELOAD_BATCH_DELAY_MS = 120;
 
 const state = {
   schemes: [],
@@ -21,6 +24,9 @@ const state = {
   evaluationCurveViewer: null,
   evaluationResultRailWidth: null,
   curveDataKey: "",
+  curvePayload: null,
+  loadedCurveKeys: new Set(),
+  hourlyCurvePreloadToken: 0,
   activeResultTab: "overview",
   isSwitchingResult: false,
   greenSeriesVisibility: null,
@@ -129,6 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
         chartId: "evaluationCurveChart",
         emptyText: "暂无小时级曲线",
         promptText: "请选择小时级曲线",
+        onSelectionChange: () => syncEvaluationCurveViewerIfHourlyActive(),
       })
     : null;
   bindResultTabs();
@@ -288,6 +295,9 @@ function clearEvaluationDisplayForSchemeSwitch(scheme = state.currentScheme) {
   renderCurrentScheme();
   state.planningResultRows = [];
   state.curveDataKey = "";
+  state.curvePayload = null;
+  state.loadedCurveKeys = new Set();
+  state.hourlyCurvePreloadToken += 1;
   state.greenDailyPoints = [];
   state.safetyDailyPoints = [];
   state.optimization = defaultOptimizationState(scheme);
@@ -331,6 +341,9 @@ function clearEvaluationResultDisplayForSwitch(filename = state.selectedResultFi
   }
   state.isSwitchingResult = true;
   state.curveDataKey = "";
+  state.curvePayload = null;
+  state.loadedCurveKeys = new Set();
+  state.hourlyCurvePreloadToken += 1;
   renderCurrentScheme();
   state.planningResultRows = [];
   state.greenDailyPoints = [];
@@ -557,6 +570,9 @@ async function manageEvaluationResult(action, extra = {}) {
     renderCurrentScheme();
     state.planningResultRows = data.planning_result_rows || state.planningResultRows || [];
     state.curveDataKey = "";
+    state.curvePayload = null;
+    state.loadedCurveKeys = new Set();
+    state.hourlyCurvePreloadToken += 1;
     renderEvaluationResults();
     renderEvaluationPlanningResultTable();
     if (state.activeResultTab === "curves") loadEvaluationCurveData().catch(showError);
@@ -707,16 +723,95 @@ async function loadEvaluationCurveData() {
   const key = `${state.currentScheme}/${state.selectedResultFile}/${runKey}`;
   if (state.curveDataKey === key) return;
   state.curveDataKey = key;
+  state.curvePayload = null;
+  state.loadedCurveKeys = new Set();
+  state.hourlyCurvePreloadToken += 1;
   state.evaluationCurveViewer.clear("正在加载小时级曲线");
   const items = [{ scheme: state.currentScheme, filename: state.selectedResultFile }];
   try {
-    const data = await api(`/api/comparison/data?items=${encodeURIComponent(JSON.stringify(items))}`);
+    const data = await api(`/api/comparison/data?mode=summary&items=${encodeURIComponent(JSON.stringify(items))}`);
     if (key !== state.curveDataKey) return;
+    state.curvePayload = data;
     state.evaluationCurveViewer.setData(data);
+    scheduleEvaluationHourlyCurvePreload(items, key, data.curves || [], state.hourlyCurvePreloadToken);
   } catch (error) {
     state.curveDataKey = "";
+    state.curvePayload = null;
+    state.loadedCurveKeys = new Set();
+    state.hourlyCurvePreloadToken += 1;
     state.evaluationCurveViewer.clear(error.payload?.message || error.message || "暂无小时级曲线");
   }
+}
+
+function scheduleEvaluationHourlyCurvePreload(items, key, curveNames, token) {
+  const names = uniqueCurveNames(curveNames);
+  if (!items.length || !names.length) return;
+  window.setTimeout(() => {
+    preloadEvaluationHourlyCurves(items, key, names, token).catch(showError);
+  }, HOURLY_CURVE_PRELOAD_DELAY_MS);
+}
+
+async function preloadEvaluationHourlyCurves(items, key, curveNames, token) {
+  for (let index = 0; index < curveNames.length; index += HOURLY_CURVE_PRELOAD_BATCH_SIZE) {
+    if (state.curveDataKey !== key || state.hourlyCurvePreloadToken !== token) return;
+    const batch = curveNames
+      .slice(index, index + HOURLY_CURVE_PRELOAD_BATCH_SIZE)
+      .filter((name) => !state.loadedCurveKeys.has(curveLoadKey(key, "hourly", name)));
+    if (!batch.length) continue;
+    const data = await api(
+      `/api/comparison/data?mode=curves&group=hourly&curves=${encodeURIComponent(JSON.stringify(batch))}&items=${encodeURIComponent(JSON.stringify(items))}`,
+    );
+    if (state.curveDataKey !== key || state.hourlyCurvePreloadToken !== token) return;
+    state.curvePayload = mergeCurvePayload(state.curvePayload || {}, data);
+    batch.forEach((name) => state.loadedCurveKeys.add(curveLoadKey(key, "hourly", name)));
+    syncEvaluationCurveViewerIfHourlyActive();
+    if (index + HOURLY_CURVE_PRELOAD_BATCH_SIZE < curveNames.length) {
+      await delay(HOURLY_CURVE_PRELOAD_BATCH_DELAY_MS);
+    }
+  }
+}
+
+function syncEvaluationCurveViewerIfHourlyActive() {
+  const selection = state.evaluationCurveViewer?.getSelection?.();
+  if (selection?.group !== "hourly" || !state.curvePayload) return;
+  state.evaluationCurveViewer.setData(state.curvePayload);
+}
+
+function uniqueCurveNames(curveNames) {
+  return Array.from(new Set((curveNames || []).map((name) => String(name || "").trim()).filter(Boolean)));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function curveLoadKey(itemsKey, group, name) {
+  return `${itemsKey}|${group}|${name}`;
+}
+
+function mergeCurvePayload(base, data) {
+  const nextGroups = { ...(base.curve_groups || {}) };
+  Object.entries(data.curve_groups || {}).forEach(([groupKey, groupData]) => {
+    const current = nextGroups[groupKey] || { title: groupData?.title || "", curves: [], series: {} };
+    const curves = [...(current.curves || [])];
+    (groupData?.curves || []).forEach((name) => {
+      if (!curves.includes(name)) curves.push(name);
+    });
+    const series = { ...(current.series || {}) };
+    Object.entries(groupData?.series || {}).forEach(([curveName, curveSeries]) => {
+      series[curveName] = Array.isArray(curveSeries) ? curveSeries : [];
+    });
+    nextGroups[groupKey] = { title: groupData?.title || current.title || "", curves, series };
+  });
+  const hourly = nextGroups.hourly || { curves: [], series: {} };
+  return {
+    ...base,
+    items: data.items?.length ? data.items : base.items || [],
+    curve_groups: nextGroups,
+    annual_table: data.annual_table?.length ? data.annual_table : base.annual_table || [],
+    curves: hourly.curves || [],
+    series: hourly.series || {},
+  };
 }
 
 function updateOptimizationActions(data = state.optimization || {}) {

@@ -18,6 +18,7 @@ sys.path.insert(0, str(WEB_ROOT))
 
 import server
 import estimate
+import file_cache
 import milp_solver
 import plan_optimizer
 
@@ -375,6 +376,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("Importing load file", i18n_script)
         self.assertIn("Load file imported", i18n_script)
         self.assertIn("8760-point load curve", i18n_script)
+        self.assertIn("Hourly curves are loading in the background", i18n_script)
         self.assertIn("Save Template", i18n_script)
         self.assertIn("Template name already exists", i18n_script)
         for translated_label in (
@@ -958,6 +960,55 @@ class PowerPlanServerTest(unittest.TestCase):
             server.OPTIMIZATION_RUNTIME = original_optimization_runtime
             server.EVALUATION_RUNTIME = original_evaluation_runtime
             server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_tasks_result_file_listing_is_cached_until_scheme_directory_changes(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_tasks_result_cache"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_health_check = server.result_workbook_error_message
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        file_cache.clear_all()
+
+        def write_result(filename: str) -> None:
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "规划结果"
+            sheet.append(["设备类型", "设计台数"])
+            sheet.append(["柴发", 1])
+            workbook.save(planning_root / "方案A" / filename)
+            workbook.close()
+
+        health_checked: list[str] = []
+
+        def counted_health_check(path: Path) -> str:
+            health_checked.append(path.name)
+            return original_health_check(path)
+
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            write_result("case_results.xlsx")
+            server.result_workbook_error_message = counted_health_check
+
+            first = server.build_task_list(schedule=False)
+            first_checks = len(health_checked)
+            second = server.build_task_list(schedule=False)
+
+            self.assertTrue(any(item["task_type_key"] == "evaluation" and item["result"] == "case_results.xlsx" for item in first))
+            self.assertEqual(first, second)
+            self.assertGreater(first_checks, 0)
+            self.assertEqual(len(health_checked), first_checks)
+
+            write_result("case_2_results.xlsx")
+            third = server.build_task_list(schedule=False)
+
+            self.assertGreater(len(health_checked), first_checks)
+            self.assertTrue(any(item["task_type_key"] == "evaluation" and item["result"] == "case_2_results.xlsx" for item in third))
+        finally:
+            server.result_workbook_error_message = original_health_check
+            server.PLANNING_STORE = original_store
+            file_cache.clear_all()
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_status_apis_include_task_control_state_for_page_sync(self):
@@ -3203,12 +3254,58 @@ class PowerPlanServerTest(unittest.TestCase):
 
             self.assertEqual(status, 200)
             self.assertNotIn("调度结果", read_sheets)
-            self.assertEqual(payload["curve_groups"]["hourly"]["curves"], [])
-            self.assertEqual(payload["curves"], [])
+            self.assertIn("负荷", payload["curve_groups"]["hourly"]["curves"])
+            self.assertEqual(payload["curve_groups"]["hourly"]["series"], {})
+            self.assertIn("负荷", payload["curves"])
+            self.assertEqual(payload["series"], {})
             self.assertIn("负荷总电量", payload["curve_groups"]["daily"]["curves"])
             self.assertEqual(payload["tables"]["capacity"][0]["设备类型"], "柴发")
         finally:
             server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_comparison_curve_mode_returns_only_requested_curves(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_comparison_curve_slice"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        file_cache.clear_all()
+        try:
+            server.PLANNING_STORE.create_scheme("方案A")
+            result_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            planning_sheet = workbook.active
+            planning_sheet.title = "规划结果"
+            planning_sheet.append(["设备类型", "设计台数", "单台容量"])
+            planning_sheet.append(["柴发", 2, 100])
+            workbook.create_sheet("供能分析").append(["指标", "数值", "单位"])
+            workbook.create_sheet("安全评估").append(["指标", "数值", "单位"])
+            dispatch_sheet = workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "负荷", "风电出力", "光伏出力"])
+            dispatch_sheet.append([1, 80, 20, 30])
+            dispatch_sheet.append([2, 81, 21, 31])
+            workbook.save(result_path)
+            workbook.close()
+
+            items = [{"scheme": "方案A", "filename": "case_results.xlsx"}]
+            status, headers, body = server.handle_api_path(
+                "/api/comparison/data?mode=curves&group=hourly&curves="
+                + quote(json.dumps(["负荷"], ensure_ascii=False))
+                + "&items="
+                + quote(json.dumps(items, ensure_ascii=False))
+            )
+            payload = json.loads(body.decode("utf-8"))
+
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["curve_groups"]["hourly"]["curves"], ["负荷"])
+            self.assertEqual(set(payload["curve_groups"]["hourly"]["series"].keys()), {"负荷"})
+            self.assertEqual(payload["curve_groups"]["hourly"]["series"]["负荷"][0]["points"][0]["y"], 80)
+            self.assertNotIn("风电出力", payload["curve_groups"]["hourly"]["series"])
+            self.assertEqual(payload["tables"], {"capacity": [], "energy": [], "safety": []})
+        finally:
+            server.PLANNING_STORE = original_store
+            file_cache.clear_all()
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_snapshot_reads_summary_from_csv_files(self):
@@ -4407,7 +4504,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("saveOptimizationLogs", script)
         self.assertIn("optimizationCurveViewer", script)
         self.assertIn("loadOptimizationCurveData", script)
+        self.assertIn("scheduleOptimizationHourlyCurvePreload", script)
+        self.assertIn("preloadOptimizationHourlyCurves", script)
+        self.assertIn("syncOptimizationCurveViewerIfHourlyActive", script)
         self.assertIn("/api/comparison/data", script)
+        self.assertIn("mode=summary", script)
+        self.assertIn("mode=curves", script)
+        self.assertIn("loadedCurveKeys", script)
+        self.assertIn("hourlyCurvePreloadToken", script)
+        self.assertIn("HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8", script)
+        self.assertIn("mergeCurvePayload", script)
+        self.assertIn("onSelectionChange", script)
         self.assertIn("ResultCurveViewer.create", script)
         self.assertIn("暂无小时级曲线", script)
         self.assertIn("请选择小时级曲线", script)
@@ -4440,6 +4547,8 @@ class PowerPlanServerTest(unittest.TestCase):
         clear_scheme_script = script.split("function clearOptimizationDisplayForSchemeSwitch", 1)[1].split("function renderOptimizationSwitchingState", 1)[0]
         for snippet in (
             "window.clearInterval(state.pollTimer)",
+            "state.curvePayload = null",
+            "state.loadedCurveKeys = new Set()",
             "state.greenDailyPoints = []",
             "state.safetyDailyPoints = []",
             "state.optimization = defaultOptimizationState(scheme)",
@@ -4557,7 +4666,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('state.activeResultTab === "curves"', script)
         self.assertIn("evaluationCurveViewer", script)
         self.assertIn("loadEvaluationCurveData", script)
+        self.assertIn("scheduleEvaluationHourlyCurvePreload", script)
+        self.assertIn("preloadEvaluationHourlyCurves", script)
+        self.assertIn("syncEvaluationCurveViewerIfHourlyActive", script)
         self.assertIn("/api/comparison/data", script)
+        self.assertIn("mode=summary", script)
+        self.assertIn("mode=curves", script)
+        self.assertIn("loadedCurveKeys", script)
+        self.assertIn("hourlyCurvePreloadToken", script)
+        self.assertIn("HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8", script)
+        self.assertIn("mergeCurvePayload", script)
+        self.assertIn("onSelectionChange", script)
         self.assertIn("ResultCurveViewer.create", script)
         self.assertIn("暂无小时级曲线", script)
         self.assertIn("请选择小时级曲线", script)
@@ -4575,6 +4694,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("clearEvaluationResultDisplayForSwitch(state.selectedResultFile)", change_handler)
         clear_switch_script = script.split("function clearEvaluationResultDisplayForSwitch", 1)[1].split("function renderEvaluationSwitchingState", 1)[0]
         for snippet in (
+            "state.curvePayload = null",
+            "state.loadedCurveKeys = new Set()",
             "state.planningResultRows = []",
             "state.greenDailyPoints = []",
             "state.safetyDailyPoints = []",
@@ -4589,6 +4710,8 @@ class PowerPlanServerTest(unittest.TestCase):
             "window.clearInterval(state.pollTimer)",
             "state.resultFiles = []",
             "state.selectedResultFile = \"\"",
+            "state.curvePayload = null",
+            "state.loadedCurveKeys = new Set()",
             "state.planningResultRows = []",
             "state.greenDailyPoints = []",
             "state.safetyDailyPoints = []",
@@ -4688,12 +4811,21 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("年度统计", html)
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
-        self.assertIn("assets/comparison.js?v=20260518-annual-bars", html)
+        self.assertIn("assets/comparison.js?v=20260518-hourly-preload", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
+        self.assertIn("loadResultFilesForTabs(state.tabs)", script)
+        self.assertIn("resultsByScheme", script)
         self.assertIn("/api/comparison/data", script)
         self.assertIn("mode=summary", script)
+        self.assertIn("mode=curves", script)
+        self.assertIn("scheduleComparisonHourlyCurvePreload", script)
+        self.assertIn("preloadComparisonHourlyCurves", script)
+        self.assertIn("syncComparisonCurveViewerIfHourlyActive", script)
+        self.assertIn("loadedCurveKeys", script)
+        self.assertIn("hourlyCurvePreloadToken", script)
+        self.assertIn("HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8", script)
         self.assertIn("MAX_TABS = 8", script)
         self.assertIn("addComparisonTab", script)
         self.assertIn("renderAddComparisonTab", script)
@@ -4913,6 +5045,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("event?.ctrlKey || event?.shiftKey", result_curve_script)
         self.assertIn("curveRangeFilter", result_curve_script)
         self.assertIn("renderRangeControls", result_curve_script)
+        self.assertIn("loadingText", result_curve_script)
+        self.assertIn("小时级曲线正在后台加载", result_curve_script)
         self.assertIn("hiddenSeriesByGroup", result_curve_script)
         self.assertIn("renderCurveLegend", result_curve_script)
         self.assertIn("renderCurveLegend(allSeries, visibleSeries)", result_curve_script)

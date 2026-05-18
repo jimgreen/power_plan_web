@@ -2,6 +2,9 @@ const MAX_TABS = 8;
 const COMPARISON_TABS_STORAGE_KEY = "powerPlanLastComparisonTabs";
 const COLLAPSED_PANEL_SIZE = 0;
 const MIN_COMPARISON_TABLE_FR = 0;
+const HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8;
+const HOURLY_CURVE_PRELOAD_DELAY_MS = 300;
+const HOURLY_CURVE_PRELOAD_BATCH_DELAY_MS = 120;
 
 const state = {
   schemes: [],
@@ -15,6 +18,8 @@ const state = {
   tableColumnWidths: [1, 1, 1],
   hoverIndex: null,
   curveDataKey: "",
+  loadedCurveKeys: new Set(),
+  hourlyCurvePreloadToken: 0,
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -25,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
         emptyText: "暂无小时级曲线",
         promptText: "请选择小时级曲线",
         enableAnnualBarComparison: true,
+        onSelectionChange: () => syncComparisonCurveViewerIfHourlyActive(),
       })
     : null;
   bindAddTab();
@@ -105,10 +111,25 @@ async function loadSchemes() {
     }
     if (!tab.scheme && state.schemes.length) tab.scheme = state.schemes[0].name;
   });
-  await Promise.all(state.tabs.map(loadResultFilesForTab));
+  await loadResultFilesForTabs(state.tabs);
   rememberComparisonTabs();
   renderComparisonTabs();
   await refreshComparisonData();
+}
+
+async function loadResultFilesForTabs(tabs) {
+  const schemes = [...new Set(tabs.map((tab) => tab.scheme).filter(Boolean))];
+  const resultsByScheme = new Map();
+  await Promise.all(
+    schemes.map(async (scheme) => {
+      const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(scheme)}`);
+      resultsByScheme.set(scheme, data);
+    }),
+  );
+  tabs.forEach((tab) => {
+    const data = resultsByScheme.get(tab.scheme) || {};
+    applyResultFilesToTab(tab, data.results || [], data.selected || "");
+  });
 }
 
 async function loadResultFilesForTab(tab) {
@@ -118,9 +139,13 @@ async function loadResultFilesForTab(tab) {
     return;
   }
   const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(tab.scheme)}${tab.result ? `&filename=${encodeURIComponent(tab.result)}` : ""}`);
-  tab.results = data.results || [];
+  applyResultFilesToTab(tab, data.results || [], data.selected || "");
+}
+
+function applyResultFilesToTab(tab, results, selected = "") {
+  tab.results = results || [];
   const readableNames = tab.results.filter((item) => item.readable !== false).map((item) => item.name);
-  tab.result = data.selected || (readableNames.includes(tab.result) ? tab.result : readableNames[0] || "");
+  tab.result = readableNames.includes(tab.result) ? tab.result : selected || readableNames[0] || "";
 }
 
 function bindAddTab() {
@@ -286,6 +311,8 @@ async function refreshComparisonData() {
   const items = state.tabs.filter((tab) => tab.scheme && tab.result).map((tab) => ({ scheme: tab.scheme, filename: tab.result }));
   const requestKey = JSON.stringify(items);
   state.curveDataKey = requestKey;
+  state.loadedCurveKeys = new Set();
+  state.hourlyCurvePreloadToken += 1;
   if (!items.length) {
     state.comparison = { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} };
   } else {
@@ -299,12 +326,12 @@ async function refreshComparisonData() {
   }
   state.hoverIndex = null;
   renderComparisonTables();
-  state.comparisonCurveViewer?.clear("正在加载小时级曲线");
+  state.comparisonCurveViewer?.setData(state.comparison);
   if (!state.comparisonCurveViewer) {
     renderCurveNameList();
     renderComparisonCurveChart();
   }
-  loadComparisonCurveData(items).catch(showError);
+  scheduleComparisonHourlyCurvePreload(items, requestKey, state.comparison.curves || []);
 }
 
 function clearComparisonDisplayForSwitch() {
@@ -312,6 +339,8 @@ function clearComparisonDisplayForSwitch() {
   state.selectedCurves = [];
   state.hoverIndex = null;
   state.curveDataKey = "";
+  state.loadedCurveKeys = new Set();
+  state.hourlyCurvePreloadToken += 1;
   renderComparisonTables();
   state.comparisonCurveViewer?.clear("正在加载小时级曲线");
   if (!state.comparisonCurveViewer) {
@@ -320,31 +349,84 @@ function clearComparisonDisplayForSwitch() {
   }
 }
 
-async function loadComparisonCurveData(items = state.tabs.filter((tab) => tab.scheme && tab.result).map((tab) => ({ scheme: tab.scheme, filename: tab.result }))) {
-  if (!items.length) {
-    state.comparisonCurveViewer?.clear("暂无小时级曲线");
-    return;
-  }
-  const key = JSON.stringify(items);
-  if (state.curveDataKey !== key) return;
-  state.curveDataKey = key;
-  try {
-    const data = await api(`/api/comparison/data?items=${encodeURIComponent(key)}`);
-    if (state.curveDataKey !== key) return;
-    state.comparison = { ...state.comparison, curve_groups: data.curve_groups || {}, curves: data.curves || [], series: data.series || {}, annual_table: data.annual_table || state.comparison.annual_table || [] };
-    state.selectedCurves = state.selectedCurves.filter((name) => state.comparison.curves.includes(name));
-    if (!state.selectedCurves.length && state.comparison.curves.length) {
-      state.selectedCurves = [state.comparison.curves[0]];
+function scheduleComparisonHourlyCurvePreload(items, key, curveNames) {
+  const token = state.hourlyCurvePreloadToken;
+  const names = uniqueCurveNames(curveNames);
+  if (!items.length || !names.length) return;
+  window.setTimeout(() => {
+    preloadComparisonHourlyCurves(items, key, names, token).catch(showError);
+  }, HOURLY_CURVE_PRELOAD_DELAY_MS);
+}
+
+async function preloadComparisonHourlyCurves(items, key, curveNames, token) {
+  for (let index = 0; index < curveNames.length; index += HOURLY_CURVE_PRELOAD_BATCH_SIZE) {
+    if (state.curveDataKey !== key || state.hourlyCurvePreloadToken !== token) return;
+    const batch = curveNames
+      .slice(index, index + HOURLY_CURVE_PRELOAD_BATCH_SIZE)
+      .filter((name) => !state.loadedCurveKeys.has(curveLoadKey(key, "hourly", name)));
+    if (!batch.length) continue;
+    const data = await api(
+      `/api/comparison/data?mode=curves&group=hourly&curves=${encodeURIComponent(JSON.stringify(batch))}&items=${encodeURIComponent(key)}`,
+    );
+    if (state.curveDataKey !== key || state.hourlyCurvePreloadToken !== token) return;
+    mergeComparisonCurvePayload(data);
+    batch.forEach((name) => state.loadedCurveKeys.add(curveLoadKey(key, "hourly", name)));
+    syncComparisonCurveViewerIfHourlyActive();
+    if (index + HOURLY_CURVE_PRELOAD_BATCH_SIZE < curveNames.length) {
+      await delay(HOURLY_CURVE_PRELOAD_BATCH_DELAY_MS);
     }
-    state.comparisonCurveViewer?.setData(state.comparison);
-    if (!state.comparisonCurveViewer) {
-      renderCurveNameList();
-      renderComparisonCurveChart();
-    }
-  } catch (error) {
-    if (state.curveDataKey === key) state.curveDataKey = "";
-    throw error;
   }
+}
+
+function syncComparisonCurveViewerIfHourlyActive() {
+  const selection = state.comparisonCurveViewer?.getSelection?.();
+  if (selection?.group !== "hourly") return;
+  state.comparisonCurveViewer?.setData(state.comparison);
+  if (!state.comparisonCurveViewer) {
+    renderCurveNameList();
+    renderComparisonCurveChart();
+  }
+}
+
+function uniqueCurveNames(curveNames) {
+  return Array.from(new Set((curveNames || []).map((name) => String(name || "").trim()).filter(Boolean)));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function curveLoadKey(itemsKey, group, name) {
+  return `${itemsKey}|${group}|${name}`;
+}
+
+function mergeComparisonCurvePayload(data) {
+  const nextGroups = { ...(state.comparison.curve_groups || {}) };
+  Object.entries(data.curve_groups || {}).forEach(([groupKey, groupData]) => {
+    const current = nextGroups[groupKey] || { title: groupData?.title || "", curves: [], series: {} };
+    const curves = [...(current.curves || [])];
+    (groupData?.curves || []).forEach((name) => {
+      if (!curves.includes(name)) curves.push(name);
+    });
+    const series = { ...(current.series || {}) };
+    Object.entries(groupData?.series || {}).forEach(([curveName, curveSeries]) => {
+      series[curveName] = Array.isArray(curveSeries) ? curveSeries : [];
+    });
+    nextGroups[groupKey] = {
+      title: groupData?.title || current.title || "",
+      curves,
+      series,
+    };
+  });
+  const hourly = nextGroups.hourly || { curves: [], series: {} };
+  state.comparison = {
+    ...state.comparison,
+    items: data.items?.length ? data.items : state.comparison.items,
+    curve_groups: nextGroups,
+    curves: hourly.curves || [],
+    series: hourly.series || {},
+    annual_table: data.annual_table?.length ? data.annual_table : state.comparison.annual_table || [],
+  };
 }
 
 function renderComparisonTables() {
@@ -411,6 +493,7 @@ function toggleSelectedCurve(name, options = {}) {
   }
   renderCurveNameList();
   renderComparisonCurveChart();
+  syncComparisonCurveViewerIfHourlyActive();
 }
 
 function selectedCurveNames() {

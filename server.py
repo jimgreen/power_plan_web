@@ -89,9 +89,11 @@ PLANNING_RESULT_SHEET_NAME = "规划结果"
 PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
 CSV_ROWS_CACHE = file_cache.FileCache("dashboard_csv_rows", max_entries=32)
 RESULT_WORKBOOK_HEALTH_CACHE = file_cache.FileCache("result_workbook_health", max_entries=256)
+TASK_RESULT_FILE_LIST_CACHE = file_cache.FileCache("task_result_file_list", max_entries=256)
 EVALUATION_PLANNING_RESULT_CACHE = file_cache.FileCache("evaluation_planning_result", max_entries=256)
 RESULT_DISPLAY_PAYLOAD_CACHE = file_cache.FileCache("result_display_payload", max_entries=128)
 COMPARISON_WORKBOOK_CACHE = file_cache.FileCache("comparison_workbook", max_entries=128)
+COMPARISON_CURVE_SLICE_CACHE = file_cache.FileCache("comparison_curve_slice", max_entries=512)
 LOAD_CURVE_TEMPLATE_CACHE = file_cache.FileCache("load_curve_templates", max_entries=8)
 STATIC_FILE_BYTES_CACHE = file_cache.FileCache("static_file_bytes", max_entries=256, copy_values=False)
 COMPARISON_CURVE_GROUPS = {
@@ -1447,6 +1449,33 @@ def list_evaluation_result_files(scheme: str) -> list[dict]:
     return files
 
 
+def list_evaluation_result_files_for_tasks(scheme: str) -> list[dict]:
+    folder = PLANNING_STORE.scheme_dir(scheme)
+    if not folder.exists():
+        raise FileNotFoundError(f"方案不存在: {scheme}")
+    return TASK_RESULT_FILE_LIST_CACHE.get(folder, list_evaluation_result_files_for_tasks_uncached)
+
+
+def list_evaluation_result_files_for_tasks_uncached(folder: Path) -> list[dict]:
+    """List result files for the task page once per unchanged scheme folder.
+
+    The task page refreshes frequently.  Cache this directory-derived list by
+    the scheme directory signature so repeated polls do not rescan every
+    ``*_results.xlsx`` file or reopen workbooks for health checks.
+    """
+
+    files = []
+    for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
+        if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
+            item = {"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""}
+            error_message = result_workbook_error_message(path)
+            if error_message:
+                item["readable"] = False
+                item["message"] = error_message
+            files.append(item)
+    return files
+
+
 def selected_evaluation_result_filename(scheme: str, filename: str = "") -> str:
     files = list_evaluation_result_files(scheme)
     names = [item["name"] for item in files]
@@ -1556,15 +1585,34 @@ def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, di
         query_params = parse_qs(query)
         items_text = query_params.get("items", ["[]"])[0]
         mode = str(query_params.get("mode", ["full"])[0] or "full").strip().lower()
+        curve_group = str(query_params.get("group", ["hourly"])[0] or "hourly").strip().lower()
+        curve_names = parse_comparison_curve_names(query_params.get("curves", ["[]"])[0])
         include_hourly_curves = mode not in {"summary", "tables", "light"}
         items = json.loads(items_text or "[]")
         if not isinstance(items, list):
             raise ValueError("对比项必须为列表")
+        if mode in {"curve", "curves"}:
+            return _json_response(build_comparison_curve_payload(items[:8], curve_group, curve_names[:32]))
         return _json_response(build_comparison_payload(items[:8], include_hourly_curves=include_hourly_curves))
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
     except (ValueError, json.JSONDecodeError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+
+def parse_comparison_curve_names(text: str) -> list[str]:
+    try:
+        parsed = json.loads(text or "[]")
+    except json.JSONDecodeError:
+        parsed = [item.strip() for item in str(text or "").split(",")]
+    if not isinstance(parsed, list):
+        raise ValueError("曲线名称必须为列表")
+    names = []
+    for item in parsed:
+        name = str(item or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def build_comparison_payload(items: list[dict], include_hourly_curves: bool = True) -> dict:
@@ -1619,6 +1667,58 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
     }
 
 
+def build_comparison_curve_payload(items: list[dict], curve_group: str, curve_names: list[str]) -> dict:
+    if curve_group not in COMPARISON_CURVE_GROUPS:
+        raise ValueError("曲线类型不合法")
+    selected_items: list[dict] = []
+    curve_groups = empty_comparison_curve_groups()
+    selected_curve_names = [str(name or "").strip() for name in curve_names if str(name or "").strip()]
+    if not selected_curve_names:
+        hourly_group = curve_groups["hourly"]
+        return {
+            "items": [],
+            "tables": {"capacity": [], "energy": [], "safety": []},
+            "curve_groups": curve_groups,
+            "annual_table": [],
+            "curves": hourly_group["curves"],
+            "series": hourly_group["series"],
+        }
+
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        scheme = str(item.get("scheme", "")).strip()
+        filename = str(item.get("filename", "")).strip()
+        if not scheme or not filename:
+            continue
+        result_path = evaluation_result_path(scheme, filename)
+        if not result_path.exists():
+            raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+        result_display_name = result_display_name_from_filename(filename)
+        label = f"{scheme} / {result_display_name}"
+        selected_items.append(
+            {
+                "id": f"item-{index + 1}",
+                "scheme": scheme,
+                "filename": filename,
+                "result_display_name": result_display_name,
+                "label": label,
+            }
+        )
+        source_group = read_comparison_curve_group(result_path, curve_group, selected_curve_names)
+        append_comparison_curve_groups(curve_groups, {curve_group: source_group}, label, scheme, filename)
+
+    hourly_group = curve_groups["hourly"]
+    return {
+        "items": selected_items,
+        "tables": {"capacity": [], "energy": [], "safety": []},
+        "curve_groups": curve_groups,
+        "annual_table": [],
+        "curves": hourly_group["curves"],
+        "series": hourly_group["series"],
+    }
+
+
 def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> dict:
     return COMPARISON_WORKBOOK_CACHE.get(
         path,
@@ -1636,7 +1736,7 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
         curve_groups = {}
         for key, config in COMPARISON_CURVE_GROUPS.items():
             if key == "hourly" and not include_hourly_curves:
-                curve_groups[key] = {}
+                curve_groups[key] = read_curve_sheet_headers(workbook, config["sheet"])
             else:
                 curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
         return {
@@ -1647,6 +1747,29 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
             "curve_groups": curve_groups,
             "curves": curve_groups["hourly"],
         }
+    finally:
+        workbook.close()
+
+
+def read_comparison_curve_group(path: Path, curve_group: str, curve_names: list[str]) -> dict[str, list[dict]]:
+    selected_names = tuple(name for name in curve_names if name)
+    return COMPARISON_CURVE_SLICE_CACHE.get(
+        path,
+        lambda resolved: read_comparison_curve_group_uncached(resolved, curve_group, selected_names),
+        variant=("comparison_curve_slice", curve_group, selected_names),
+    )
+
+
+def read_comparison_curve_group_uncached(path: Path, curve_group: str, curve_names: tuple[str, ...]) -> dict[str, list[dict]]:
+    config = COMPARISON_CURVE_GROUPS.get(curve_group)
+    if not config:
+        raise ValueError("曲线类型不合法")
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"结果文件无法读取: {path.name}") from exc
+    try:
+        return read_curve_sheet(workbook, config["sheet"], config["limit"], selected_names=set(curve_names))
     finally:
         workbook.close()
 
@@ -1877,14 +2000,15 @@ def append_comparison_curve_groups(target_groups: dict, source_groups: dict, lab
         for name, points in source_group.items():
             if name not in target_group["curves"]:
                 target_group["curves"].append(name)
-            target_group["series"].setdefault(name, []).append(
-                {
-                    "label": label,
-                    "scheme": scheme,
-                    "filename": filename,
-                    "points": points,
-                }
-            )
+            if points:
+                target_group["series"].setdefault(name, []).append(
+                    {
+                        "label": label,
+                        "scheme": scheme,
+                        "filename": filename,
+                        "points": points,
+                    }
+                )
 
 
 def read_named_sheet_rows(workbook, sheet_name: str) -> list[dict]:
@@ -1917,7 +2041,7 @@ def read_dispatch_curves(workbook) -> dict[str, list[dict]]:
     return read_curve_sheet(workbook, "调度结果", 8760)
 
 
-def read_curve_sheet(workbook, sheet_name: str, limit: int | None = None) -> dict[str, list[dict]]:
+def read_curve_sheet_headers(workbook, sheet_name: str) -> dict[str, list[dict]]:
     if sheet_name not in workbook.sheetnames:
         return {}
     sheet = workbook[sheet_name]
@@ -1928,6 +2052,26 @@ def read_curve_sheet(workbook, sheet_name: str, limit: int | None = None) -> dic
         display_name = result_curve_display_name(header)
         if header and header not in COMPARISON_CURVE_X_HEADERS and display_name:
             curves[display_name] = []
+    return curves
+
+
+def read_curve_sheet(
+    workbook,
+    sheet_name: str,
+    limit: int | None = None,
+    selected_names: set[str] | None = None,
+) -> dict[str, list[dict]]:
+    curves = read_curve_sheet_headers(workbook, sheet_name)
+    if not curves:
+        return {}
+    if selected_names is not None:
+        wanted = {str(name or "").strip() for name in selected_names if str(name or "").strip()}
+        curves = {name: points for name, points in curves.items() if name in wanted}
+        if not curves:
+            return {}
+    sheet = workbook[sheet_name]
+    rows_iter = sheet.iter_rows(values_only=True)
+    headers = [str(value or "").strip() for value in next(rows_iter, [])]
     for row_index, row in enumerate(rows_iter, start=1):
         if limit is not None and row_index > limit:
             break
@@ -2800,7 +2944,7 @@ def safe_list_schemes_for_tasks() -> list[dict]:
 
 def safe_list_results_for_tasks(scheme: str) -> list[dict]:
     try:
-        return list_evaluation_result_files(scheme)
+        return list_evaluation_result_files_for_tasks(scheme)
     except Exception:
         return []
 
