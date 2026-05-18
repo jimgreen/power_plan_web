@@ -89,7 +89,6 @@ PLANNING_RESULT_SHEET_NAME = "规划结果"
 PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
 CSV_ROWS_CACHE = file_cache.FileCache("dashboard_csv_rows", max_entries=32)
 RESULT_WORKBOOK_HEALTH_CACHE = file_cache.FileCache("result_workbook_health", max_entries=256)
-TASK_RESULT_FILE_LIST_CACHE = file_cache.FileCache("task_result_file_list", max_entries=256)
 EVALUATION_PLANNING_RESULT_CACHE = file_cache.FileCache("evaluation_planning_result", max_entries=256)
 RESULT_DISPLAY_PAYLOAD_CACHE = file_cache.FileCache("result_display_payload", max_entries=128)
 COMPARISON_WORKBOOK_CACHE = file_cache.FileCache("comparison_workbook", max_entries=128)
@@ -533,6 +532,19 @@ class OptimizationRuntime:
             self._reap_process_unlocked()
             return self._payload_unlocked(include_hourly_curves=include_hourly_curves)
 
+    def task_snapshot(self) -> dict:
+        """Return the lightweight state needed by the task-concurrency page.
+
+        Task polling only needs process state and the latest log.  Avoid
+        reading the generated result workbook here; those workbooks can be
+        large and are displayed by the solver/evaluation pages on demand.
+        """
+
+        with self._lock:
+            self._drain_events_unlocked()
+            self._reap_process_unlocked()
+            return self._task_payload_unlocked()
+
     def apply(self, action: str, scheme: str = "") -> dict:
         target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
         if action == "clear_logs":
@@ -719,6 +731,21 @@ class OptimizationRuntime:
             "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
+            "logs": list(self._logs),
+        }
+
+    def _task_payload_unlocked(self) -> dict:
+        result_path = optimization_result_workbook_path(self.scheme)
+        result_file = self.result_file or (str(result_path) if result_path.exists() else "")
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "progress": self.progress,
+            "result_file": result_file,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "logs": list(self._logs),
         }
 
@@ -1453,26 +1480,10 @@ def list_evaluation_result_files_for_tasks(scheme: str) -> list[dict]:
     folder = PLANNING_STORE.scheme_dir(scheme)
     if not folder.exists():
         raise FileNotFoundError(f"方案不存在: {scheme}")
-    return TASK_RESULT_FILE_LIST_CACHE.get(folder, list_evaluation_result_files_for_tasks_uncached)
-
-
-def list_evaluation_result_files_for_tasks_uncached(folder: Path) -> list[dict]:
-    """List result files for the task page once per unchanged scheme folder.
-
-    The task page refreshes frequently.  Cache this directory-derived list by
-    the scheme directory signature so repeated polls do not rescan every
-    ``*_results.xlsx`` file or reopen workbooks for health checks.
-    """
-
     files = []
     for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
         if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
-            item = {"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""}
-            error_message = result_workbook_error_message(path)
-            if error_message:
-                item["readable"] = False
-                item["message"] = error_message
-            files.append(item)
+            files.append({"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""})
     return files
 
 
@@ -2383,6 +2394,14 @@ class EvaluationRuntime:
             self._reap_process_unlocked()
             return self._payload_unlocked(include_hourly_curves=include_hourly_curves)
 
+    def task_snapshot(self) -> dict:
+        """Return task-list state without opening the result workbook."""
+
+        with self._lock:
+            self._drain_events_unlocked()
+            self._reap_process_unlocked()
+            return self._task_payload_unlocked()
+
     def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
         target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
         if action == "clear_logs":
@@ -2595,6 +2614,28 @@ class EvaluationRuntime:
             "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
+            "logs": list(self._logs),
+        }
+
+    def _task_payload_unlocked(self) -> dict:
+        result_file = self.result_file
+        if not result_file and self.result_filename:
+            try:
+                result_path = evaluation_result_path(self.scheme, self.result_filename)
+                if result_path.exists():
+                    result_file = str(result_path)
+            except ValueError:
+                result_file = ""
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "progress": self.progress,
+            "result_filename": self.result_filename,
+            "result_file": result_file,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "logs": list(self._logs),
         }
 
@@ -2856,7 +2897,7 @@ def build_task_list(schedule: bool = True) -> list[dict]:
         if not scheme:
             continue
         runtime = OPTIMIZATION_RUNTIME.runtimes().get(scheme)
-        state = runtime.snapshot(include_hourly_curves=False) if runtime else default_task_runtime_state(scheme)
+        state = runtime.task_snapshot() if runtime else default_task_runtime_state(scheme)
         task = task_from_runtime_state(
             "optimization",
             state,
@@ -2875,7 +2916,7 @@ def build_task_list(schedule: bool = True) -> list[dict]:
             key = f"{scheme}\0{result_name}"
             eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
             eval_state = (
-                eval_runtime.snapshot(include_hourly_curves=False)
+                eval_runtime.task_snapshot()
                 if eval_runtime
                 else default_task_runtime_state(scheme, result_filename=result_name)
             )
@@ -2890,7 +2931,7 @@ def build_task_list(schedule: bool = True) -> list[dict]:
             tasks[eval_task["id"]] = eval_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
-        state = runtime.snapshot(include_hourly_curves=False)
+        state = runtime.task_snapshot()
         task = task_from_runtime_state(
             "optimization",
             state,
@@ -2906,7 +2947,7 @@ def build_task_list(schedule: bool = True) -> list[dict]:
         queued = TASK_SCHEDULER.is_queued("evaluation", scheme, result)
         if result == OPTIMIZATION_RESULT_WORKBOOK_NAME and runtime.status != "运行中" and not queued:
             continue
-        state = runtime.snapshot(include_hourly_curves=False)
+        state = runtime.task_snapshot()
         task = task_from_runtime_state(
             "evaluation",
             state,

@@ -936,7 +936,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertTrue(any(item["task_type"] == "规划计算" and item["scheme"] == "方案A" for item in task_list["tasks"]))
             self.assertTrue(any(item["task_type"] == "方案评估" and item["result"] == "case_results.xlsx" for item in task_list["tasks"]))
             self.assertFalse(any(item["task_type"] == "方案评估" and item["result"] == "opt_results.xlsx" for item in task_list["tasks"]))
-            self.assertFalse(any(item["task_type"] == "方案评估" and item["result"] == "broken_results.xlsx" for item in task_list["tasks"]))
+            self.assertTrue(any(item["task_type"] == "方案评估" and item["result"] == "broken_results.xlsx" for item in task_list["tasks"]))
             type_order = [item["task_type_key"] for item in task_list["tasks"]]
             self.assertEqual(type_order, sorted(type_order, key=lambda value: 0 if value == "optimization" else 1))
             for task in task_list["tasks"]:
@@ -985,14 +985,13 @@ class PowerPlanServerTest(unittest.TestCase):
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
 
-    def test_tasks_result_file_listing_is_cached_until_scheme_directory_changes(self):
+    def test_tasks_result_file_listing_checks_existence_without_opening_or_caching(self):
         planning_root = WEB_ROOT / "tests" / "tmp_tasks_result_cache"
         shutil.rmtree(planning_root, ignore_errors=True)
         planning_root.mkdir(parents=True)
         original_store = server.PLANNING_STORE
         original_health_check = server.result_workbook_error_message
         server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
-        file_cache.clear_all()
 
         def write_result(filename: str) -> None:
             workbook = Workbook()
@@ -1003,35 +1002,29 @@ class PowerPlanServerTest(unittest.TestCase):
             workbook.save(planning_root / "方案A" / filename)
             workbook.close()
 
-        health_checked: list[str] = []
-
-        def counted_health_check(path: Path) -> str:
-            health_checked.append(path.name)
-            return original_health_check(path)
+        def forbidden_health_check(path: Path) -> str:
+            raise AssertionError(f"任务并发刷新不应打开结果文件: {path.name}")
 
         try:
             server.PLANNING_STORE.create_scheme("方案A")
             write_result("case_results.xlsx")
-            server.result_workbook_error_message = counted_health_check
+            (planning_root / "方案A" / "broken_results.xlsx").write_text("not an xlsx workbook", encoding="utf-8")
+            server.result_workbook_error_message = forbidden_health_check
 
             first = server.build_task_list(schedule=False)
-            first_checks = len(health_checked)
             second = server.build_task_list(schedule=False)
 
             self.assertTrue(any(item["task_type_key"] == "evaluation" and item["result"] == "case_results.xlsx" for item in first))
+            self.assertTrue(any(item["task_type_key"] == "evaluation" and item["result"] == "broken_results.xlsx" for item in first))
             self.assertEqual(first, second)
-            self.assertGreater(first_checks, 0)
-            self.assertEqual(len(health_checked), first_checks)
 
             write_result("case_2_results.xlsx")
             third = server.build_task_list(schedule=False)
 
-            self.assertGreater(len(health_checked), first_checks)
             self.assertTrue(any(item["task_type_key"] == "evaluation" and item["result"] == "case_2_results.xlsx" for item in third))
         finally:
             server.result_workbook_error_message = original_health_check
             server.PLANNING_STORE = original_store
-            file_cache.clear_all()
             shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_status_apis_include_task_control_state_for_page_sync(self):
@@ -1155,6 +1148,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("renderEvaluationSchemeFilter", script)
         self.assertIn("filteredTasksForSection", script)
         self.assertIn('taskState.evaluationSchemeFilter', script)
+        self.assertIn("lastRenderedTaskSignature", script)
+        self.assertIn("function applyTasksPayload", script)
+        self.assertIn("signature === taskState.lastRenderedTaskSignature", script)
         self.assertIn("const hadEvaluationSchemeFilter = Boolean(taskState.evaluationSchemeFilter)", script)
         self.assertIn("if (!hadEvaluationSchemeFilter || filterReset || !taskState.evaluationSchemeFilter)", script)
         self.assertIn("return filterReset", script)
@@ -4835,7 +4831,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
         self.assertIn("assets/comparison.js?v=20260518-hourly-preload", html)
-        self.assertIn("assets/result_curves.js?v=20260518-annual-legend3", html)
+        self.assertIn("assets/result_curves.js?v=20260518-legend-toggle1", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
@@ -5096,6 +5092,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("result-curve-legend-stat", result_curve_script)
         self.assertIn("curveStats(item)", result_curve_script)
         self.assertIn("bindCurveLegendToggles", result_curve_script)
+        self.assertIn("resultLegendToggleBound", result_curve_script)
+        self.assertIn('target.addEventListener("click"', result_curve_script)
+        self.assertIn('event.target.closest("[data-result-series-toggle]")', result_curve_script)
         self.assertIn("data-result-stats-panel", result_curve_script)
         self.assertIn("data-result-stats-menu", result_curve_script)
         self.assertIn("startStatsPanelDrag", result_curve_script)

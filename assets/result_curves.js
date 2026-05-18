@@ -809,17 +809,19 @@
     }
 
     function bindCurveLegendToggles(target) {
-      target.querySelectorAll("[data-result-series-toggle]").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          if (state.suppressStatsPanelClick) {
-            event.preventDefault();
-            event.stopPropagation();
-            return;
-          }
+      if (!target || target.dataset.resultLegendToggleBound === "true") return;
+      target.dataset.resultLegendToggleBound = "true";
+      target.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-result-series-toggle]");
+        if (!button || !target.contains(button)) return;
+        if (state.suppressStatsPanelClick) {
           event.preventDefault();
           event.stopPropagation();
-          toggleSeriesVisibility(button.dataset.resultSeriesToggle || "");
-        });
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSeriesVisibility(button.dataset.resultSeriesToggle || "");
       });
     }
 
@@ -868,6 +870,7 @@
 
     function startStatsPanelDrag(event) {
       if (event.button !== undefined && event.button !== 0) return;
+      if (event.target.closest("[data-result-series-toggle]")) return;
       const panel = event.currentTarget;
       const frame = panel.closest(".comparison-chart-frame");
       if (!panel || !frame || event.target.closest("[data-result-stats-menu]")) return;

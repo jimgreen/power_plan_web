@@ -5,6 +5,7 @@ const taskState = {
   heightSyncFrame: 0,
   evaluationSchemeFilter: "",
   manualOptimizationTaskHeight: null,
+  lastRenderedTaskSignature: "",
 };
 const TASK_SECTION_MIN_HEIGHT = 140;
 const TASK_COLUMN_GROUP = `
@@ -52,11 +53,20 @@ async function loadTasks(options = {}) {
   if (!options.silent) setTaskError("");
   try {
     const payload = await taskApi("/api/tasks");
-    taskState.tasks = Array.isArray(payload.tasks) ? payload.tasks : [];
-    renderTasks();
+    applyTasksPayload(payload);
   } finally {
     taskState.loading = false;
   }
+}
+
+function applyTasksPayload(payload, options = {}) {
+  const nextTasks = Array.isArray(payload.tasks) ? payload.tasks : [];
+  const signature = JSON.stringify(nextTasks);
+  if (!options.force && signature === taskState.lastRenderedTaskSignature) return false;
+  taskState.tasks = nextTasks;
+  taskState.lastRenderedTaskSignature = signature;
+  renderTasks();
+  return true;
 }
 
 function renderTasks() {
@@ -190,8 +200,7 @@ async function handleTaskAction(event) {
         result: button.dataset.result,
       }),
     });
-    taskState.tasks = Array.isArray(payload.tasks) ? payload.tasks : taskState.tasks;
-    renderTasks();
+    applyTasksPayload(payload, { force: true });
   } catch (error) {
     showTaskError(error);
     await loadTasks({ silent: true }).catch(() => null);
