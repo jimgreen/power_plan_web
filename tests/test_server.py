@@ -231,7 +231,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-theme-bg-audit", page_html)
+            self.assertIn("assets/planning.css?v=20260518-overview-slim", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -4497,8 +4497,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('setMetric("evaluationRisk", byLabel.get("绿电占比"))', script)
         self.assertNotIn("evaluationScoreMetric", script)
         self.assertNotIn("evaluationRiskMetric", script)
-        for tab in ("评估日志", "评估概览", "经济性指标", "安全性指标", "曲线展示"):
+        for tab in ("评估日志", "结果概览", "经济性指标", "安全性指标", "曲线展示"):
             self.assertIn(tab, html)
+        self.assertNotIn("评估概览", html)
         self.assertIn('id="evaluationLogViewToggle" class="result-tab" data-result-tab="logs"', html)
         self.assertIn('id="evaluationCurveViewToggle" class="result-tab" data-result-tab="curves"', html)
         self.assertIn('id="evaluationLogPanel" class="result-panel optimization-log-result-panel" data-result-panel="logs"', html)
@@ -5007,7 +5008,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("cursor: row-resize", css)
         self.assertIn("--optimization-log-height", css)
 
-    def test_optimization_overview_frontend_renders_two_tables_and_composition_bars(self):
+    def test_optimization_overview_frontend_renders_planning_table_and_composition_bars(self):
         script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
         evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
@@ -5028,11 +5029,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("return number / 10000", script)
         self.assertIn("bindOverviewColumnResizeHandles", script)
         self.assertIn('data-overview-column-resize="left-middle"', script)
-        self.assertIn('data-overview-column-resize="middle-right"', script)
+        self.assertNotIn('data-overview-column-resize="middle-right"', script)
         self.assertIn("--overview-left-column-width", script)
-        self.assertIn("--overview-middle-column-width", script)
+        self.assertNotIn("--overview-middle-column-width", script)
         self.assertIn("bindOverviewColumnResizeHandles", evaluation_script)
         self.assertIn('data-overview-column-resize="left-middle"', evaluation_script)
+        self.assertNotIn('data-overview-column-resize="middle-right"', evaluation_script)
         self.assertIn("composition-bar-track", script)
         self.assertIn("composition-bar-segment", script)
         self.assertIn("overview_disks", script)
@@ -5053,8 +5055,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("formatOverviewCompositionNumber", evaluation_script)
         self.assertIn("composition-bar-track", evaluation_script)
         self.assertIn("optimization-overview-grid", script)
-        for title in ("规划结果", "规划年指标"):
-            self.assertIn(title, script)
+        self.assertIn("规划结果", script)
+        self.assertNotIn("规划年指标", script)
+        self.assertNotIn("规划年指标", evaluation_script)
         self.assertNotIn("规划年效益", script)
         for label in ("运行成本", "建设成本", "容量构成", "柴发容量", "风电容量", "光伏容量", "电储能容量", "燃料电池容量", "柴发电量", "新能源电量"):
             self.assertIn(label, script)
@@ -5063,7 +5066,7 @@ class PowerPlanServerTest(unittest.TestCase):
         for field in ("名称", "设计台数", "指标", "数值", "单位"):
             self.assertIn(field, script)
         self.assertIn(".optimization-overview-grid", css)
-        self.assertIn("grid-template-columns: minmax(0, var(--overview-left-column-width, 1fr)) 10px minmax(0, var(--overview-middle-column-width, 0.95fr)) 10px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--overview-left-column-width, 1fr)) 10px minmax(0, 1.35fr)", css)
         self.assertIn(".overview-column-resize-handle", css)
         self.assertIn("cursor: col-resize", css)
         self.assertIn(".overview-table-card", css)
@@ -5361,7 +5364,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertIn("grid-template-columns: minmax(0, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr)", css)
         self.assertIn("grid-template-rows: minmax(108px, auto) minmax(0, var(--comparison-table-height, 30vh)) 12px minmax(0, 1fr)", css)
-        self.assertIn("grid-template-columns: minmax(0, var(--overview-left-column-width, 1fr)) 10px minmax(0, var(--overview-middle-column-width, 0.95fr)) 10px minmax(0, 1fr)", css)
+        self.assertIn("grid-template-columns: minmax(0, var(--overview-left-column-width, 1fr)) 10px minmax(0, 1.35fr)", css)
         self.assertIn("grid-template-columns: minmax(0, var(--green-result-table-width, 34%)) 10px minmax(0, 1fr)", css)
         self.assertIn("grid-template-columns: minmax(0, var(--safety-result-table-width, 34%)) 10px minmax(0, 1fr)", css)
         comparison_curve_board_css = css.split(".comparison-curve-board {", 1)[1].split("}", 1)[0]

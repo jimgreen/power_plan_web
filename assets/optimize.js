@@ -10,7 +10,6 @@ const state = {
   greenResultTableWidth: null,
   safetyResultTableWidth: null,
   overviewLeftColumnWidth: null,
-  overviewMiddleColumnWidth: null,
   greenDailyPoints: [],
   safetyDailyPoints: [],
   greenChartSize: null,
@@ -299,7 +298,6 @@ function renderOptimizationSwitchingState(scheme, base = defaultOptimizationStat
     results: {
       overview_tables: [
         { title: "规划结果", rows: [] },
-        { title: "规划年指标", rows: [] },
       ],
       overview_disks: defaultOverviewDisks(),
       green: [],
@@ -470,7 +468,6 @@ function setMetric(id, item) {
 function defaultOverviewTables() {
   return [
     { title: "规划结果", rows: [{ "名称": "-", "设计台数": "-", "单台容量": "-", "总容量": "-", "单位": "" }] },
-    { title: "规划年指标", rows: [{ "指标": "-", "数值": "-", "单位": "" }] },
   ];
 }
 
@@ -522,13 +519,12 @@ function renderOverviewTables(tables, disks) {
   const panel = document.getElementById("overviewResult");
   if (!panel) return;
   const safeTables = tables.length ? tables : defaultOverviewTables();
+  const planningTable = safeTables.find((table) => table?.title === "规划结果") || safeTables[0] || defaultOverviewTables()[0];
   panel.innerHTML = `
     <div class="optimization-overview-grid">
-      ${renderOverviewTableCard(safeTables[0] || defaultOverviewTables()[0])}
+      ${renderOverviewTableCard(planningTable)}
       <div class="overview-column-resize-handle" data-overview-column-resize="left-middle" role="separator" tabindex="0" aria-label="调整左侧规划结果和中间构成图宽度" aria-orientation="vertical"></div>
       ${renderOverviewCompositionBars(disks?.length ? disks : defaultOverviewDisks())}
-      <div class="overview-column-resize-handle" data-overview-column-resize="middle-right" role="separator" tabindex="0" aria-label="调整中间构成图和右侧年指标宽度" aria-orientation="vertical"></div>
-      ${renderOverviewTableCard(safeTables[1] || defaultOverviewTables()[1])}
     </div>`;
 }
 
@@ -1401,21 +1397,13 @@ function bindOverviewColumnResizeHandles() {
 function applyOverviewColumnWidth(mode, width, handle) {
   const bounds = overviewColumnWidthBounds(handle);
   const safeWidth = Math.min(Math.max(Number(width) || bounds.min, bounds.min), bounds.max);
-  if (mode === "middle-right") {
-    state.overviewMiddleColumnWidth = Math.round(safeWidth);
-    document.documentElement.style.setProperty("--overview-middle-column-width", `${Math.round(safeWidth)}px`);
-  } else {
-    state.overviewLeftColumnWidth = Math.round(safeWidth);
-    document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(safeWidth)}px`);
-  }
+  state.overviewLeftColumnWidth = Math.round(safeWidth);
+  document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(safeWidth)}px`);
 }
 
 function currentOverviewColumnWidth(mode, handle) {
-  const card = mode === "middle-right"
-    ? handle?.previousElementSibling
-    : handle?.previousElementSibling;
-  const stateValue = mode === "middle-right" ? state.overviewMiddleColumnWidth : state.overviewLeftColumnWidth;
-  return stateValue || card?.getBoundingClientRect().width || 320;
+  const card = handle?.previousElementSibling;
+  return state.overviewLeftColumnWidth || card?.getBoundingClientRect().width || 320;
 }
 
 function overviewColumnWidthBounds(handle) {
@@ -1423,7 +1411,7 @@ function overviewColumnWidthBounds(handle) {
   if (!grid) return { min: COLLAPSED_PANEL_SIZE, max: 720 };
   const handleWidth = handle?.getBoundingClientRect().width || 10;
   const gap = cssNumber(window.getComputedStyle(grid).columnGap || window.getComputedStyle(grid).gap);
-  const max = grid.clientWidth - handleWidth * 2 - gap * 4;
+  const max = grid.clientWidth - handleWidth - gap * 2;
   return { min: COLLAPSED_PANEL_SIZE, max: Math.max(COLLAPSED_PANEL_SIZE, max) };
 }
 
