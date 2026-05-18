@@ -6468,6 +6468,7 @@ body[data-home-theme]:not([data-home-theme="default"]) button:disabled {
 body[data-home-theme]:not([data-home-theme="default"]) .evaluation-result-rail,
 body[data-home-theme]:not([data-home-theme="default"]) .evaluation-planning-result-panel,
 body[data-home-theme]:not([data-home-theme="default"]) .comparison-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .editor-header,
 body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats section,
 body[data-home-theme]:not([data-home-theme="default"]) .summary-section,
 body[data-home-theme]:not([data-home-theme="default"]) .overview-table-card,
@@ -6532,6 +6533,11 @@ body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats s
 body[data-home-theme]:not([data-home-theme="default"]) .comparison-curve-stats strong {
   color: var(--theme-text);
   text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .editor-header {
+  border-bottom-color: var(--theme-panel-line);
+  background: color-mix(in srgb, var(--theme-control-bg) 36%, transparent);
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .current-scheme strong,
@@ -6695,8 +6701,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope b
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-segment span {
   padding: 1px 5px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.72);
-  color: #ffffff;
+  background: color-mix(in srgb, var(--theme-control-bg) 78%, rgba(0, 0, 0, 0.38));
+  color: var(--theme-control-text);
   text-shadow: none;
 }
 

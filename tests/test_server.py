@@ -1,4 +1,4 @@
-﻿import json
+import json
 import shutil
 import sys
 import time
@@ -216,6 +216,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("background: var(--theme-active-bg)", planning_css)
         self.assertIn("color: var(--theme-active-text)", planning_css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .scheme-item,', planning_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .editor-header,', planning_css)
+        self.assertIn("background: color-mix(in srgb, var(--theme-control-bg) 36%, transparent)", planning_css)
+        self.assertIn("background: color-mix(in srgb, var(--theme-control-bg) 78%, rgba(0, 0, 0, 0.38))", planning_css)
         self.assertIn("background: color-mix(in srgb, var(--theme-control-bg) 56%, transparent)", planning_css)
         self.assertIn('.screen[data-home-theme="bright"] .home-title', html)
         self.assertIn("0 -1px 0 rgba(3, 18, 32, 0.74)", html)
@@ -228,7 +231,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-curve-list-theme", page_html)
+            self.assertIn("assets/planning.css?v=20260518-theme-bg-audit", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
