@@ -232,7 +232,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-overview-slim", page_html)
+            self.assertIn("assets/planning.css?v=20260518-stats-fit", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -246,6 +246,17 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".composition-bar-summary span,", css)
         self.assertIn(".composition-bar-legend div {", css)
         self.assertIn("color: var(--hud-muted-strong)", css)
+        self.assertIn("--chart-tooltip-bg:", css)
+        self.assertIn("--chart-tooltip-text:", css)
+        self.assertIn("--chart-tooltip-muted:", css)
+        self.assertIn("--chart-tooltip-border:", css)
+        self.assertIn("background: var(--chart-tooltip-bg", css)
+        self.assertIn("color: var(--chart-tooltip-text", css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .chart-tip,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .chart-hover-tooltip,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .comparison-chart-tooltip,', css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .annual-chart-tooltip {', css)
+        self.assertIn("color: var(--chart-tooltip-strong) !important", css)
         self.assertIn(".time-series-import-chart text,", css)
         self.assertIn(".load-generator-preview text,", css)
         self.assertIn("#timeChart text,", css)
@@ -523,6 +534,12 @@ class PowerPlanServerTest(unittest.TestCase):
             '"电网向下调节能力": "Grid Down Regulation Capability"',
             '"电网向上调节需求": "Grid Up Regulation Requirement"',
             '"电网向下调节需求": "Grid Down Regulation Requirement"',
+            '"曲线显示和统计信息": "Curve Legend and Statistics"',
+            '"统计信息菜单": "Statistics Menu"',
+            '"隐藏统计信息": "Hide Statistics"',
+            '"显示统计信息": "Show Statistics"',
+            '"恢复统计位置": "Reset Statistics Position"',
+            '"拖动可移动统计信息，右键显示菜单": "Drag to move statistics; right-click for menu"',
         ):
             self.assertIn(exact_mapping, i18n_script)
         self.assertNotIn("新能源N-1功率缺口", i18n_script)
@@ -539,12 +556,18 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("const translated = translateText(node.nodeValue, language);", i18n_script)
         self.assertIn("if (translated !== node.nodeValue) node.nodeValue = translated;", i18n_script)
         self.assertIn("filter(([key]) => key.length > 1)", i18n_script)
+        self.assertIn("captureFitTextBaselines", i18n_script)
+        self.assertIn("fitTranslatedText", i18n_script)
+        self.assertIn("i18n-fit-text", i18n_script)
+        self.assertIn("element.style.maxWidth", i18n_script)
+        self.assertIn("shrinkElementFontToFit", i18n_script)
         self.assertIn("data-admin-only", planning_html)
         self.assertIn("data-admin-only", optimize_html)
         self.assertIn("data-admin-only", index_html)
         self.assertIn(".user-status", css)
         self.assertIn(".language-switch", css)
         self.assertIn(".auth-shell > .language-switch", css)
+        self.assertIn(".i18n-fit-text", css)
         user_status_css = css.split(".user-status {", 1)[1].split("}", 1)[0]
         self.assertIn("border: 0", user_status_css)
         self.assertIn(".auth-card", css)
@@ -5053,6 +5076,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("result-curve-legend-stat", result_curve_script)
         self.assertIn("curveStats(item)", result_curve_script)
         self.assertIn("bindCurveLegendToggles", result_curve_script)
+        self.assertIn("data-result-stats-panel", result_curve_script)
+        self.assertIn("data-result-stats-menu", result_curve_script)
+        self.assertIn("startStatsPanelDrag", result_curve_script)
+        self.assertIn("showStatsContextMenu", result_curve_script)
+        self.assertIn("隐藏统计信息", result_curve_script)
+        self.assertIn("显示统计信息", result_curve_script)
+        self.assertIn("恢复统计位置", result_curve_script)
         self.assertIn("toggleSeriesVisibility", result_curve_script)
         self.assertIn("isSeriesHidden", result_curve_script)
         self.assertIn("data-result-series-toggle", result_curve_script)
@@ -5076,6 +5106,10 @@ class PowerPlanServerTest(unittest.TestCase):
         result_curve_legend_css = css.split(".result-curve-legend {", 1)[1].split("}", 1)[0]
         self.assertIn("position: absolute", result_curve_legend_css)
         self.assertIn("pointer-events: auto", result_curve_legend_css)
+        self.assertIn("cursor: grab", result_curve_legend_css)
+        self.assertIn(".result-curve-legend.dragging", css)
+        self.assertIn(".result-curve-legend.stats-hidden .result-curve-legend-stat", css)
+        self.assertIn(".result-curve-context-menu", css)
         self.assertIn(".result-curve-legend button", css)
         self.assertIn(".result-curve-legend button.is-hidden", css)
         self.assertIn(".result-curve-legend-label", css)

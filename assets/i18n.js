@@ -618,6 +618,12 @@
     "暂无方案，请新建方案。": "No scenarios. Please create one.",
     "未加载": "Not Loaded",
     "未选择文件": "No file selected",
+    "曲线显示和统计信息": "Curve Legend and Statistics",
+    "统计信息菜单": "Statistics Menu",
+    "隐藏统计信息": "Hide Statistics",
+    "显示统计信息": "Show Statistics",
+    "恢复统计位置": "Reset Statistics Position",
+    "拖动可移动统计信息，右键显示菜单": "Drag to move statistics; right-click for menu",
     "（无法读取）": "(Unreadable)",
     "请求后台失败，请检查 WEB 服务是否正常运行，或查看服务器错误日志。": "Failed to reach the backend. Please check whether the WEB service is running or review the server error log.",
     "后台处理失败:": "Backend processing failed:",
@@ -626,6 +632,28 @@
   const translations = new Map(Object.entries(dictionary).map(([zh, en]) => [normalizeText(zh), en]));
   const reverseTranslations = new Map(Object.entries(dictionary).map(([zh, en]) => [normalizeText(en), zh]));
   const ignoredTags = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "SVG", "CANVAS"]);
+  const fitTextSelector = [
+    ".brand",
+    ".home-title",
+    ".main-nav a",
+    ".main-nav button",
+    "button",
+    ".tab",
+    ".summary-tab",
+    ".result-tab",
+    ".log-view-tab",
+    ".curve-button",
+    ".curve-group-tab",
+    ".month-tab",
+    ".annual-view-toggle",
+    ".comparison-add-tab",
+    ".device-filter",
+    ".device-jump a",
+    ".task-status-pill",
+    ".language-switch span",
+    ".user-status span",
+  ].join(",");
+  const fitTextMinFontSize = 5;
   let observer = null;
   let translating = false;
   let dialogsPatched = false;
@@ -678,11 +706,81 @@
   function translateDocument(language) {
     translating = true;
     try {
+      if (language === "en") captureFitTextBaselines(document.body);
+      else resetFittedText(document.body);
       translateTextNodes(document.body, language);
       translateAttributes(document.body, language);
+      if (language === "en") fitTranslatedText(document.body);
+      else resetFittedText(document.body);
     } finally {
       translating = false;
     }
+  }
+
+  function captureFitTextBaselines(root) {
+    fitTextElements(root).forEach((element) => {
+      if (element.dataset.i18nFitBaseWidth && element.dataset.i18nFitBaseFont) return;
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 16 || rect.height < 8) return;
+      const computed = getComputedStyle(element);
+      element.dataset.i18nFitBaseWidth = String(Math.ceil(rect.width));
+      element.dataset.i18nFitBaseFont = String(parseFloat(computed.fontSize) || 14);
+    });
+  }
+
+  function fitTranslatedText(root) {
+    const elements = fitTextElements(root);
+    elements.forEach(applyFitToElement);
+    requestAnimationFrame(() => elements.forEach(applyFitToElement));
+  }
+
+  function fitTextElements(root) {
+    const scope = root || document.body;
+    const elements = [];
+    if (scope.matches?.(fitTextSelector) && isFitTextCandidate(scope)) elements.push(scope);
+    scope.querySelectorAll?.(fitTextSelector).forEach((element) => {
+      if (isFitTextCandidate(element)) elements.push(element);
+    });
+    return Array.from(new Set(elements));
+  }
+
+  function isFitTextCandidate(element) {
+    if (!element || isIgnored(element)) return false;
+    const text = normalizeText(element.textContent || "");
+    if (text.length <= 1) return false;
+    const tagName = element.tagName;
+    if (tagName === "SELECT" || tagName === "INPUT" || tagName === "TEXTAREA") return false;
+    return true;
+  }
+
+  function applyFitToElement(element) {
+    const baseWidth = Number(element.dataset.i18nFitBaseWidth);
+    const baseFont = Number(element.dataset.i18nFitBaseFont);
+    if (!Number.isFinite(baseWidth) || baseWidth <= 0 || !Number.isFinite(baseFont) || baseFont <= 0) return;
+    element.classList.add("i18n-fit-text");
+    element.style.maxWidth = `${Math.ceil(baseWidth)}px`;
+    element.style.fontSize = `${baseFont}px`;
+    shrinkElementFontToFit(element, baseFont);
+  }
+
+  function shrinkElementFontToFit(element, baseFont) {
+    let currentFont = baseFont;
+    for (let index = 0; index < 8; index += 1) {
+      const width = Math.max(element.clientWidth, 1);
+      if (element.scrollWidth <= width + 1) return;
+      const ratio = Math.min(1, Math.max(0.45, (width - 2) / Math.max(element.scrollWidth, 1)));
+      currentFont = Math.max(fitTextMinFontSize, Math.floor(currentFont * ratio * 100) / 100);
+      element.style.fontSize = `${currentFont}px`;
+      if (currentFont <= fitTextMinFontSize && element.scrollWidth > width + 1) return;
+    }
+  }
+
+  function resetFittedText(root) {
+    fitTextElements(root).forEach((element) => {
+      element.classList.remove("i18n-fit-text");
+      element.style.maxWidth = "";
+      element.style.fontSize = "";
+    });
   }
 
   function translateTextNodes(root, language) {

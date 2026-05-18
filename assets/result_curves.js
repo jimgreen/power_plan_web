@@ -78,6 +78,10 @@
       activeGroup: "hourly",
       annualViewMode: "table",
       annualGridSplit: { column: 50, row: 50 },
+      statsVisible: true,
+      statsPosition: null,
+      statsDrag: null,
+      suppressStatsPanelClick: false,
       hoverIndex: null,
       emptyText: options.emptyText || "暂无小时级曲线",
       promptText: options.promptText || "请选择小时级曲线",
@@ -294,9 +298,11 @@
           ${renderCurveLegend(allSeries, visibleSeries)}
           ${visibleSeries.length ? "" : '<div class="result-curve-empty-overlay">暂无可显示曲线</div>'}
           <div class="comparison-chart-tooltip" data-result-curve-tooltip hidden></div>
+          ${renderStatsContextMenu()}
         </div>`;
       bindRangeControls(target);
       bindCurveLegendToggles(target);
+      bindStatsPanelInteractions(target);
       if (visibleSeries.length) bindChartHover({ target, margin, plotWidth, series: visibleSeries });
     }
 
@@ -691,7 +697,9 @@
 
     function renderCurveLegend(series, visibleSeries) {
       const visibleIds = new Set((visibleSeries || []).map((item) => item.seriesId));
-      return `<div class="result-curve-legend" aria-label="曲线显示切换">${series
+      const hiddenClass = state.statsVisible ? "" : " stats-hidden";
+      const style = statsPanelStyle();
+      return `<div class="result-curve-legend${hiddenClass}" data-result-stats-panel aria-label="曲线显示和统计信息" title="拖动可移动统计信息，右键显示菜单"${style ? ` style="${style}"` : ""}>${series
         .map((item) => {
           const hidden = isSeriesHidden(item.seriesId);
           const style = seriesLineStyle(item);
@@ -711,14 +719,143 @@
         .join("")}</div>`;
     }
 
+    function renderStatsContextMenu() {
+      const label = state.statsVisible ? "隐藏统计信息" : "显示统计信息";
+      return `<div class="result-curve-context-menu" data-result-stats-menu hidden role="menu" aria-label="统计信息菜单">
+        <button type="button" data-result-stats-action="toggle" role="menuitem">${label}</button>
+        <button type="button" data-result-stats-action="reset" role="menuitem">恢复统计位置</button>
+      </div>`;
+    }
+
+    function statsPanelStyle() {
+      if (!state.statsPosition) return "";
+      const left = Math.min(Math.max(Number(state.statsPosition.left) || 0, 0), 100);
+      const top = Math.min(Math.max(Number(state.statsPosition.top) || 0, 0), 100);
+      return `left:${left.toFixed(3)}%; top:${top.toFixed(3)}%; right:auto;`;
+    }
+
     function bindCurveLegendToggles(target) {
       target.querySelectorAll("[data-result-series-toggle]").forEach((button) => {
         button.addEventListener("click", (event) => {
+          if (state.suppressStatsPanelClick) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           event.preventDefault();
           event.stopPropagation();
           toggleSeriesVisibility(button.dataset.resultSeriesToggle || "");
         });
       });
+    }
+
+    function bindStatsPanelInteractions(target) {
+      const frame = target.querySelector(".comparison-chart-frame");
+      const panel = target.querySelector("[data-result-stats-panel]");
+      const menu = target.querySelector("[data-result-stats-menu]");
+      if (panel) {
+        panel.addEventListener("pointerdown", startStatsPanelDrag);
+      }
+      if (!frame || !menu) return;
+      frame.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        showStatsContextMenu(frame, menu, event);
+      });
+      frame.addEventListener("click", (event) => {
+        if (!event.target.closest("[data-result-stats-menu]")) hideStatsContextMenu(menu);
+      });
+      menu.addEventListener("click", (event) => {
+        const action = event.target.closest("[data-result-stats-action]")?.dataset.resultStatsAction || "";
+        if (!action) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (action === "toggle") state.statsVisible = !state.statsVisible;
+        if (action === "reset") state.statsPosition = null;
+        state.hoverIndex = null;
+        render();
+      });
+    }
+
+    function showStatsContextMenu(frame, menu, event) {
+      const bounds = frame.getBoundingClientRect();
+      menu.hidden = false;
+      const width = menu.offsetWidth || 150;
+      const height = menu.offsetHeight || 76;
+      const padding = 8;
+      const left = Math.min(Math.max(event.clientX - bounds.left, padding), Math.max(padding, bounds.width - width - padding));
+      const top = Math.min(Math.max(event.clientY - bounds.top, padding), Math.max(padding, bounds.height - height - padding));
+      menu.style.left = `${Math.round(left)}px`;
+      menu.style.top = `${Math.round(top)}px`;
+    }
+
+    function hideStatsContextMenu(menu) {
+      if (menu) menu.hidden = true;
+    }
+
+    function startStatsPanelDrag(event) {
+      if (event.button !== undefined && event.button !== 0) return;
+      const panel = event.currentTarget;
+      const frame = panel.closest(".comparison-chart-frame");
+      if (!panel || !frame || event.target.closest("[data-result-stats-menu]")) return;
+      const frameRect = frame.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      event.preventDefault();
+      state.statsDrag = {
+        pointerId: event.pointerId,
+        frame,
+        panel,
+        startX: event.clientX,
+        startY: event.clientY,
+        startLeft: panelRect.left - frameRect.left,
+        startTop: panelRect.top - frameRect.top,
+        moved: false,
+      };
+      panel.classList.add("dragging");
+      panel.setPointerCapture?.(event.pointerId);
+      hideStatsContextMenu(frame.querySelector("[data-result-stats-menu]"));
+      window.addEventListener("pointermove", onStatsPanelDragMove);
+      window.addEventListener("pointerup", endStatsPanelDrag);
+      window.addEventListener("pointercancel", endStatsPanelDrag);
+    }
+
+    function onStatsPanelDragMove(event) {
+      const drag = state.statsDrag;
+      if (!drag) return;
+      if (event.pointerId !== undefined && drag.pointerId !== undefined && event.pointerId !== drag.pointerId) return;
+      const deltaX = event.clientX - drag.startX;
+      const deltaY = event.clientY - drag.startY;
+      if (Math.abs(deltaX) + Math.abs(deltaY) > 3) drag.moved = true;
+      const frameWidth = Math.max(drag.frame.clientWidth, 1);
+      const frameHeight = Math.max(drag.frame.clientHeight, 1);
+      const maxLeft = Math.max(0, frameWidth - drag.panel.offsetWidth);
+      const maxTop = Math.max(0, frameHeight - drag.panel.offsetHeight);
+      const nextLeft = Math.min(Math.max(drag.startLeft + deltaX, 0), maxLeft);
+      const nextTop = Math.min(Math.max(drag.startTop + deltaY, 0), maxTop);
+      state.statsPosition = {
+        left: (nextLeft / frameWidth) * 100,
+        top: (nextTop / frameHeight) * 100,
+      };
+      drag.panel.style.left = `${state.statsPosition.left.toFixed(3)}%`;
+      drag.panel.style.top = `${state.statsPosition.top.toFixed(3)}%`;
+      drag.panel.style.right = "auto";
+    }
+
+    function endStatsPanelDrag(event) {
+      const drag = state.statsDrag;
+      if (!drag) return;
+      if (event?.pointerId !== undefined && drag.pointerId !== undefined && event.pointerId !== drag.pointerId) return;
+      drag.panel.classList.remove("dragging");
+      drag.panel.releasePointerCapture?.(drag.pointerId);
+      if (drag.moved) {
+        state.suppressStatsPanelClick = true;
+        setTimeout(() => {
+          state.suppressStatsPanelClick = false;
+        }, 0);
+      }
+      state.statsDrag = null;
+      window.removeEventListener("pointermove", onStatsPanelDragMove);
+      window.removeEventListener("pointerup", endStatsPanelDrag);
+      window.removeEventListener("pointercancel", endStatsPanelDrag);
     }
 
     function toggleSeriesVisibility(seriesId) {
