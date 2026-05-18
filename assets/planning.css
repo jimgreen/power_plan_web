@@ -5863,6 +5863,8 @@ body[data-home-theme] {
   --theme-control-bg: rgba(5, 34, 70, 0.78);
   --theme-text: #eaf8ff;
   --theme-control-text: var(--theme-text);
+  --theme-log-bg: var(--theme-control-bg);
+  --theme-log-text: var(--theme-control-text);
   --theme-active-bg: color-mix(in srgb, var(--theme-accent) 34%, var(--theme-control-bg));
   --theme-active-text: #ffffff;
 }
@@ -5887,6 +5889,8 @@ body[data-home-theme="bright"] {
   --theme-control-bg: rgba(225, 244, 255, 0.92);
   --theme-text: #17384d;
   --theme-control-text: #17384d;
+  --theme-log-bg: color-mix(in srgb, var(--theme-panel-bg) 92%, #ffffff);
+  --theme-log-text: #17384d;
   --theme-active-bg: #1476a6;
 }
 
@@ -5935,6 +5939,8 @@ body[data-home-theme="illustration"] {
   --theme-control-bg: rgba(255, 255, 255, 0.82);
   --theme-text: #143747;
   --theme-control-text: #143747;
+  --theme-log-bg: color-mix(in srgb, var(--theme-panel-bg) 92%, #ffffff);
+  --theme-log-text: #143747;
   --theme-active-bg: #096d8f;
 }
 
@@ -5967,6 +5973,8 @@ body[data-home-theme="glassmorphism"] {
   --theme-control-bg: rgba(245, 251, 255, 0.9);
   --theme-text: #183247;
   --theme-control-text: #183247;
+  --theme-log-bg: color-mix(in srgb, var(--theme-panel-bg) 92%, #ffffff);
+  --theme-log-text: #183247;
   --theme-active-bg: #1f6f94;
 }
 
@@ -5990,6 +5998,8 @@ body[data-home-theme="magazine"] {
   --theme-control-bg: rgba(17, 24, 32, 0.82);
   --theme-text: #111820;
   --theme-control-text: #ffffff;
+  --theme-log-bg: color-mix(in srgb, var(--theme-panel-bg) 92%, #ffffff);
+  --theme-log-text: #111820;
   --theme-active-bg: #c1121f;
 }
 
@@ -6319,8 +6329,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .log-context-menu button:
 
 body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs {
   border-color: var(--theme-panel-line);
-  background: var(--theme-control-bg);
-  color: var(--theme-control-text);
+  background: var(--theme-log-bg);
+  color: var(--theme-log-text);
   box-shadow: none;
   text-shadow: none;
 }
@@ -6333,7 +6343,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-l
 body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line strong,
 body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line.ok strong,
 body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line.warn strong {
-  color: var(--theme-control-text);
+  color: var(--theme-log-text);
   text-shadow: none;
 }
 

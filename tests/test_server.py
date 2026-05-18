@@ -228,7 +228,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-theme-log-contrast", page_html)
+            self.assertIn("assets/planning.css?v=20260518-log-light-surface", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -266,8 +266,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("color: var(--theme-control-text) !important", curve_filter_label_css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs {', css)
         theme_log_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs {', 1)[1].split("}", 1)[0]
-        self.assertIn("background: var(--theme-control-bg)", theme_log_css)
-        self.assertIn("color: var(--theme-control-text)", theme_log_css)
+        self.assertIn("background: var(--theme-log-bg)", theme_log_css)
+        self.assertIn("color: var(--theme-log-text)", theme_log_css)
+        self.assertIn("--theme-log-bg: var(--theme-control-bg)", css)
+        self.assertIn("--theme-log-text: var(--theme-control-text)", css)
+        for light_theme in ('body[data-home-theme="bright"]', 'body[data-home-theme="illustration"]', 'body[data-home-theme="glassmorphism"]', 'body[data-home-theme="magazine"]'):
+            light_theme_css = css.split(light_theme, 1)[1].split("}", 1)[0]
+            self.assertIn("--theme-log-bg: color-mix(in srgb, var(--theme-panel-bg) 92%, #ffffff)", light_theme_css)
+            self.assertIn("--theme-log-text:", light_theme_css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .current-scheme strong,', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,', css)
         curve_scope_active_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,', 1)[1].split("}", 1)[0]
