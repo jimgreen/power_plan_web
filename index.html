@@ -456,14 +456,13 @@
     }
 
     .screen[data-home-theme="bright"] .home-title {
-      color: #102f47;
+      color: #ffffff;
       text-shadow:
-        0 -1px 0 rgba(255, 255, 255, 0.7),
-        1px 0 0 rgba(255, 255, 255, 0.56),
-        -1px 0 0 rgba(255, 255, 255, 0.56),
-        0 1px 0 rgba(255, 255, 255, 0.72),
-        0 2px 3px rgba(5, 24, 44, 0.2),
-        0 10px 24px rgba(255, 255, 255, 0.34);
+        0 -1px 0 rgba(3, 18, 32, 0.74),
+        1px 0 0 rgba(3, 18, 32, 0.68),
+        -1px 0 0 rgba(3, 18, 32, 0.68),
+        0 1px 0 rgba(3, 18, 32, 0.76),
+        0 3px 7px rgba(3, 18, 32, 0.52);
     }
 
     .screen[data-home-theme="bright"] .feature-entry-grid::before,
@@ -472,6 +471,7 @@
       background:
         radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.5), transparent 38%),
         linear-gradient(180deg, rgba(226, 245, 255, 0.82), rgba(101, 151, 186, 0.64));
+      background-color: #dceefa;
       box-shadow:
         inset 0 0 24px rgba(255, 255, 255, 0.32),
         0 18px 52px rgba(23, 70, 108, 0.22);
@@ -505,7 +505,7 @@
     }
 
     .screen[data-home-theme="bright"] .home-user-status strong {
-      color: #0f5578;
+      color: #0a3f5c;
     }
 
     .screen[data-home-theme="bright"] .home-user-status a,
@@ -701,6 +701,7 @@
       border: 2px solid rgba(255, 255, 255, 0.78);
       border-radius: 18px;
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(70, 152, 182, 0.68));
+      background-color: #cceaf6;
       box-shadow:
         0 10px 0 rgba(18, 57, 77, 0.18),
         0 22px 50px rgba(15, 46, 62, 0.26);
@@ -713,7 +714,16 @@
       clip-path: none;
     }
 
-    .screen[data-home-theme="illustration"] .home-title,
+    .screen[data-home-theme="illustration"] .home-title {
+      color: #ffffff;
+      text-shadow:
+        0 -1px 0 rgba(4, 24, 34, 0.76),
+        1px 0 0 rgba(4, 24, 34, 0.7),
+        -1px 0 0 rgba(4, 24, 34, 0.7),
+        0 1px 0 rgba(4, 24, 34, 0.78),
+        0 3px 7px rgba(4, 24, 34, 0.5);
+    }
+
     .screen[data-home-theme="illustration"] .feature-entry strong {
       color: #143747;
       text-shadow:
@@ -744,7 +754,7 @@
     }
 
     .screen[data-home-theme="illustration"] .home-user-status strong {
-      color: #096d8f;
+      color: #06475f;
     }
 
     .screen[data-home-theme="illustration"] .home-user-status a,
@@ -878,7 +888,16 @@
       opacity: 0;
     }
 
-    .screen[data-home-theme="glassmorphism"] .home-title,
+    .screen[data-home-theme="glassmorphism"] .home-title {
+      color: #ffffff;
+      text-shadow:
+        0 -1px 0 rgba(7, 24, 42, 0.78),
+        1px 0 0 rgba(7, 24, 42, 0.72),
+        -1px 0 0 rgba(7, 24, 42, 0.72),
+        0 1px 0 rgba(7, 24, 42, 0.8),
+        0 3px 7px rgba(7, 24, 42, 0.52);
+    }
+
     .screen[data-home-theme="glassmorphism"] .feature-entry strong {
       color: #23394c;
       text-shadow:
@@ -911,7 +930,7 @@
     }
 
     .screen[data-home-theme="glassmorphism"] .home-user-status strong {
-      color: #1f6f94;
+      color: #154d68;
     }
 
     .screen[data-home-theme="glassmorphism"] .home-user-status a,
@@ -1408,7 +1427,7 @@
       select?.addEventListener("change", (event) => applyHomeTheme(event.target.value));
     })();
   </script>
-  <script src="assets/i18n.js?v=20260518-param-tabs-map-task-filter"></script>
+  <script src="assets/i18n.js?v=20260518-capacity-short-labels"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
 </body>
 </html>

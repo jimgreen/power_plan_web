@@ -29,6 +29,8 @@ select,
 textarea { font: inherit; }
 
 button {
+  -webkit-appearance: none;
+  appearance: none;
   border: 0;
   cursor: pointer;
 }
@@ -668,6 +670,11 @@ button:disabled {
 .task-status-pill.queued {
   background: rgba(216, 163, 26, 0.16);
   color: #8a650d;
+}
+
+.task-status-pill.dequeued {
+  background: rgba(87, 119, 142, 0.16);
+  color: #31536b;
 }
 
 .task-status-pill.completed {
@@ -2026,16 +2033,23 @@ button:disabled {
   align-items: center;
   justify-content: center;
   height: 100%;
+  min-height: 0 !important;
+  max-height: 100%;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
   background: var(--composition-segment-color, #0d5c59);
+  box-shadow: none !important;
+  color: #ffffff;
   transition: width 0.2s ease;
 }
 
 .composition-bar-segment.primary {
-  background: linear-gradient(90deg, #0d5c59, #168883);
+  background: var(--composition-segment-color, #0d5c59) !important;
 }
 
 .composition-bar-segment.secondary {
-  background: linear-gradient(90deg, #d8b35d, #efcb74);
+  background: var(--composition-segment-color, #d8b35d) !important;
 }
 
 .composition-bar-segment span {
@@ -4869,6 +4883,12 @@ h2,
   color: #ffe3a3;
 }
 
+.task-status-pill.dequeued {
+  border: 1px solid rgba(150, 198, 232, 0.34);
+  background: rgba(75, 105, 130, 0.22);
+  color: #ccecff;
+}
+
 .task-status-pill.completed {
   border: 1px solid rgba(96, 255, 185, 0.42);
   background: rgba(21, 144, 109, 0.2);
@@ -6297,6 +6317,26 @@ body[data-home-theme]:not([data-home-theme="default"]) .log-context-menu button:
   color: var(--theme-active-text);
 }
 
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs {
+  border-color: var(--theme-panel-line);
+  background: var(--theme-control-bg);
+  color: var(--theme-control-text);
+  box-shadow: none;
+  text-shadow: none;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line {
+  border-bottom-color: color-mix(in srgb, var(--theme-accent) 22%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line span,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line strong,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line.ok strong,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs .log-line.warn strong {
+  color: var(--theme-control-text);
+  text-shadow: none;
+}
+
 body[data-home-theme]:not([data-home-theme="default"]) .annual-comparison-card {
   border-color: var(--theme-panel-line);
   background: color-mix(in srgb, var(--theme-control-bg) 50%, transparent);
@@ -6506,7 +6546,9 @@ body[data-home-theme]:not([data-home-theme="default"]) .auth-status {
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .auth-links a {
-  color: var(--theme-accent);
+  color: var(--theme-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
   text-shadow: none;
 }
 
@@ -6703,7 +6745,9 @@ body[data-home-theme]:not([data-home-theme="default"]) label,
 body[data-home-theme]:not([data-home-theme="default"]) .rail-title,
 body[data-home-theme]:not([data-home-theme="default"]) .scheme-list-title,
 body[data-home-theme]:not([data-home-theme="default"]) .current-scheme,
+body[data-home-theme]:not([data-home-theme="default"]) .current-scheme strong,
 body[data-home-theme]:not([data-home-theme="default"]) .optimization-current-scheme,
+body[data-home-theme]:not([data-home-theme="default"]) .optimization-current-scheme strong,
 body[data-home-theme]:not([data-home-theme="default"]) .page-info,
 body[data-home-theme]:not([data-home-theme="default"]) .filter-hint,
 body[data-home-theme]:not([data-home-theme="default"]) .task-empty,
@@ -6897,6 +6941,12 @@ body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.queued 
   border-color: #e7b85b !important;
   background: #ffe7b0 !important;
   color: #684600 !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.dequeued {
+  border-color: #8fb3cd !important;
+  background: #d9edf8 !important;
+  color: #24485f !important;
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .task-status-pill.completed {

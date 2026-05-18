@@ -131,6 +131,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".screen[data-home-theme=\"bright\"]", html)
         self.assertIn(".screen[data-home-theme=\"sci-fi\"]", html)
         self.assertIn(".screen[data-home-theme=\"solemn\"]", html)
+        bright_entry_css = html.split('.screen[data-home-theme="bright"] .feature-entry-grid::before,', 1)[1].split("}", 1)[0]
+        self.assertIn("background-color: #dceefa", bright_entry_css)
+        illustration_entry_css = html.split('.screen[data-home-theme="illustration"] .feature-entry-grid::before,', 1)[1].split("}", 1)[0]
+        self.assertIn("background-color: #cceaf6", illustration_entry_css)
         self.assertIn('background-image: url("assets/main-dashboard-bg.png?v=20260513-bg-refresh")', html)
         self.assertIn("background-size: contain", html)
         self.assertIn('<link rel="icon" href="data:,">', html)
@@ -213,7 +217,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("color: var(--theme-active-text)", planning_css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .scheme-item,', planning_css)
         self.assertIn("background: color-mix(in srgb, var(--theme-control-bg) 56%, transparent)", planning_css)
-        self.assertIn("color: #102f47", html)
+        self.assertIn('.screen[data-home-theme="bright"] .home-title', html)
+        self.assertIn("0 -1px 0 rgba(3, 18, 32, 0.74)", html)
 
     def test_power_plan_pages_share_dark_hud_visual_theme(self):
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
@@ -223,7 +228,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         for page_name in page_names:
             page_html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
-            self.assertIn("assets/planning.css?v=20260518-composition-align", page_html)
+            self.assertIn("assets/planning.css?v=20260518-theme-log-contrast", page_html)
         self.assertIn('url("main-dashboard-bg.png?v=20260513-bg-refresh")', css)
         self.assertIn("--hud-cyan: #21d5ff", css)
         self.assertIn("--hud-panel:", css)
@@ -259,6 +264,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter label,', css)
         curve_filter_label_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-filter label,', 1)[1].split("}", 1)[0]
         self.assertIn("color: var(--theme-control-text) !important", curve_filter_label_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs {', css)
+        theme_log_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .optimization-logs {', 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--theme-control-bg)", theme_log_css)
+        self.assertIn("color: var(--theme-control-text)", theme_log_css)
+        self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .current-scheme strong,', css)
         self.assertIn('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,', css)
         curve_scope_active_css = css.rsplit('body[data-home-theme]:not([data-home-theme="default"]) .curve-range-scope button.active,', 1)[1].split("}", 1)[0]
         self.assertIn("background: var(--theme-active-bg) !important", curve_scope_active_css)
@@ -395,12 +405,16 @@ class PowerPlanServerTest(unittest.TestCase):
             '"名称": "Name"',
             '"设备类型": "Device Type"',
             '"成本构成": "Cost Composition"',
+            '"成本构成(单位: 万元)": "Cost Composition (Unit: 10k CNY)"',
             '"容量构成": "Capacity Composition"',
+            '"容量构成(单位: kW)": "Capacity Composition (Unit: kW)"',
             '"柴发容量": "Diesel Capacity"',
             '"风电容量": "Wind Capacity"',
             '"光伏容量": "PV Capacity"',
             '"电储能容量": "Battery Storage Capacity"',
             '"燃料电池容量": "Fuel Cell Capacity"',
+            '"电储": "Battery Storage"',
+            '"燃电": "Fuel Cell"',
             '"柴发总容量": "Total Diesel Capacity"',
             '"风电总容量": "Total Wind Capacity"',
             '"光伏总容量": "Total PV Capacity"',
@@ -456,11 +470,19 @@ class PowerPlanServerTest(unittest.TestCase):
             '"氢储总发电量": "Hydrogen Storage Generation"',
             '"电储总发电量": "Battery Storage Generation"',
             '"年均建设成本": "Annualized Construction Cost"',
+            '"年柴油": "Annual Diesel"',
+            '"年均建设": "Annualized Construction"',
             '"年均总成本": "Annualized Total Cost"',
             '"年运行成本": "Annual Operating Cost"',
+            '"运行": "Operation"',
+            '"建设": "Construction"',
             '"柴发电量": "Diesel Generation"',
             '"绿电电量": "Green Energy"',
             '"电量构成": "Energy Composition"',
+            '"电量构成(单位: 万kWh)": "Energy Composition (Unit: 10k kWh)"',
+            '"风电": "Wind Power"',
+            '"新能源": "Renewable Energy"',
+            '"绿电": "Green Energy"',
             '"表格显示": "Table View"',
             '"柱图对比": "Bar Comparison"',
             '"文件导入": "Import File"',
@@ -979,15 +1001,49 @@ class PowerPlanServerTest(unittest.TestCase):
             )
             self.assertEqual(status, 200)
             cancelled = json.loads(body.decode("utf-8"))["task"]
-            self.assertEqual(cancelled["status"], "未计算")
+            self.assertEqual(cancelled["status"], "退出队列")
             self.assertFalse(cancelled["queued"])
             self.assertTrue(cancelled["can_queue"])
+
+            status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案B&light=1")
+            exited = json.loads(body.decode("utf-8"))
+            self.assertEqual(exited["task_status"], "退出队列")
+            self.assertFalse(exited["queued"])
+            self.assertTrue(exited["can_queue_task"])
 
             status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A&filename=case_results.xlsx&light=1")
             evaluation = json.loads(body.decode("utf-8"))
             self.assertEqual(evaluation["task_status"], "未计算")
             self.assertTrue(evaluation["can_start_task"])
             self.assertTrue(evaluation["can_queue_task"])
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps(
+                    {"action": "queue", "task_type": "evaluation", "scheme": "方案A", "result": "case_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+            queued_evaluation = json.loads(body.decode("utf-8"))["task"]
+            self.assertEqual(queued_evaluation["status"], "排队中")
+
+            status, headers, body = server.handle_control_path(
+                "/api/tasks/control",
+                json.dumps(
+                    {"action": "cancel_queue", "task_type": "evaluation", "scheme": "方案A", "result": "case_results.xlsx"},
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+            exited_evaluation = json.loads(body.decode("utf-8"))["task"]
+            self.assertEqual(exited_evaluation["status"], "退出队列")
+
+            status, headers, body = server.handle_api_path("/api/evaluation/status?scheme=方案A&filename=case_results.xlsx&light=1")
+            evaluation_after_exit = json.loads(body.decode("utf-8"))
+            self.assertEqual(evaluation_after_exit["task_status"], "退出队列")
+            self.assertFalse(evaluation_after_exit["queued"])
+            self.assertTrue(evaluation_after_exit["can_queue_task"])
         finally:
             for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
                 if runtime.status == "运行中":
@@ -1028,7 +1084,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(script.index('<div class="task-actions">'), script.index('<td><span class="task-status-pill'))
         self.assertIn(">启动</button>", script)
         self.assertIn(">排队</button>", script)
-        self.assertIn('label: "退队"', script)
+        self.assertIn('label: "离队"', script)
         self.assertIn('label: "停止"', script)
         self.assertNotIn(">立刻启动</button>", script)
         self.assertNotIn(">加入排队</button>", script)
@@ -4273,8 +4329,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("data.can_stop_task", script)
         self.assertIn("data.can_cancel_queue_task", script)
         self.assertIn("terminalOptimizationAction", script)
-        self.assertIn("退出队列", script)
-        self.assertIn("停止计算", script)
+        self.assertIn("离队", script)
+        self.assertIn("停止", script)
+        self.assertIn("启动当前方案规划求解", script)
+        self.assertIn("将当前方案排队", script)
+        self.assertIn("从队列中移出当前方案", script)
+        self.assertNotIn("退出队列", script)
+        self.assertNotIn("退队", script)
+        self.assertNotIn("停止计算", script)
         self.assertIn("classList.toggle(\"is-disabled\"", script)
         self.assertIn("classList.toggle(\"is-active\"", script)
         self.assertIn("正在运行，无法再次启动", script)
@@ -4406,8 +4468,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("data.can_queue_task", script)
         self.assertIn("data.can_stop_task", script)
         self.assertIn("data.can_cancel_queue_task", script)
-        self.assertIn("退出队列", script)
-        self.assertIn("停止计算", script)
+        self.assertIn("离队", script)
+        self.assertIn("停止", script)
+        self.assertIn("启动当前方案评估", script)
+        self.assertIn("将当前评估任务排队", script)
+        self.assertIn("从队列中移出当前评估任务", script)
+        self.assertNotIn("退出队列", script)
+        self.assertNotIn("退队", script)
+        self.assertNotIn("停止计算", script)
         self.assertIn("/api/evaluation/results", script)
         self.assertIn("loadEvaluationResults", script)
         self.assertIn("refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError)", script)
@@ -4501,9 +4569,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
         self.assertIn("saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
         self.assertIn("copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection", script)
-        self.assertIn("立刻启动", html)
-        self.assertIn("加入排队", html)
-        self.assertIn("停止计算", html)
+        self.assertIn(">启动</button>", html)
+        self.assertIn(">排队</button>", html)
+        self.assertIn(">停止</button>", html)
+        self.assertNotIn("立刻启动", html)
+        self.assertNotIn("加入排队", html)
+        self.assertNotIn("停止计算", html)
 
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
         self.assertIn(".evaluation-main-resize-handle", css)
@@ -4889,7 +4960,16 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("overview_tables", script)
         self.assertIn("renderOverviewCompositionBars", script)
         self.assertIn("renderOverviewCompositionBar", script)
+        self.assertIn("normalizeOverviewCompositionDisplay", script)
         self.assertIn("normalizeOverviewCompositionSegments", script)
+        self.assertIn("simplifyOverviewCompositionLabel", script)
+        self.assertIn("normalizeOverviewCompositionValue", script)
+        self.assertIn("formatOverviewCompositionNumber", script)
+        self.assertIn('if (type === "capacity") return Math.round(number).toLocaleString("zh-CN")', script)
+        self.assertIn('if (type === "energy" && text === "柴") text = "柴发"', script)
+        self.assertIn('if (type === "energy") return "万kWh"', script)
+        self.assertIn('if (normalizedUnit.includes("mwh")) return number / 10', script)
+        self.assertIn("return number / 10000", script)
         self.assertIn("bindOverviewColumnResizeHandles", script)
         self.assertIn('data-overview-column-resize="left-middle"', script)
         self.assertIn('data-overview-column-resize="middle-right"', script)
@@ -4906,7 +4986,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("formatOverviewTableForDisplay", evaluation_script)
         self.assertIn("formatOverviewPlanningRows", evaluation_script)
         self.assertIn("renderOverviewCompositionBars", evaluation_script)
+        self.assertIn("normalizeOverviewCompositionDisplay", evaluation_script)
         self.assertIn("normalizeOverviewCompositionSegments", evaluation_script)
+        self.assertIn("simplifyOverviewCompositionLabel", evaluation_script)
+        self.assertIn('if (type === "capacity" && text === "电储能") text = "电储";', script)
+        self.assertIn('if (type === "capacity" && text === "燃料电池") text = "燃电";', script)
+        self.assertIn('if (type === "capacity" && text === "电储能") text = "电储";', evaluation_script)
+        self.assertIn('if (type === "capacity" && text === "燃料电池") text = "燃电";', evaluation_script)
+        self.assertIn("normalizeOverviewCompositionValue", evaluation_script)
+        self.assertIn("formatOverviewCompositionNumber", evaluation_script)
         self.assertIn("composition-bar-track", evaluation_script)
         self.assertIn("optimization-overview-grid", script)
         for title in ("规划结果", "规划年指标"):
@@ -4936,6 +5024,13 @@ class PowerPlanServerTest(unittest.TestCase):
         composition_track_css = css.split(".composition-bar-track {", 1)[1].split("}", 1)[0]
         self.assertIn("display: flex", composition_track_css)
         self.assertIn("height: 24px", composition_track_css)
+        composition_segment_css = css.split(".composition-bar-segment {", 1)[1].split("}", 1)[0]
+        self.assertIn("height: 100%", composition_segment_css)
+        self.assertIn("min-height: 0 !important", composition_segment_css)
+        self.assertIn("max-height: 100%", composition_segment_css)
+        self.assertIn("padding: 0 !important", composition_segment_css)
+        self.assertIn("border: 0 !important", composition_segment_css)
+        self.assertIn("box-shadow: none !important", composition_segment_css)
         composition_segment_label_css = css.split(".composition-bar-segment span {", 1)[1].split("}", 1)[0]
         self.assertIn("position: absolute", composition_segment_label_css)
         self.assertIn("top: 50%", composition_segment_label_css)
@@ -4947,6 +5042,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("transform: translate(-50%, -50%)", composition_segment_label_css)
         self.assertIn(".composition-bar-segment.primary", css)
         self.assertIn(".composition-bar-segment.secondary", css)
+        composition_primary_css = css.split(".composition-bar-segment.primary {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--composition-segment-color, #0d5c59) !important", composition_primary_css)
+        composition_secondary_css = css.split(".composition-bar-segment.secondary {", 1)[1].split("}", 1)[0]
+        self.assertIn("background: var(--composition-segment-color, #d8b35d) !important", composition_secondary_css)
         self.assertIn("--composition-segment-color", css)
         self.assertIn(".composition-bar-card.multi-segment", css)
         self.assertNotIn(".ratio-disk", css)

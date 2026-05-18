@@ -734,15 +734,15 @@ function updateOptimizationActions(data = state.optimization || {}) {
   if (queueButton) queueButton.disabled = !hasScheme || !hasResult || (typeof data.can_queue_task === "boolean" ? !data.can_queue_task : isRunning);
   const canExitOrStop = Boolean(data.can_cancel_queue_task || data.can_stop_task);
   stopButton.disabled = !hasScheme || !hasResult || !canExitOrStop;
-  stopButton.textContent = data.can_cancel_queue_task ? "退出队列" : "停止计算";
+  stopButton.textContent = data.can_cancel_queue_task ? "离队" : "停止";
   [startButton, queueButton, stopButton].filter(Boolean).forEach((button) => {
     button.classList.toggle("is-disabled", button.disabled);
     button.classList.toggle("is-active", !button.disabled);
     button.setAttribute("aria-disabled", String(button.disabled));
   });
-  startButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : isRunning ? "当前方案正在评估" : "立刻启动当前方案评估";
-  if (queueButton) queueButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : data.queued ? "当前评估任务已加入队列" : "将当前评估任务加入排队";
-  stopButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : data.can_cancel_queue_task ? "从等待队列中删除当前评估任务" : isRunning ? "停止当前方案评估" : "当前方案没有运行";
+  startButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : isRunning ? "当前方案正在评估" : "启动当前方案评估";
+  if (queueButton) queueButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : data.queued ? "当前评估任务已加入队列" : "将当前评估任务排队";
+  stopButton.title = !hasScheme ? "请先选择方案" : !hasResult ? "请先选择结果文件" : data.can_cancel_queue_task ? "从队列中移出当前评估任务" : isRunning ? "停止当前方案评估" : "当前方案没有运行";
 }
 
 function terminalEvaluationAction() {
@@ -893,19 +893,20 @@ function renderOverviewCompositionBars(disks) {
 const overviewCompositionColors = ["#0d5c59", "#d8b35d", "#3d7fc2", "#7b61a8", "#c76f45", "#2e9f78"];
 
 function renderOverviewCompositionBar(disk) {
-  const segments = normalizeOverviewCompositionSegments(disk);
+  const displayDisk = normalizeOverviewCompositionDisplay(disk);
+  const segments = displayDisk.segments;
   const positiveTotal = segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0);
   const summarySegments = buildOverviewCompositionSummary(segments);
   const multiClass = segments.length > 2 ? " multi-segment" : "";
   return `
     <div class="composition-bar-card${multiClass}">
-      <h2>${escapeHtml(disk.title || "")}</h2>
+      <h2>${escapeHtml(displayDisk.title)}</h2>
       <div class="composition-bar-summary">
         ${summarySegments
-          .map((segment) => `<span>${escapeHtml(segment.label)}<strong>${escapeHtml(formatNumber(segment.value))}${escapeHtml(segment.unit)}</strong></span>`)
+          .map((segment) => `<span>${escapeHtml(segment.label)}<strong>${escapeHtml(formatOverviewCompositionNumber(segment.value, displayDisk.type))}${escapeHtml(segment.unit)}</strong></span>`)
           .join("")}
       </div>
-      <div class="composition-bar-track" aria-label="${escapeHtml(disk.title || "")}">
+      <div class="composition-bar-track" aria-label="${escapeHtml(displayDisk.title)}">
         ${segments
           .map((segment) => {
             const percent = positiveTotal > 0 ? Math.max(0, (segment.value / positiveTotal) * 100) : 100 / segments.length;
@@ -922,6 +923,68 @@ function renderOverviewCompositionBar(disk) {
           .join("")}
       </div>
     </div>`;
+}
+
+function normalizeOverviewCompositionDisplay(disk = {}) {
+  const rawTitle = String(disk.title || "");
+  const baseTitle = rawTitle.replace(/[（(]\s*单位[:：][^）)]*[）)]/g, "").trim() || rawTitle;
+  const type = overviewCompositionType(baseTitle);
+  const titleUnit = overviewCompositionTitleUnit(type, disk.unit);
+  const segments = normalizeOverviewCompositionSegments(disk).map((segment) => {
+    const unit = segment.unit || disk.unit || "";
+    return {
+      ...segment,
+      label: simplifyOverviewCompositionLabel(segment.label, type),
+      value: normalizeOverviewCompositionValue(segment.value, type, unit),
+      unit: "",
+    };
+  });
+  return {
+    title: titleUnit ? `${baseTitle}(单位: ${titleUnit})` : baseTitle,
+    type,
+    segments,
+  };
+}
+
+function overviewCompositionType(title) {
+  if (title.includes("成本")) return "cost";
+  if (title.includes("容量")) return "capacity";
+  if (title.includes("电量")) return "energy";
+  return "default";
+}
+
+function overviewCompositionTitleUnit(type, fallbackUnit = "") {
+  if (type === "cost") return "万元";
+  if (type === "capacity") return "kW";
+  if (type === "energy") return "万kWh";
+  return fallbackUnit || "";
+}
+
+function simplifyOverviewCompositionLabel(label, type) {
+  let text = String(label || "").trim();
+  if (type === "cost") text = text.replace(/成本/g, "");
+  if (type === "capacity") text = text.replace(/容量/g, "");
+  if (type === "energy") text = text.replace(/总发电量|总用电量|总电量|发电量|用电量|电量/g, "");
+  if (type === "capacity" && text === "电储能") text = "电储";
+  if (type === "capacity" && text === "燃料电池") text = "燃电";
+  if (type === "energy" && text === "柴") text = "柴发";
+  return text.trim() || label || "-";
+}
+
+function normalizeOverviewCompositionValue(value, type, unit = "") {
+  const number = Number(value) || 0;
+  if (type !== "energy") return number;
+  const normalizedUnit = String(unit || "").trim().toLowerCase();
+  if (normalizedUnit.includes("万")) return number;
+  if (normalizedUnit.includes("mwh")) return number / 10;
+  return number / 10000;
+}
+
+function formatOverviewCompositionNumber(value, type) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  if (type === "capacity") return Math.round(number).toLocaleString("zh-CN");
+  return formatNumber(number);
 }
 
 function normalizeOverviewCompositionSegments(disk = {}) {

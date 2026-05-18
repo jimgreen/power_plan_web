@@ -527,6 +527,25 @@ class OptimizationRuntime:
                 self._logs.clear()
                 return self._payload_unlocked()
 
+        if action == "cancel_queue":
+            with self._lock:
+                if self.status == "运行中":
+                    raise OptimizationStateError("running", f"方案“{target_scheme}”正在运行，无法退出队列")
+                self.scheme = target_scheme
+                self.status = "退出队列"
+                self.start_time = ""
+                self.end_time = ""
+                self.progress = 0
+                self.result_file = ""
+                self.process_id = None
+                self._metrics = []
+                self._results = {}
+                self._results_exported = False
+                self._stop_requested = False
+                self._terminate_process_unlocked()
+                self._append_log_unlocked("info", "退出等待队列")
+                return self._payload_unlocked()
+
         if action == "start":
             with self._lock:
                 if self.status == "运行中":
@@ -2188,6 +2207,29 @@ class EvaluationRuntime:
                 self._logs.clear()
                 return self._payload_unlocked()
 
+        if action == "cancel_queue":
+            target_filename = selected_evaluation_result_filename(target_scheme, filename)
+            with self._lock:
+                if self.status == "运行中":
+                    raise OptimizationStateError("running", f"方案“{target_scheme}”正在评估，无法退出队列")
+                self.scheme = target_scheme
+                self.status = "退出队列"
+                self.start_time = ""
+                self.end_time = ""
+                self.progress = 0
+                self.result_filename = target_filename
+                try:
+                    self.result_file = str(evaluation_result_path(target_scheme, target_filename)) if target_filename else ""
+                except ValueError:
+                    self.result_file = ""
+                self.process_id = None
+                self._metrics = []
+                self._results = {}
+                self._stop_requested = False
+                self._terminate_process_unlocked()
+                self._append_log_unlocked("info", "退出等待队列")
+                return self._payload_unlocked()
+
         if action == "start":
             target_filename = selected_evaluation_result_filename(target_scheme, filename)
             if not target_filename:
@@ -2785,6 +2827,8 @@ def task_display_status(runtime_status: str, queued: bool = False) -> str:
         return "计算中"
     if queued:
         return "排队中"
+    if runtime_status == "退出队列":
+        return "退出队列"
     if runtime_status == "已完成":
         return "完成计算"
     if runtime_status == "计算中止":
@@ -2811,8 +2855,14 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
     if normalized_action == "cancel_queue":
         item = normalized_task_item(task_type_key, scheme, result)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
+        if task_type_key == "optimization":
+            state = OPTIMIZATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"])
+        elif task_type_key == "evaluation":
+            state = EVALUATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"], filename=item["result"])
+        else:
+            state = default_task_runtime_state(item["scheme"], item["result"])
         tasks = build_task_list()
-        task = find_task_in_list(tasks, item, queued=False)
+        task = task_from_runtime_state(task_type_key, state, scheme=item["scheme"], result=item["result"])
         return {"ok": True, "task": task, "tasks": tasks}
     if normalized_action == "queue":
         item = normalized_task_item(task_type_key, scheme, result)
@@ -2846,7 +2896,7 @@ def normalize_task_action(action: str) -> str:
         return "start"
     if text in {"queue", "enqueue", "排队", "加入排队"}:
         return "queue"
-    if text in {"cancel_queue", "dequeue", "remove_queue", "取消排队", "移出队列", "退出队列"}:
+    if text in {"cancel_queue", "dequeue", "remove_queue", "取消排队", "移出队列", "退出队列", "退队", "离队"}:
         return "cancel_queue"
     if text in {"stop", "停止", "停止计算"}:
         return "stop"

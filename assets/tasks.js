@@ -159,7 +159,7 @@ function renderTaskRow(task) {
 }
 
 function taskTerminalAction(task) {
-  if (task.queued) return { action: "cancel_queue", label: "退队", enabled: true };
+  if (task.queued) return { action: "cancel_queue", label: "离队", enabled: true };
   if (task.can_stop) return { action: "stop", label: "停止", enabled: true };
   return { action: "stop", label: "停止", enabled: false };
 }
@@ -167,6 +167,7 @@ function taskTerminalAction(task) {
 function taskStatusClass(status) {
   if (status === "计算中") return "running";
   if (status === "排队中") return "queued";
+  if (status === "退出队列") return "dequeued";
   if (status === "完成计算") return "completed";
   if (status === "计算中止") return "interrupted";
   if (status === "计算失败") return "failed";
