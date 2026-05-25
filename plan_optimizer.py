@@ -2060,6 +2060,30 @@ def min_frequency_margin(dispatch_rows: list[dict[str, Any]], field: str) -> flo
     values = [numeric(row.get(field), math.inf) for row in dispatch_rows if row.get(field) is not None]
     return round(min(values), 4) if values else 0.0
 
+
+def max_up_disturbance_requirement(dispatch_rows: list[dict[str, Any]]) -> float:
+    values = []
+    for row in dispatch_rows:
+        if row.get("grid_up_regulation_requirement") is not None:
+            values.append(max(0.0, numeric(row.get("grid_up_regulation_requirement"), 0.0)))
+        else:
+            values.append(
+                max(0.0, numeric(row.get("load_up_disturbance_power"), 0.0))
+                + max(0.0, numeric(row.get("renewable_down_disturbance_power"), 0.0))
+            )
+    return round(max(values), 4) if values else 0.0
+
+
+def max_down_disturbance_requirement(dispatch_rows: list[dict[str, Any]]) -> float:
+    values = []
+    for row in dispatch_rows:
+        value = row.get("grid_down_regulation_requirement")
+        if value is None:
+            value = row.get("load_down_disturbance_power")
+        values.append(abs(numeric(value, 0.0)))
+    return round(max(values), 4) if values else 0.0
+
+
 def build_results(
     planning_rows: list[dict[str, Any]],
     dispatch_rows: list[dict[str, Any]],
@@ -2077,6 +2101,7 @@ def build_results(
     else:
         daily = aggregate_daily_partial(dispatch_rows)
         monthly = aggregate_monthly_partial(daily)
+    frequency_risk_hours = frequency_risk_hour_count(dispatch_rows)
     annual_rows = [
         *capacity_summary_rows(planning_rows),
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
@@ -2090,15 +2115,16 @@ def build_results(
         {"指标": "总成本", "数值": costs["annual_total_cost"], "单位": "万元"},
         {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元"},
         {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%"},
-        {"指标": "频率风险点", "数值": sum(1 for row in dispatch_rows if numeric(row.get("unmet_load"), 0.0) > 0), "单位": "个"},
+        {"指标": "频率风险点", "数值": frequency_risk_hours, "单位": "个"},
     ]
     nominal_frequency_hz = float(model.get("frequency", {}).get("nominal_frequency_hz", NOMINAL_FREQUENCY_HZ))
     safety_daily = build_safety_daily_rows(dispatch_rows, daily, nominal_frequency_hz)
     highest_frequency = max((point["frequency_max"] for point in safety_daily), default=nominal_frequency_hz)
     lowest_frequency = min((point["frequency_min"] for point in safety_daily), default=nominal_frequency_hz)
-    frequency_risk_hours = frequency_risk_hour_count(dispatch_rows)
     min_lower_margin = min_frequency_margin(dispatch_rows, "frequency_lower_margin_hz")
     min_upper_margin = min_frequency_margin(dispatch_rows, "frequency_upper_margin_hz")
+    upward_disturbance = max_up_disturbance_requirement(dispatch_rows)
+    downward_disturbance = max_down_disturbance_requirement(dispatch_rows)
     green_table = [
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
         {"指标": "负荷总电量", "数值": totals["load_energy"], "单位": "kWh"},
@@ -2158,8 +2184,8 @@ def build_results(
         ],
         "safety_table": [
             {"指标": "额定频率", "数值": round(nominal_frequency_hz, 4), "单位": "Hz"},
-            {"指标": "向上扰动最大量", "数值": 0, "单位": "kW"},
-            {"指标": "向下扰动最大量", "数值": 0, "单位": "kW"},
+            {"指标": "向上扰动最大量", "数值": upward_disturbance, "单位": "kW"},
+            {"指标": "向下扰动最大量", "数值": downward_disturbance, "单位": "kW"},
             {"指标": "最高频率", "数值": highest_frequency, "单位": "Hz"},
             {"指标": "最低频率", "数值": lowest_frequency, "单位": "Hz"},
             {"指标": "频率下限最小裕度", "数值": min_lower_margin, "单位": "Hz"},

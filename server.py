@@ -745,11 +745,18 @@ class OptimizationRuntime:
             self.progress = 100
             self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
-            self.status = "已完成"
-            self.end_time = _now_text()
-            result_path = export_optimization_results_workbook(self._payload_unlocked(read_workbook=False))
+            completed_end_time = _now_text()
+            result_path = export_optimization_results_workbook(
+                self._payload_unlocked(
+                    read_workbook=False,
+                    status_override="已完成",
+                    end_time_override=completed_end_time,
+                )
+            )
             self.result_file = str(result_path)
             self._results_exported = True
+            self.status = "已完成"
+            self.end_time = completed_end_time
             self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
@@ -772,7 +779,13 @@ class OptimizationRuntime:
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
 
-    def _payload_unlocked(self, include_hourly_curves: bool = True, read_workbook: bool = True) -> dict:
+    def _payload_unlocked(
+        self,
+        include_hourly_curves: bool = True,
+        read_workbook: bool = True,
+        status_override: str | None = None,
+        end_time_override: str | None = None,
+    ) -> dict:
         result_path = optimization_result_workbook_path(self.scheme)
         workbook_payload = (
             read_result_workbook_display_payload_for_response(result_path, include_hourly_curves=include_hourly_curves)
@@ -781,16 +794,21 @@ class OptimizationRuntime:
         )
         if workbook_payload:
             self.result_file = str(result_path)
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         return {
-            "status": self.status,
+            "status": status,
             "scheme": self.scheme,
             "start_time": self.start_time,
-            "end_time": self.end_time,
+            "end_time": end_time,
             "progress": self.progress,
             "result_file": self.result_file,
             "process_id": self.process_id or "",
-            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
-            "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, end_time),
+            "metrics": merge_runtime_metrics(
+                self._metrics_unlocked(status_override=status, end_time_override=end_time),
+                workbook_payload.get("metrics", []) if workbook_payload else [],
+            ),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
         }
@@ -810,11 +828,13 @@ class OptimizationRuntime:
             "logs": list(self._logs),
         }
 
-    def _metrics_unlocked(self) -> list[dict]:
+    def _metrics_unlocked(self, status_override: str | None = None, end_time_override: str | None = None) -> list[dict]:
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         base = [
-            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "状态", "value": status, "unit": ""},
             {"label": "开始", "value": self.start_time or "-", "unit": ""},
-            {"label": "完成", "value": self.end_time or "-", "unit": ""},
+            {"label": "完成", "value": end_time or "-", "unit": ""},
         ]
         existing_labels = {item["label"] for item in base}
         for metric in self._metrics:
@@ -2655,11 +2675,19 @@ class EvaluationRuntime:
             self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
             dispatch_rows = event.get("dispatch_rows") if isinstance(event.get("dispatch_rows"), list) else []
-            result_path = export_evaluation_results_workbook(self._payload_unlocked(read_workbook=False), dispatch_rows)
+            completed_end_time = _now_text()
+            result_path = export_evaluation_results_workbook(
+                self._payload_unlocked(
+                    read_workbook=False,
+                    status_override="已完成",
+                    end_time_override=completed_end_time,
+                ),
+                dispatch_rows,
+            )
             self.result_file = str(result_path)
-            self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
             self.status = "已完成"
-            self.end_time = _now_text()
+            self.end_time = completed_end_time
+            self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
             return
@@ -2693,7 +2721,13 @@ class EvaluationRuntime:
         if message:
             self._append_log_unlocked(level, message)
 
-    def _payload_unlocked(self, include_hourly_curves: bool = True, read_workbook: bool = True) -> dict:
+    def _payload_unlocked(
+        self,
+        include_hourly_curves: bool = True,
+        read_workbook: bool = True,
+        status_override: str | None = None,
+        end_time_override: str | None = None,
+    ) -> dict:
         workbook_payload = None
         if read_workbook and self.status != "运行中" and self.result_filename:
             try:
@@ -2703,17 +2737,22 @@ class EvaluationRuntime:
                 )
             except ValueError:
                 workbook_payload = None
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         return {
-            "status": self.status,
+            "status": status,
             "scheme": self.scheme,
             "start_time": self.start_time,
-            "end_time": self.end_time,
+            "end_time": end_time,
             "progress": self.progress,
             "result_filename": self.result_filename,
             "result_file": self.result_file,
             "process_id": self.process_id or "",
-            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
-            "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, end_time),
+            "metrics": merge_runtime_metrics(
+                self._metrics_unlocked(status_override=status, end_time_override=end_time),
+                workbook_payload.get("metrics", []) if workbook_payload else [],
+            ),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
         }
@@ -2740,11 +2779,13 @@ class EvaluationRuntime:
             "logs": list(self._logs),
         }
 
-    def _metrics_unlocked(self) -> list[dict]:
+    def _metrics_unlocked(self, status_override: str | None = None, end_time_override: str | None = None) -> list[dict]:
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         base = [
-            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "状态", "value": status, "unit": ""},
             {"label": "开始", "value": self.start_time or "-", "unit": ""},
-            {"label": "完成", "value": self.end_time or "-", "unit": ""},
+            {"label": "完成", "value": end_time or "-", "unit": ""},
         ]
         existing_labels = {item["label"] for item in base}
         for metric in self._metrics:

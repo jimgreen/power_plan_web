@@ -1265,6 +1265,7 @@ class PowerPlanServerTest(unittest.TestCase):
         captured = {}
 
         def fake_export(payload):
+            captured["runtime_status_during_export"] = runtime.status
             captured["payload"] = payload
             return WEB_ROOT / "tests" / "tmp_opt_results.xlsx"
 
@@ -1286,7 +1287,52 @@ class PowerPlanServerTest(unittest.TestCase):
                 )
 
         self.assertEqual(runtime.status, "已完成")
+        self.assertEqual(captured["runtime_status_during_export"], "运行中")
+        self.assertEqual(captured["payload"]["status"], "已完成")
+        self.assertTrue(captured["payload"]["end_time"])
         self.assertEqual(captured["payload"]["results"], new_results)
+        self.assertEqual(
+            captured["payload"]["results"]["curves"]["green_hourly"][0]["load_down_disturbance_power"],
+            -97.35,
+        )
+
+    def test_evaluation_done_export_uses_runtime_results_not_stale_workbook(self):
+        runtime = server.EvaluationRuntime("方案A")
+        new_results = {"curves": {"green_hourly": [{"load_down_disturbance_power": -97.35}]}}
+        dispatch_rows = [{"hour": 1, "load_down_disturbance_power": -97.35}]
+        captured = {}
+
+        def fake_export(payload, rows):
+            captured["runtime_status_during_export"] = runtime.status
+            captured["payload"] = payload
+            captured["dispatch_rows"] = rows
+            return WEB_ROOT / "tests" / "case_results.xlsx"
+
+        with runtime._lock:
+            runtime.status = "运行中"
+            runtime.scheme = "方案A"
+            runtime.result_filename = "case_results.xlsx"
+            runtime.start_time = server._now_text()
+            with patch.object(
+                server,
+                "read_result_workbook_display_payload_for_response",
+                side_effect=AssertionError("导出本次评估结果时不应读取旧结果工作簿"),
+            ), patch.object(server, "export_evaluation_results_workbook", side_effect=fake_export):
+                runtime._handle_process_event_unlocked(
+                    {
+                        "type": "done",
+                        "metrics": [{"label": "度电成本", "value": 1.23, "unit": "元"}],
+                        "results": new_results,
+                        "dispatch_rows": dispatch_rows,
+                    }
+                )
+
+        self.assertEqual(runtime.status, "已完成")
+        self.assertEqual(captured["runtime_status_during_export"], "运行中")
+        self.assertEqual(captured["payload"]["status"], "已完成")
+        self.assertTrue(captured["payload"]["end_time"])
+        self.assertEqual(captured["payload"]["results"], new_results)
+        self.assertEqual(captured["dispatch_rows"], dispatch_rows)
         self.assertEqual(
             captured["payload"]["results"]["curves"]["green_hourly"][0]["load_down_disturbance_power"],
             -97.35,
