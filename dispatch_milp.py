@@ -8,7 +8,7 @@ from typing import Any, Callable
 import numpy as np
 from scipy import sparse
 
-from milp_solver import solve_milp
+from milp_solver import format_solver_number, solve_milp
 
 
 LogSink = Callable[[dict[str, Any]], None]
@@ -139,6 +139,64 @@ def solve_built_milp(
         options,
         log,
         problem_name,
+    )
+
+
+def solution_feasibility_report(
+    builder: MilpModelBuilder,
+    solution: np.ndarray,
+    *,
+    tolerance: float = 1e-5,
+) -> dict[str, float | bool]:
+    x = np.asarray(solution, dtype=float)
+    lower_bounds = builder.lower_bounds_array()
+    upper_bounds = builder.upper_bounds_array()
+    integrality = builder.integrality_array()
+    matrix = builder.constraint_matrix()
+    constraint_lower = builder.constraint_lower_array()
+    constraint_upper = builder.constraint_upper_array()
+
+    finite_lower = np.isfinite(lower_bounds)
+    finite_upper = np.isfinite(upper_bounds)
+    lower_violation = np.max(np.maximum(lower_bounds[finite_lower] - x[finite_lower], 0.0)) if np.any(finite_lower) else 0.0
+    upper_violation = np.max(np.maximum(x[finite_upper] - upper_bounds[finite_upper], 0.0)) if np.any(finite_upper) else 0.0
+
+    activity = matrix @ x
+    finite_constraint_lower = np.isfinite(constraint_lower)
+    finite_constraint_upper = np.isfinite(constraint_upper)
+    constraint_lower_violation = (
+        np.max(np.maximum(constraint_lower[finite_constraint_lower] - activity[finite_constraint_lower], 0.0))
+        if np.any(finite_constraint_lower)
+        else 0.0
+    )
+    constraint_upper_violation = (
+        np.max(np.maximum(activity[finite_constraint_upper] - constraint_upper[finite_constraint_upper], 0.0))
+        if np.any(finite_constraint_upper)
+        else 0.0
+    )
+
+    integer_mask = integrality.astype(bool)
+    integer_violation = np.max(np.abs(x[integer_mask] - np.rint(x[integer_mask]))) if np.any(integer_mask) else 0.0
+    max_violation = float(max(lower_violation, upper_violation, constraint_lower_violation, constraint_upper_violation, integer_violation))
+    return {
+        "feasible": bool(max_violation <= float(tolerance)),
+        "max_violation": max_violation,
+        "variable_lower_violation": float(lower_violation),
+        "variable_upper_violation": float(upper_violation),
+        "constraint_lower_violation": float(constraint_lower_violation),
+        "constraint_upper_violation": float(constraint_upper_violation),
+        "integer_violation": float(integer_violation),
+    }
+
+
+def format_feasibility_report(report: dict[str, float | bool]) -> str:
+    return (
+        f"最大违反={format_solver_number(report.get('max_violation', 0.0))}，"
+        f"约束下界违反={format_solver_number(report.get('constraint_lower_violation', 0.0))}，"
+        f"约束上界违反={format_solver_number(report.get('constraint_upper_violation', 0.0))}，"
+        f"变量下界违反={format_solver_number(report.get('variable_lower_violation', 0.0))}，"
+        f"变量上界违反={format_solver_number(report.get('variable_upper_violation', 0.0))}，"
+        f"整数违反={format_solver_number(report.get('integer_violation', 0.0))}"
     )
 
 

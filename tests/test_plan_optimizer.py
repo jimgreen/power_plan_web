@@ -120,6 +120,30 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(fields["grid_up_regulation_requirement"], 19)
         self.assertEqual(fields["grid_down_regulation_requirement"], -20)
 
+    def test_frequency_delta_p_uses_disturbance_factors_unless_manually_overridden(self):
+        model = {
+            "frequency": {"lower_disturbance_kw": 0.0, "upper_disturbance_kw": 0.0},
+            "loads": np.array([100.0]),
+            "load_up_disturbance_factor": 0.1,
+            "load_down_disturbance_factor": 0.2,
+            "renewable_down_disturbance_factor": 0.3,
+            "device_rows": {
+                "wind_turbines": [{"id": "wind:0", "capacity": 20, "quantity_upper": 2}],
+                "photovoltaics": [{"id": "pv:0", "capacity": 10, "quantity_upper": 3}],
+            },
+            "wind_available_per_unit": {"wind:0": np.array([20.0])},
+            "pv_available_per_unit": {"pv:0": np.array([10.0])},
+        }
+
+        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "min"), 0.031)
+        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "max"), -0.02)
+
+        model["frequency"]["lower_disturbance_kw"] = 5.0
+        model["frequency"]["upper_disturbance_kw"] = 6.0
+
+        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "min"), 0.005)
+        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "max"), -0.006)
+
     def test_planning_optimization_optimizes_equipment_counts_and_cost_terms(self):
         payload = self._payload()
         payload["diesel_generators"][0].update(
@@ -232,6 +256,22 @@ class PlanOptimizerTest(unittest.TestCase):
             plan_optimizer.solve_planning_model(model)
 
         self.assertEqual(seen_options["time_limit"], 5400)
+
+    def test_planning_optimization_rejects_infeasible_non_success_solution(self):
+        payload = self._payload()
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            return SimpleNamespace(
+                success=False,
+                x=np.array(lower_bounds, dtype=float),
+                fun=0.0,
+                message="MOSEK status soltype.itg/prosta.prim_infeas/solsta.unknown",
+            )
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            with self.assertRaisesRegex(ValueError, "未返回可行解"):
+                plan_optimizer.solve_planning_model(model)
 
     def test_planning_optimization_uses_count_commitment_variables_without_unit_binaries(self):
         payload = self._payload()
@@ -894,6 +934,85 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn(("grid_storage_charge", 0), variables)
         self.assertIn(("grid_storage_discharge", 0), variables)
         self.assertNotIn(("grid_storage_on_count", 0, 0), variables)
+
+
+    def test_frequency_security_constraints_add_response_variables_and_bounds(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["frequency_security_constraint_enabled"] = 1
+        payload["planning_parameters"][0]["frequency_nadir_lower_hz"] = 45
+        payload["planning_parameters"][0]["frequency_peak_upper_hz"] = 55
+        payload["planning_parameters"][0]["steady_state_frequency_lower_hz"] = 45
+        payload["planning_parameters"][0]["steady_state_frequency_upper_hz"] = 55
+        payload["diesel_generators"][0].update(
+            {
+                "capacity": 100,
+                "power_upper": 100,
+                "power_lower": 20,
+                "quantity_lower": 1,
+                "quantity_upper": 1,
+                "inertia_constant_h": 3.5,
+                "primary_frequency_coefficient_k": 0.4,
+                "damping_coefficient_d": 0.01,
+                "governor_time_constant_t": 0.6,
+            }
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.copy()
+            captured["constraint_lower"] = constraint_lower.copy()
+            captured["constraint_upper"] = constraint_upper.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        self.assertTrue(model["frequency"]["enabled"])
+        self.assertIn(("frequency_diesel_up_response", 0, 0), variables)
+        self.assertIn(("frequency_diesel_down_response", 0, 0), variables)
+
+        def has_constraint(expected_terms, expected_lower, expected_upper):
+            matrix = captured["constraints"].tocsr()
+            expected = {variables[key]: coefficient for key, coefficient in expected_terms.items()}
+            for row in range(matrix.shape[0]):
+                vector = matrix.getrow(row)
+                terms = {
+                    int(column): float(value)
+                    for column, value in zip(vector.indices, vector.data)
+                    if abs(value) > 1e-9
+                }
+                if set(terms) != set(expected):
+                    continue
+                if not all(abs(terms[column] - expected[column]) < 1e-9 for column in expected):
+                    continue
+                lower = captured["constraint_lower"][row]
+                upper = captured["constraint_upper"][row]
+                lower_matches = np.isneginf(expected_lower) and np.isneginf(lower) or abs(lower - expected_lower) < 1e-9
+                upper_matches = np.isposinf(expected_upper) and np.isposinf(upper) or abs(upper - expected_upper) < 1e-9
+                if lower_matches and upper_matches:
+                    return True
+            return False
+
+        self.assertTrue(has_constraint(
+            {
+                ("frequency_diesel_up_response", 0, 0): 1.0,
+                ("diesel_power", 0, 0): 1.0,
+                ("diesel_on_count", 0, 0): -100.0,
+            },
+            -np.inf,
+            0.0,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                ("frequency_diesel_down_response", 0, 0): 1.0,
+                ("diesel_power", 0, 0): -1.0,
+                ("diesel_on_count", 0, 0): 20.0,
+            },
+            -np.inf,
+            0.0,
+        ))
 
     def test_planning_optimization_uses_initial_storage_ratios_from_planning_parameters(self):
         payload = self._payload()

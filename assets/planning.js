@@ -109,21 +109,23 @@ const planningParameterSpecs = [
   ["load_down_disturbance_factor", "负荷向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["renewable_down_disturbance_factor", "新能源向下扰动系数(0.0-0.5)", "number", { min: 0, max: 0.5, defaultValue: 0 }],
   ["frequency_security_constraint_enabled", "是否考虑频率安全约束", "boolean", { defaultValue: 0 }],
-  ["frequency_security_upper", "频率安全上限(1.0-1.5)", "number", { min: 1, max: 1.5, defaultValue: 1.5 }],
-  ["frequency_security_lower", "频率安全下限(0.5-1.0)", "number", { min: 0.5, max: 1, defaultValue: 1.0 }],
-  ["frequency_nadir_lower_hz", "频率最低点下限(Hz)", "number", { min: 45, max: 50, defaultValue: 49.5 }],
-  ["frequency_peak_upper_hz", "频率最高点上限(Hz)", "number", { min: 50, max: 55, defaultValue: 50.5 }],
-  ["frequency_lower_security_margin_hz", "频率下限安全裕度(Hz)", "number", { min: 0, max: 5, defaultValue: 0.1 }],
-  ["frequency_upper_security_margin_hz", "频率上限安全裕度(Hz)", "number", { min: 0, max: 5, defaultValue: 0.1 }],
-  ["load_frequency_coefficient_d", "负荷频率系数D", "number", { min: 0, max: 10, defaultValue: 1.0 }],
-  ["rocof_upper_hz_per_s", "RoCoF上限(Hz/s)", "number", { min: 0.0001, max: 10, defaultValue: 1.0 }],
-  ["steady_state_frequency_lower_hz", "稳态频率下限(Hz)", "number", { min: 45, max: 50, defaultValue: 49.8 }],
-  ["steady_state_frequency_upper_hz", "稳态频率上限(Hz)", "number", { min: 50, max: 55, defaultValue: 50.2 }],
-  ["frequency_nadir_evaluation_duration_s", "频率Nadir评估时长(s)", "number", { min: 0.1, max: 120, defaultValue: 10.0 }],
-  ["nadir_linearization_samples_per_axis", "Nadir线性化每轴采样点数", "number", { min: 2, max: 50, integer: true, positive: true, integerMessage: "Nadir线性化每轴采样点数必须为正整数", defaultValue: 5 }],
-  ["nadir_linearization_interval_ratio", "Nadir线性化区间比例", "number", { min: 0.0001, max: 10, defaultValue: 1.0 }],
-  ["network_synchronization_coefficient_base", "网络同步系数基值", "number", { min: 0, defaultValue: 1.0 }],
-  ["network_synchronization_coefficient_slope", "网络同步系数斜率", "number", { defaultValue: 0.0 }],
+  ["nominal_frequency_hz", "额定频率(Hz)", "number", { min: 45, max: 65, defaultValue: 50.0 }],
+  ["frequency_nadir_lower_hz", "频率最低点下限(Hz)", "number", { min: 45, max: 65, defaultValue: 49.5 }],
+  ["frequency_peak_upper_hz", "频率最高点上限(Hz)", "number", { min: 45, max: 65, defaultValue: 50.5 }],
+  ["frequency_lower_security_margin_hz", "频率下限安全裕度(Hz)", "number", { min: 0, max: 2, defaultValue: 0.0 }],
+  ["frequency_upper_security_margin_hz", "频率上限安全裕度(Hz)", "number", { min: 0, max: 2, defaultValue: 0.0 }],
+  ["load_frequency_coefficient_d", "负荷频率系数D", "number", { min: 0, max: 20, defaultValue: 0.0 }],
+  ["rocof_upper_hz_per_s", "RoCoF上限(Hz/s)", "number", { min: 0.0001, max: 20, defaultValue: 1.0 }],
+  ["steady_state_frequency_lower_hz", "稳态频率下限(Hz)", "number", { min: 0, max: 65, defaultValue: 49.5 }],
+  ["steady_state_frequency_upper_hz", "稳态频率上限(Hz)", "number", { min: 0, max: 65, defaultValue: 50.5 }],
+  ["frequency_governor_time_constant_s", "频率等效调速时间常数T(s)", "number", { min: 0, max: 20, defaultValue: 0.6 }],
+  ["frequency_nadir_evaluation_duration_s", "频率Nadir评估时长(s)", "number", { min: 1, max: 200, defaultValue: 20.0 }],
+  ["nadir_linearization_samples_per_axis", "Nadir线性化每轴采样点数", "number", { min: 2, max: 7, integer: true, positive: true, integerMessage: "Nadir线性化每轴采样点数必须为正整数", defaultValue: 4 }],
+  ["nadir_linearization_interval_ratio", "Nadir线性化区间比例", "number", { min: 0.05, max: 1, defaultValue: 0.5 }],
+  ["frequency_lower_disturbance_kw", "频率下限扰动功率(kW)", "number", { min: 0, defaultValue: 0.0 }],
+  ["frequency_upper_disturbance_kw", "频率上限扰动功率(kW)", "number", { min: 0, defaultValue: 0.0 }],
+  ["network_synchronization_coefficient_base", "网络同步系数基值", "number", { min: -100, max: 100, defaultValue: 1.0 }],
+  ["network_synchronization_coefficient_slope", "网络同步系数斜率", "number", { min: -100, max: 100, defaultValue: 0.0 }],
   ["network_synchronization_reference_load_kw", "网络同步系数基准负荷(kW)", "number", { min: 0, defaultValue: 0.0 }],
   ["storage_frequency_regulation_enabled", "储能是否参与调频", "boolean", { defaultValue: 0 }],
 ];
@@ -162,8 +164,7 @@ const planningParameterGroups = [
     toggleKey: "frequency_security_constraint_enabled",
     keys: [
       "frequency_security_constraint_enabled",
-      "frequency_security_upper",
-      "frequency_security_lower",
+      "nominal_frequency_hz",
       "frequency_nadir_lower_hz",
       "frequency_peak_upper_hz",
       "frequency_lower_security_margin_hz",
@@ -172,9 +173,12 @@ const planningParameterGroups = [
       "rocof_upper_hz_per_s",
       "steady_state_frequency_lower_hz",
       "steady_state_frequency_upper_hz",
+      "frequency_governor_time_constant_s",
       "frequency_nadir_evaluation_duration_s",
       "nadir_linearization_samples_per_axis",
       "nadir_linearization_interval_ratio",
+      "frequency_lower_disturbance_kw",
+      "frequency_upper_disturbance_kw",
       "network_synchronization_coefficient_base",
       "network_synchronization_coefficient_slope",
       "network_synchronization_reference_load_kw",
@@ -273,17 +277,17 @@ const deviceFieldRules = {
   soc_lower: { min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "SOC下限(0.0-1.0)必须在0到1之间" },
   self_discharge_rate: { min: 0, max: 0.01, attrs: ['min="0"', 'max="0.01"', 'step="any"', 'inputmode="decimal"'], message: "自损耗率(0-1%/天)必须在0到0.01之间" },
   is_grid_forming: { integer: true, min: 0, max: 1, attrs: ['min="0"', 'max="1"', 'step="1"', 'inputmode="numeric"', 'pattern="[01]"'], message: "是否构网必须为0或1" },
-  storage_equivalent_inertia_constant_h: { min: 0.5, max: 10, attrs: ['min="0.5"', 'max="10"', 'step="any"', 'inputmode="decimal"'], message: "等效惯量常数H(s)必须在0.5到10.0之间" },
-  storage_equivalent_primary_frequency_coefficient_k: { min: 0.1, max: 5, attrs: ['min="0.1"', 'max="5"', 'step="any"', 'inputmode="decimal"'], message: "等效一次调频系数K必须在0.1到5.0之间" },
-  storage_equivalent_damping_coefficient_d: { min: 0.001, max: 1, attrs: ['min="0.001"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "等效阻尼系数D必须在0.001到1.0之间" },
+  storage_equivalent_inertia_constant_h: { min: 0, max: 20, attrs: ['min="0"', 'max="20"', 'step="any"', 'inputmode="decimal"'], message: "等效惯量常数H(s)必须在0到20.0之间" },
+  storage_equivalent_primary_frequency_coefficient_k: { min: 0, max: 10, attrs: ['min="0"', 'max="10"', 'step="any"', 'inputmode="decimal"'], message: "等效一次调频系数K必须在0到10.0之间" },
+  storage_equivalent_damping_coefficient_d: { min: 0, max: 20, attrs: ['min="0"', 'max="20"', 'step="any"', 'inputmode="decimal"'], message: "等效阻尼系数D必须在0到20.0之间" },
   hydrogen_tank_capacity: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "容量(Nm3)必须为正实数" },
   electric_to_hydrogen_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "电-氢效率(Nm3/kWh)必须为正实数" },
   hydrogen_to_electric_efficiency: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "氢-电效率(kWh/Nm3)必须为正实数" },
   fuel_rate: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "油耗率(kg/kWh)必须为正实数" },
-  inertia_constant_h: { min: 1, max: 10, attrs: ['min="1"', 'max="10"', 'step="any"', 'inputmode="decimal"'], message: "惯量常数H(s)必须在1.0到10.0之间" },
-  primary_frequency_coefficient_k: { min: 0.1, max: 1, attrs: ['min="0.1"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "一次调频系数K必须在0.1到1.0之间" },
-  damping_coefficient_d: { min: 0.001, max: 1, attrs: ['min="0.001"', 'max="1"', 'step="any"', 'inputmode="decimal"'], message: "阻尼系数D必须在0.001到1.0之间" },
-  governor_time_constant_t: { min: 0.1, max: 2, attrs: ['min="0.1"', 'max="2"', 'step="any"', 'inputmode="decimal"'], message: "调速时间常数T(s)必须在0.1到2.0之间" },
+  inertia_constant_h: { min: 0, max: 20, attrs: ['min="0"', 'max="20"', 'step="any"', 'inputmode="decimal"'], message: "惯量常数H(s)必须在0到20.0之间" },
+  primary_frequency_coefficient_k: { min: 0, max: 10, attrs: ['min="0"', 'max="10"', 'step="any"', 'inputmode="decimal"'], message: "一次调频系数K必须在0到10.0之间" },
+  damping_coefficient_d: { min: 0, max: 20, attrs: ['min="0"', 'max="20"', 'step="any"', 'inputmode="decimal"'], message: "阻尼系数D必须在0到20.0之间" },
+  governor_time_constant_t: { min: 0.0001, max: 20, attrs: ['min="0.0001"', 'max="20"', 'step="any"', 'inputmode="decimal"'], message: "调速时间常数T(s)必须在0.0001到20.0之间" },
   power_lower: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "功率下限(kW)必须为非负实数" },
   cut_in_wind_speed: { nonNegative: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "切入风速(m/s)必须为非负实数" },
   rated_wind_speed: { positive: true, attrs: ['min="0"', 'step="any"', 'inputmode="decimal"'], message: "额定风速(m/s)必须为正实数" },
@@ -3533,13 +3537,23 @@ function collectPlanningParameterWarnings() {
       messages.push({ level: "error", message: `${label}不能大于${options.max}` });
     }
   });
-  const upper = Number(row.frequency_security_upper);
-  const lower = Number(row.frequency_security_lower);
-  if (Number.isFinite(upper) && Number.isFinite(lower) && upper < lower) {
-    messages.push({ level: "error", message: "频率安全上限不能小于频率安全下限" });
+  const nominalFrequency = Number(row.nominal_frequency_hz);
+  const nadirLower = Number(row.frequency_nadir_lower_hz);
+  const peakUpper = Number(row.frequency_peak_upper_hz);
+  if (Number.isFinite(nominalFrequency) && Number.isFinite(nadirLower) && nadirLower > nominalFrequency) {
+    messages.push({ level: "error", message: "频率最低点下限(Hz)不能大于额定频率(Hz)" });
+  }
+  if (Number.isFinite(nominalFrequency) && Number.isFinite(peakUpper) && peakUpper < nominalFrequency) {
+    messages.push({ level: "error", message: "频率最高点上限(Hz)不能小于额定频率(Hz)" });
   }
   const steadyUpper = Number(row.steady_state_frequency_upper_hz);
   const steadyLower = Number(row.steady_state_frequency_lower_hz);
+  if (Number.isFinite(nominalFrequency) && Number.isFinite(steadyLower) && steadyLower > nominalFrequency) {
+    messages.push({ level: "error", message: "稳态频率下限(Hz)不能大于额定频率(Hz)" });
+  }
+  if (Number.isFinite(nominalFrequency) && Number.isFinite(steadyUpper) && steadyUpper < nominalFrequency) {
+    messages.push({ level: "error", message: "稳态频率上限(Hz)不能小于额定频率(Hz)" });
+  }
   if (Number.isFinite(steadyUpper) && Number.isFinite(steadyLower) && steadyUpper < steadyLower) {
     messages.push({ level: "error", message: "稳态频率上限(Hz)不能小于稳态频率下限(Hz)" });
   }

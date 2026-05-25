@@ -18,6 +18,8 @@ LogSink = Callable[[dict[str, Any]], None]
 LOAD_SHED_PENALTY_COST = 1_000_000.0
 DIESEL_ON_COUNT_PENALTY = 0.0001
 ELECTROLYZER_ON_COUNT_PENALTY = 0.00001
+FREQUENCY_EPS = 1e-9
+NOMINAL_FREQUENCY_HZ = 50.0
 
 DEVICE_SPECS: dict[str, dict[str, str]] = {
     "diesel_generators": {"label": "柴发", "capacity_field": "capacity", "unit": "kW"},
@@ -30,6 +32,367 @@ DEVICE_SPECS: dict[str, dict[str, str]] = {
     "fuel_cells": {"label": "燃料电池", "capacity_field": "power_capacity", "unit": "kW"},
 }
 
+
+def _safe_linspace(v_min: float, v_max: float, n_points: int) -> np.ndarray:
+    if float(v_max) - float(v_min) <= FREQUENCY_EPS:
+        return np.array([(float(v_min) + float(v_max)) / 2.0], dtype=float)
+    return np.linspace(float(v_min), float(v_max), max(2, int(n_points)))
+
+
+def _shrink_interval(v_min: float, v_max: float, fraction: float) -> tuple[float, float]:
+    if float(v_max) - float(v_min) <= FREQUENCY_EPS:
+        return float(v_min), float(v_max)
+    frac = min(max(float(fraction), FREQUENCY_EPS), 1.0)
+    center = 0.5 * (float(v_min) + float(v_max))
+    half_width = 0.5 * (float(v_max) - float(v_min)) * frac
+    return float(center - half_width), float(center + half_width)
+
+
+def second_order_coefficients(m_eq: float, k_eq: float, d_eq: float, t_d: float) -> tuple[float, float]:
+    alpha = (m_eq + d_eq * t_d) / (m_eq * t_d)
+    beta = (d_eq + k_eq / (2.0 * math.pi)) / (m_eq * t_d)
+    return alpha, beta
+
+
+def frequency_rocof_initial_hz_per_s(delta_p_mw: float, m_eq: float) -> float:
+    if m_eq <= FREQUENCY_EPS:
+        return math.nan
+    return -float(delta_p_mw) / (2.0 * math.pi * float(m_eq))
+
+
+def steady_state_frequency_hz(
+    m_eq: float,
+    k_eq: float,
+    d_eq: float,
+    delta_p_mw: float,
+    *,
+    nominal_frequency_hz: float = NOMINAL_FREQUENCY_HZ,
+) -> float:
+    del m_eq
+    denom = float(d_eq) + float(k_eq) / (2.0 * math.pi)
+    if denom <= FREQUENCY_EPS:
+        return math.nan
+    omega_ss = -float(delta_p_mw) / denom
+    return float(nominal_frequency_hz) + omega_ss / (2.0 * math.pi)
+
+
+def frequency_extreme_hz_exact(
+    m_eq: float,
+    k_eq: float,
+    d_eq: float,
+    t_d: float,
+    delta_p_mw: float,
+    *,
+    t_end: float,
+    seek: str,
+    nominal_frequency_hz: float = NOMINAL_FREQUENCY_HZ,
+) -> float:
+    if seek not in {"min", "max"}:
+        raise ValueError(f"unsupported frequency extreme selector: {seek}")
+    if m_eq <= FREQUENCY_EPS or t_d <= FREQUENCY_EPS:
+        return math.nan
+
+    alpha, beta = second_order_coefficients(m_eq, k_eq, d_eq, t_d)
+    if beta <= FREQUENCY_EPS:
+        return math.nan
+
+    denom = d_eq + k_eq / (2.0 * math.pi)
+    if denom <= FREQUENCY_EPS:
+        return math.nan
+    omega_ss = -delta_p_mw / denom
+    disc = alpha**2 - 4.0 * beta
+    candidates = [0.0, float(t_end)]
+
+    def omega_under(t_star: float) -> float | None:
+        omega_n = math.sqrt(beta)
+        zeta = alpha / (2.0 * omega_n)
+        if zeta >= 1.0:
+            return None
+        omega_d_sq = beta * (1.0 - zeta**2)
+        if omega_d_sq <= FREQUENCY_EPS:
+            return None
+        omega_d = math.sqrt(omega_d_sq)
+        a = -omega_ss
+        b = (-delta_p_mw / m_eq + zeta * omega_n * a) / omega_d
+        return omega_ss + math.exp(-zeta * omega_n * t_star) * (
+            a * math.cos(omega_d * t_star) + b * math.sin(omega_d * t_star)
+        )
+
+    def omega_over(t_star: float) -> float | None:
+        sqrt_disc = math.sqrt(max(disc, 0.0))
+        lam1 = -0.5 * alpha + 0.5 * sqrt_disc
+        lam2 = -0.5 * alpha - 0.5 * sqrt_disc
+        denom_lam = lam1 - lam2
+        if abs(denom_lam) <= FREQUENCY_EPS:
+            return None
+        c1 = (-delta_p_mw / m_eq + omega_ss * lam2) / denom_lam
+        c2 = -omega_ss - c1
+        return omega_ss + c1 * math.exp(lam1 * t_star) + c2 * math.exp(lam2 * t_star)
+
+    if disc < -FREQUENCY_EPS:
+        omega_n = math.sqrt(beta)
+        zeta = alpha / (2.0 * omega_n)
+        omega_d_sq = beta * (1.0 - zeta**2)
+        if omega_d_sq <= FREQUENCY_EPS:
+            return math.nan
+        omega_d = math.sqrt(omega_d_sq)
+        a = -omega_ss
+        b = (-delta_p_mw / m_eq + zeta * omega_n * a) / omega_d
+        angle = math.atan2(
+            omega_d * b - zeta * omega_n * a,
+            zeta * omega_n * b + omega_d * a,
+        )
+        if angle <= 0.0:
+            angle += math.pi
+        t_star = angle / omega_d
+        if 0.0 < t_star < t_end:
+            candidates.append(float(t_star))
+        omega_values = [omega_under(t_star) for t_star in candidates]
+    elif disc > FREQUENCY_EPS:
+        sqrt_disc = math.sqrt(disc)
+        lam1 = -0.5 * alpha + 0.5 * sqrt_disc
+        lam2 = -0.5 * alpha - 0.5 * sqrt_disc
+        if lam1 >= 0.0 or lam2 >= 0.0:
+            return math.nan
+        denom_lam = lam1 - lam2
+        c1 = (-delta_p_mw / m_eq + omega_ss * lam2) / denom_lam
+        c2 = -omega_ss - c1
+        numer = -c2 * lam2
+        denom_ratio = c1 * lam1
+        if abs(denom_ratio) > FREQUENCY_EPS and numer > 0.0:
+            ratio = numer / denom_ratio
+            if ratio > 0.0:
+                t_star = math.log(ratio) / (lam1 - lam2)
+                if 0.0 < t_star < t_end:
+                    candidates.append(float(t_star))
+        omega_values = [omega_over(t_star) for t_star in candidates]
+    else:
+        lam = -0.5 * alpha
+        if lam >= 0.0:
+            return math.nan
+        c1 = -omega_ss
+        c2 = -delta_p_mw / m_eq + lam * omega_ss
+        if abs(lam * c2) > FREQUENCY_EPS:
+            t_star = (delta_p_mw / m_eq) / (lam * c2)
+            if 0.0 < t_star < t_end:
+                candidates.append(float(t_star))
+        omega_values = [
+            omega_ss + (c1 + c2 * t_star) * math.exp(lam * t_star)
+            for t_star in candidates
+        ]
+
+    finite_values = [value for value in omega_values if value is not None and np.isfinite(value)]
+    if not finite_values:
+        return math.nan
+    omega_extreme = min(finite_values) if seek == "min" else max(finite_values)
+    return float(nominal_frequency_hz) + omega_extreme / (2.0 * math.pi)
+
+
+def normalized_frequency_parameters(planning_parameters: dict[str, Any], loads: np.ndarray) -> dict[str, Any]:
+    load_ref = max(0.0, numeric(planning_parameters.get("network_synchronization_reference_load_kw"), 0.0))
+    if load_ref <= 0:
+        load_ref = float(np.max(loads)) if len(loads) else 0.0
+    load_ref = max(load_ref, FREQUENCY_EPS)
+    nominal_frequency_hz = min(65.0, max(45.0, numeric(planning_parameters.get("nominal_frequency_hz"), NOMINAL_FREQUENCY_HZ)))
+    lower_limit = min(nominal_frequency_hz, max(45.0, numeric(planning_parameters.get("frequency_nadir_lower_hz"), 49.5)))
+    upper_limit = max(nominal_frequency_hz, min(65.0, numeric(planning_parameters.get("frequency_peak_upper_hz"), 50.5)))
+    steady_lower = min(nominal_frequency_hz, max(0.0, numeric(planning_parameters.get("steady_state_frequency_lower_hz"), 49.5)))
+    steady_upper = max(nominal_frequency_hz, min(65.0, numeric(planning_parameters.get("steady_state_frequency_upper_hz"), 50.5)))
+    return {
+        "enabled": truthy_flag(planning_parameters.get("frequency_security_constraint_enabled"), False),
+        "storage_frequency_regulation_enabled": truthy_flag(
+            planning_parameters.get("storage_frequency_regulation_enabled"), False
+        ),
+        "nominal_frequency_hz": nominal_frequency_hz,
+        "omega0_rad_per_s": 2.0 * math.pi * nominal_frequency_hz,
+        "nadir_lower_hz": lower_limit,
+        "peak_upper_hz": upper_limit,
+        "lower_security_margin_hz": min(2.0, max(0.0, numeric(planning_parameters.get("frequency_lower_security_margin_hz"), 0.0))),
+        "upper_security_margin_hz": min(2.0, max(0.0, numeric(planning_parameters.get("frequency_upper_security_margin_hz"), 0.0))),
+        "load_frequency_coefficient_d": min(20.0, max(0.0, numeric(planning_parameters.get("load_frequency_coefficient_d"), 0.0))),
+        "rocof_upper_hz_per_s": min(20.0, max(FREQUENCY_EPS, numeric(planning_parameters.get("rocof_upper_hz_per_s"), 1.0))),
+        "steady_state_frequency_lower_hz": steady_lower,
+        "steady_state_frequency_upper_hz": steady_upper,
+        "governor_time_constant_s": max(0.0, numeric(planning_parameters.get("frequency_governor_time_constant_s"), 0.6)),
+        "nadir_evaluation_duration_s": min(200.0, max(1.0, numeric(planning_parameters.get("frequency_nadir_evaluation_duration_s"), 20.0))),
+        "linearization_samples_per_axis": int(min(7, max(2, round(numeric(planning_parameters.get("nadir_linearization_samples_per_axis"), 4))))),
+        "linearization_interval_ratio": min(1.0, max(0.05, numeric(planning_parameters.get("nadir_linearization_interval_ratio"), 0.5))),
+        "network_synchronization_coefficient_base": min(100.0, max(-100.0, numeric(planning_parameters.get("network_synchronization_coefficient_base"), 1.0))),
+        "network_synchronization_coefficient_slope": min(100.0, max(-100.0, numeric(planning_parameters.get("network_synchronization_coefficient_slope"), 0.0))),
+        "lower_disturbance_kw": max(0.0, numeric(planning_parameters.get("frequency_lower_disturbance_kw"), 0.0)),
+        "upper_disturbance_kw": max(0.0, numeric(planning_parameters.get("frequency_upper_disturbance_kw"), 0.0)),
+        "load_ref_kw": load_ref,
+        "context_cache": {},
+    }
+
+
+def representative_governor_time_constant(model: dict[str, Any]) -> float:
+    configured = float(model.get("frequency", {}).get("governor_time_constant_s", 0.0))
+    if configured > FREQUENCY_EPS:
+        return configured
+    weighted_sum = 0.0
+    weight = 0.0
+    for device in model["device_rows"].get("diesel_generators", []):
+        capacity = max(0.0, float(device.get("power_upper", device.get("capacity", 0.0)))) * max(0, int(device.get("quantity_upper", 0)))
+        if capacity <= 0:
+            continue
+        weighted_sum += capacity * max(FREQUENCY_EPS, float(device.get("governor_time_constant_t", 0.6)))
+        weight += capacity
+    return weighted_sum / weight if weight > 0 else 0.6
+
+
+def renewable_available_upper_kw(model: dict[str, Any], hour: int) -> float:
+    total = 0.0
+    for device in renewable_candidate_devices(model, "wind_turbines"):
+        total += float(model["wind_available_per_unit"][device["id"]][hour]) * max(0, int(device.get("quantity_upper", 0)))
+    for device in renewable_candidate_devices(model, "photovoltaics"):
+        total += float(model["pv_available_per_unit"][device["id"]][hour]) * max(0, int(device.get("quantity_upper", 0)))
+    return max(total, 0.0)
+
+
+def frequency_delta_p_mw(model: dict[str, Any], hour: int, seek: str) -> float:
+    freq = model["frequency"]
+    if seek == "min":
+        disturbance_kw = float(freq.get("lower_disturbance_kw", 0.0))
+        if disturbance_kw <= 0:
+            disturbance_kw = (
+                float(model["loads"][hour]) * float(model.get("load_up_disturbance_factor", 0.0))
+                + renewable_available_upper_kw(model, hour) * float(model.get("renewable_down_disturbance_factor", 0.0))
+            )
+        return max(disturbance_kw, FREQUENCY_EPS) / 1000.0
+    disturbance_kw = float(freq.get("upper_disturbance_kw", 0.0))
+    if disturbance_kw <= 0:
+        disturbance_kw = float(model["loads"][hour]) * float(model.get("load_down_disturbance_factor", 0.0))
+    return -max(disturbance_kw, FREQUENCY_EPS) / 1000.0
+
+
+def frequency_physical_bounds(model: dict[str, Any]) -> dict[str, float]:
+    freq = model["frequency"]
+    ref = max(float(freq["load_ref_kw"]), FREQUENCY_EPS)
+    loads = model["loads"]
+    wind_upper = np.zeros(len(loads), dtype=float)
+    pv_upper = np.zeros(len(loads), dtype=float)
+    for device in renewable_candidate_devices(model, "wind_turbines"):
+        wind_upper += model["wind_available_per_unit"][device["id"]] * float(device["quantity_upper"])
+    for device in renewable_candidate_devices(model, "photovoltaics"):
+        pv_upper += model["pv_available_per_unit"][device["id"]] * float(device["quantity_upper"])
+    if len(loads):
+        net_ratio_min = float(np.min(-loads / ref))
+        net_ratio_max = float(np.max((wind_upper + pv_upper - loads) / ref))
+        load_ratio_min = float(np.min(loads / ref))
+        load_ratio_max = float(np.max(loads / ref))
+    else:
+        net_ratio_min = net_ratio_max = load_ratio_min = load_ratio_max = 0.0
+
+    diesel_m_hi = 0.0
+    diesel_k_hi = 0.0
+    diesel_d_hi = 0.0
+    for device in model["device_rows"].get("diesel_generators", []):
+        capacity_mw = max(0.0, float(device.get("power_upper", 0.0))) * max(0, int(device.get("quantity_upper", 0))) / 1000.0
+        diesel_m_hi += float(device.get("inertia_constant_h", 3.5)) * capacity_mw
+        diesel_k_hi += float(device.get("primary_frequency_coefficient_k", 0.4)) * capacity_mw
+        diesel_d_hi += float(device.get("damping_coefficient_d", 0.01)) * capacity_mw
+
+    storage_m_hi = 0.0
+    storage_k_hi = 0.0
+    storage_d_hi = 0.0
+    if freq["storage_frequency_regulation_enabled"]:
+        for device in model["device_rows"].get("storage_pcs", []):
+            if not device.get("is_grid_forming"):
+                continue
+            capacity_mw = max(0.0, float(device.get("capacity", 0.0))) * max(0, int(device.get("quantity_upper", 0))) / 1000.0
+            storage_m_hi += float(device.get("storage_equivalent_inertia_constant_h", 2.5)) * capacity_mw
+            storage_k_hi += float(device.get("storage_equivalent_primary_frequency_coefficient_k", 0.5)) * capacity_mw
+            storage_d_hi += float(device.get("storage_equivalent_damping_coefficient_d", 0.05)) * capacity_mw
+
+    k_net_candidates = [
+        freq["network_synchronization_coefficient_base"] + freq["network_synchronization_coefficient_slope"] * net_ratio_min,
+        freq["network_synchronization_coefficient_base"] + freq["network_synchronization_coefficient_slope"] * net_ratio_max,
+    ]
+    m_hi = 2.0 / float(freq["omega0_rad_per_s"]) * (diesel_m_hi + storage_m_hi)
+    k_lo = min(k_net_candidates)
+    k_hi = max(k_net_candidates) + diesel_k_hi + storage_k_hi
+    d_lo = freq["load_frequency_coefficient_d"] * load_ratio_min
+    d_hi = freq["load_frequency_coefficient_d"] * load_ratio_max + diesel_d_hi + storage_d_hi
+    return {
+        "M_lo": 0.0,
+        "M_hi": max(0.0, float(m_hi)),
+        "K_lo": float(k_lo),
+        "K_hi": float(k_hi),
+        "D_lo": float(d_lo),
+        "D_hi": float(d_hi),
+    }
+
+
+def build_frequency_linearization_context(model: dict[str, Any], hour: int, seek: str) -> dict[str, float | str]:
+    freq = model["frequency"]
+    delta_p_mw = frequency_delta_p_mw(model, hour, seek)
+    bounds = frequency_physical_bounds(model)
+    m_lo, m_hi = _shrink_interval(bounds["M_lo"], bounds["M_hi"], freq["linearization_interval_ratio"])
+    k_lo, k_hi = _shrink_interval(bounds["K_lo"], bounds["K_hi"], freq["linearization_interval_ratio"])
+    d_lo, d_hi = _shrink_interval(bounds["D_lo"], bounds["D_hi"], freq["linearization_interval_ratio"])
+    sample_points = max(2, int(freq["linearization_samples_per_axis"]))
+    rows: list[list[float]] = []
+    values: list[float] = []
+    for m_eq in _safe_linspace(m_lo, m_hi, sample_points):
+        for k_eq in _safe_linspace(k_lo, k_hi, sample_points):
+            for d_eq in _safe_linspace(d_lo, d_hi, sample_points):
+                f_extreme = frequency_extreme_hz_exact(
+                    float(m_eq),
+                    float(k_eq),
+                    float(d_eq),
+                    representative_governor_time_constant(model),
+                    delta_p_mw,
+                    t_end=freq["nadir_evaluation_duration_s"],
+                    seek=seek,
+                    nominal_frequency_hz=freq["nominal_frequency_hz"],
+                )
+                if np.isfinite(f_extreme):
+                    rows.append([float(m_eq), float(k_eq), float(d_eq), 1.0])
+                    values.append(float(f_extreme))
+    if len(rows) < 4:
+        raise ValueError("频率安全约束无法建立：可行运行区间内有效频率采样点不足，请检查柴发/构网储能容量和频率参数")
+    a_matrix = np.asarray(rows, dtype=float)
+    y_vector = np.asarray(values, dtype=float)
+    coef = np.linalg.lstsq(a_matrix, y_vector, rcond=None)[0]
+    pred = a_matrix @ coef
+    if seek == "min":
+        fit_error = float(max(0.0, np.max(pred - y_vector)))
+        freq_ss_limit_hz = float(freq["steady_state_frequency_lower_hz"])
+        steady_dk_min = float(abs(delta_p_mw) / max(freq["nominal_frequency_hz"] - freq_ss_limit_hz, FREQUENCY_EPS))
+    else:
+        fit_error = float(max(0.0, np.max(y_vector - pred)))
+        freq_ss_limit_hz = float(freq["steady_state_frequency_upper_hz"])
+        steady_dk_min = float(abs(delta_p_mw) / max(freq_ss_limit_hz - freq["nominal_frequency_hz"], FREQUENCY_EPS))
+    return {
+        "seek": seek,
+        "M_lo": float(m_lo),
+        "M_hi": float(m_hi),
+        "K_lo": float(k_lo),
+        "K_hi": float(k_hi),
+        "D_lo": float(d_lo),
+        "D_hi": float(d_hi),
+        "a_M": float(coef[0]),
+        "a_K": float(coef[1]),
+        "a_D": float(coef[2]),
+        "c0": float(coef[3]),
+        "fit_error": fit_error,
+        "fit_rmse": float(np.sqrt(np.mean((pred - y_vector) ** 2))),
+        "delta_p_mw": float(delta_p_mw),
+        "rocof_m_min": float(abs(delta_p_mw) / (2.0 * math.pi * max(freq["rocof_upper_hz_per_s"], FREQUENCY_EPS))),
+        "steady_dk_min": steady_dk_min,
+        "freq_ss_limit_hz": freq_ss_limit_hz,
+    }
+
+
+def frequency_context(model: dict[str, Any], hour: int, seek: str) -> dict[str, Any]:
+    freq = model["frequency"]
+    delta_key = round(frequency_delta_p_mw(model, hour, seek), 9)
+    key = (seek, delta_key)
+    cache = freq.setdefault("context_cache", {})
+    if key not in cache:
+        cache[key] = build_frequency_linearization_context(model, hour, seek)
+    return cache[key]
 
 def run_optimization(
     scheme_payload: dict[str, Any],
@@ -137,6 +500,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         )
         for device in device_rows["photovoltaics"]
     }
+    frequency = normalized_frequency_parameters(planning_parameters, loads)
     return {
         "problem_name": str(scheme_payload.get("_optimization_problem_name") or "规划求解"),
         "time_series": time_series,
@@ -156,6 +520,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "load_up_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
         "load_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_down_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
         "renewable_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("renewable_down_disturbance_factor"), 0.0)),
+        "frequency": frequency,
         "storage_soc_lower_ratio": storage_soc_lower_ratio,
         "storage_soc_upper_ratio": storage_soc_upper_ratio,
         "device_rows": device_rows,
@@ -254,6 +619,16 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 0.0,
                 device["capacity"] * device["quantity_upper"],
             )
+        if model["frequency"]["enabled"]:
+            for device in diesel_devices:
+                response_upper = device["power_upper"] * device["quantity_upper"]
+                builder.add_var(("frequency_diesel_up_response", hour, device["index"]), 0.0, response_upper)
+                builder.add_var(("frequency_diesel_down_response", hour, device["index"]), 0.0, response_upper)
+            if model["frequency"]["storage_frequency_regulation_enabled"]:
+                for device in grid_storage_pcs_devices:
+                    response_upper = device["capacity"] * device["quantity_upper"]
+                    builder.add_var(("frequency_storage_up_response", hour, device["index"]), 0.0, response_upper)
+                    builder.add_var(("frequency_storage_down_response", hour, device["index"]), 0.0, response_upper)
 
     def qty_terms(devices: list[dict[str, Any]], coefficient_key: str = "capacity", multiplier: float = 1.0) -> dict[int, float]:
         return {
@@ -442,6 +817,20 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 wind_power_indices=[var(("wind_power", hour))],
                 pv_power_indices=[var(("pv_power", hour))],
             )
+        if model["frequency"]["enabled"]:
+            add_frequency_security_constraints(
+                builder,
+                model=model,
+                hour=hour,
+                diesel_devices=diesel_devices,
+                grid_storage_pcs_devices=grid_storage_pcs_devices,
+                grid_storage_power_terms=grid_storage_power_terms,
+                grid_storage_charge_index=var(("grid_storage_charge", hour)),
+                grid_storage_discharge_index=var(("grid_storage_discharge", hour)),
+                wind_power_index=var(("wind_power", hour)),
+                pv_power_index=var(("pv_power", hour)),
+                load=loads[hour],
+            )
 
         hydrogen_capacity_terms = qty_terms(hydrogen_tank_devices)
         dispatch_milp.add_hydrogen_constraints(
@@ -540,6 +929,13 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     if result.x is None:
         raise ValueError(f"{model.get('problem_name', '规划求解')}失败：{result.message}")
     if not result.success:
+        feasibility = dispatch_milp.solution_feasibility_report(builder, result.x)
+        if not feasibility["feasible"]:
+            detail = dispatch_milp.format_feasibility_report(feasibility)
+            raise ValueError(
+                f"{model.get('problem_name', '规划求解')}失败：求解器未返回可行解，"
+                f"不能使用该结果。状态={result.message}；{detail}"
+            )
         emit(log, "warn", f"规划优化未达到最优但返回了可行解：{result.message}", 80)
     model["variables"] = builder.variables
     model["objective_value"] = objective_value
@@ -592,10 +988,17 @@ def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, 
                 device["power_upper"] = max(0.0, power_upper if power_upper > 0 else capacity)
                 device["power_lower"] = min(device["power_upper"], max(0.0, numeric(source.get("power_lower"), 0.0)))
                 device["fuel_rate"] = max(0.0, numeric(source.get("fuel_rate"), 0.26))
+                device["inertia_constant_h"] = max(0.0, numeric(source.get("inertia_constant_h"), 3.5))
+                device["primary_frequency_coefficient_k"] = max(0.0, numeric(source.get("primary_frequency_coefficient_k"), 0.4))
+                device["damping_coefficient_d"] = max(0.0, numeric(source.get("damping_coefficient_d"), 0.01))
+                device["governor_time_constant_t"] = max(FREQUENCY_EPS, numeric(source.get("governor_time_constant_t"), 0.6))
             elif key == "storage_pcs":
                 device["is_grid_forming"] = truthy_flag(source.get("is_grid_forming"), False)
                 device["storage_charge_efficiency"] = optional_efficiency(source.get("storage_charge_efficiency"))
                 device["storage_discharge_efficiency"] = optional_efficiency(source.get("storage_discharge_efficiency"))
+                device["storage_equivalent_inertia_constant_h"] = max(0.0, numeric(source.get("storage_equivalent_inertia_constant_h"), 2.5))
+                device["storage_equivalent_primary_frequency_coefficient_k"] = max(0.0, numeric(source.get("storage_equivalent_primary_frequency_coefficient_k"), 0.5))
+                device["storage_equivalent_damping_coefficient_d"] = max(0.0, numeric(source.get("storage_equivalent_damping_coefficient_d"), 0.05))
             elif key == "storage_battery_packs":
                 soc_upper = min(1.0, max(0.0, numeric(source.get("soc_upper"), 0.9)))
                 soc_lower = min(1.0, max(0.0, numeric(source.get("soc_lower"), 0.1)))
@@ -746,6 +1149,161 @@ def dispatch_security_curve_fields(
     }
 
 
+
+
+
+def finite_or_default(value: float, default: float) -> float:
+    return float(value) if np.isfinite(value) else float(default)
+
+
+def solved_frequency_terms(
+    model: dict[str, Any],
+    *,
+    hour: int,
+    scenario: str,
+    load: float,
+    wind_power: float,
+    pv_power: float,
+    diesel_devices: list[dict[str, Any]],
+    grid_storage_pcs_devices: list[dict[str, Any]],
+    optional_value,
+) -> tuple[float, float, float]:
+    freq = model["frequency"]
+    response_key = "up" if scenario == "min" else "down"
+    m_eq = 0.0
+    k_eq = 0.0
+    d_eq = float(freq["load_frequency_coefficient_d"]) * float(load) / max(float(freq["load_ref_kw"]), FREQUENCY_EPS)
+    for device in diesel_devices:
+        on_count = optional_value(("diesel_on_count", hour, device["index"]), 0.0)
+        online_capacity_mw = on_count * float(device["power_upper"]) / 1000.0
+        response_mw = optional_value((f"frequency_diesel_{response_key}_response", hour, device["index"]), 0.0) / 1000.0
+        m_eq += 2.0 / float(freq["omega0_rad_per_s"]) * float(device["inertia_constant_h"]) * online_capacity_mw
+        k_eq += float(device["primary_frequency_coefficient_k"]) * response_mw
+        d_eq += float(device["damping_coefficient_d"]) * online_capacity_mw
+    if freq["storage_frequency_regulation_enabled"]:
+        for device in grid_storage_pcs_devices:
+            response_mw = optional_value((f"frequency_storage_{response_key}_response", hour, device["index"]), 0.0) / 1000.0
+            m_eq += 2.0 / float(freq["omega0_rad_per_s"]) * float(device["storage_equivalent_inertia_constant_h"]) * response_mw
+            k_eq += float(device["storage_equivalent_primary_frequency_coefficient_k"]) * response_mw
+            d_eq += float(device["storage_equivalent_damping_coefficient_d"]) * response_mw
+    net_ratio = (float(wind_power) + float(pv_power) - float(load)) / max(float(freq["load_ref_kw"]), FREQUENCY_EPS)
+    k_eq += float(freq["network_synchronization_coefficient_base"]) + float(freq["network_synchronization_coefficient_slope"]) * net_ratio
+    return m_eq, k_eq, d_eq
+
+
+def evaluate_frequency_fields(
+    model: dict[str, Any],
+    *,
+    hour: int,
+    load: float,
+    wind_power: float,
+    pv_power: float,
+    diesel_devices: list[dict[str, Any]],
+    grid_storage_pcs_devices: list[dict[str, Any]],
+    optional_value,
+) -> dict[str, float]:
+    if not model.get("frequency", {}).get("enabled"):
+        return {}
+    freq = model["frequency"]
+    lower_context = frequency_context(model, hour, "min")
+    upper_context = frequency_context(model, hour, "max")
+    m_eq, k_eq, d_eq = solved_frequency_terms(
+        model,
+        hour=hour,
+        scenario="min",
+        load=load,
+        wind_power=wind_power,
+        pv_power=pv_power,
+        diesel_devices=diesel_devices,
+        grid_storage_pcs_devices=grid_storage_pcs_devices,
+        optional_value=optional_value,
+    )
+    m_upper, k_upper, d_upper = solved_frequency_terms(
+        model,
+        hour=hour,
+        scenario="max",
+        load=load,
+        wind_power=wind_power,
+        pv_power=pv_power,
+        diesel_devices=diesel_devices,
+        grid_storage_pcs_devices=grid_storage_pcs_devices,
+        optional_value=optional_value,
+    )
+    nadir_linear = (
+        lower_context["a_M"] * m_eq
+        + lower_context["a_K"] * k_eq
+        + lower_context["a_D"] * d_eq
+        + lower_context["c0"]
+    )
+    peak_linear = (
+        upper_context["a_M"] * m_upper
+        + upper_context["a_K"] * k_upper
+        + upper_context["a_D"] * d_upper
+        + upper_context["c0"]
+    )
+    nadir_safe = nadir_linear - lower_context["fit_error"] - freq["lower_security_margin_hz"]
+    peak_safe = peak_linear + upper_context["fit_error"] + freq["upper_security_margin_hz"]
+    nadir_exact = frequency_extreme_hz_exact(
+        m_eq,
+        k_eq,
+        d_eq,
+        representative_governor_time_constant(model),
+        lower_context["delta_p_mw"],
+        t_end=freq["nadir_evaluation_duration_s"],
+        seek="min",
+        nominal_frequency_hz=freq["nominal_frequency_hz"],
+    )
+    peak_exact = frequency_extreme_hz_exact(
+        m_upper,
+        k_upper,
+        d_upper,
+        representative_governor_time_constant(model),
+        upper_context["delta_p_mw"],
+        t_end=freq["nadir_evaluation_duration_s"],
+        seek="max",
+        nominal_frequency_hz=freq["nominal_frequency_hz"],
+    )
+    nadir_display = min(nadir_safe, nadir_exact) if np.isfinite(nadir_exact) else nadir_safe
+    peak_display = max(peak_safe, peak_exact) if np.isfinite(peak_exact) else peak_safe
+    steady_lower = steady_state_frequency_hz(
+        m_eq,
+        k_eq,
+        d_eq,
+        lower_context["delta_p_mw"],
+        nominal_frequency_hz=freq["nominal_frequency_hz"],
+    )
+    steady_upper = steady_state_frequency_hz(
+        m_upper,
+        k_upper,
+        d_upper,
+        upper_context["delta_p_mw"],
+        nominal_frequency_hz=freq["nominal_frequency_hz"],
+    )
+    rocof = frequency_rocof_initial_hz_per_s(lower_context["delta_p_mw"], m_eq)
+    rocof_upper = frequency_rocof_initial_hz_per_s(upper_context["delta_p_mw"], m_upper)
+    return {
+        "frequency_min": round(finite_or_default(nadir_display, freq["nominal_frequency_hz"]), 4),
+        "frequency_max": round(finite_or_default(peak_display, freq["nominal_frequency_hz"]), 4),
+        "frequency_nadir_est_hz": round(finite_or_default(nadir_safe, freq["nominal_frequency_hz"]), 4),
+        "frequency_peak_est_hz": round(finite_or_default(peak_safe, freq["nominal_frequency_hz"]), 4),
+        "frequency_nadir_exact_hz": round(finite_or_default(nadir_exact, nadir_safe), 4),
+        "frequency_peak_exact_hz": round(finite_or_default(peak_exact, peak_safe), 4),
+        "steady_state_frequency_min_hz": round(finite_or_default(steady_lower, freq["nominal_frequency_hz"]), 4),
+        "steady_state_frequency_max_hz": round(finite_or_default(steady_upper, freq["nominal_frequency_hz"]), 4),
+        "rocof_hz_per_s": round(finite_or_default(rocof, 0.0), 6),
+        "rocof_upper_hz_per_s": round(finite_or_default(rocof_upper, 0.0), 6),
+        "frequency_lower_margin_hz": round(finite_or_default(nadir_display - freq["nadir_lower_hz"], 0.0), 4),
+        "frequency_upper_margin_hz": round(finite_or_default(freq["peak_upper_hz"] - peak_display, 0.0), 4),
+        "equivalent_inertia_m": round(finite_or_default(m_eq, 0.0), 8),
+        "equivalent_primary_frequency_k": round(finite_or_default(k_eq, 0.0), 8),
+        "equivalent_damping_d": round(finite_or_default(d_eq, 0.0), 8),
+        "frequency_delta_p_mw": round(finite_or_default(lower_context["delta_p_mw"], 0.0), 8),
+        "frequency_upper_delta_p_mw": round(finite_or_default(upper_context["delta_p_mw"], 0.0), 8),
+        "frequency_fit_error_hz": round(finite_or_default(lower_context["fit_error"], 0.0), 6),
+        "frequency_upper_fit_error_hz": round(finite_or_default(upper_context["fit_error"], 0.0), 6),
+    }
+
+
 def add_renewable_hour_variables(
     builder: dispatch_milp.MilpModelBuilder,
     hour: int,
@@ -806,6 +1364,177 @@ def add_exact_renewable_aggregate_constraints(
         curtailed_terms[product_index] = curtailed_terms.get(product_index, 0.0) - availability
     builder.add_constraint(power_terms, 0.0, 0.0)
     builder.add_constraint(curtailed_terms, 0.0, 0.0)
+
+
+
+
+
+def add_expression_constraint(
+    builder: dispatch_milp.MilpModelBuilder,
+    terms: dict[int, float],
+    constant: float,
+    lower: float,
+    upper: float,
+) -> None:
+    builder.add_constraint(terms, float(lower) - float(constant), float(upper) - float(constant))
+
+
+def add_scaled_terms(target: dict[int, float], source: dict[int, float], scale: float = 1.0) -> None:
+    for index, coefficient in source.items():
+        target[index] = target.get(index, 0.0) + float(coefficient) * float(scale)
+
+
+def frequency_expression_components(
+    builder: dispatch_milp.MilpModelBuilder,
+    *,
+    model: dict[str, Any],
+    hour: int,
+    diesel_devices: list[dict[str, Any]],
+    grid_storage_pcs_devices: list[dict[str, Any]],
+    scenario: str,
+    wind_power_index: int,
+    pv_power_index: int,
+    load: float,
+) -> tuple[dict[int, float], float, dict[int, float], float, dict[int, float], float]:
+    freq = model["frequency"]
+    response_key = "up" if scenario == "min" else "down"
+    m_terms: dict[int, float] = {}
+    k_terms: dict[int, float] = {}
+    d_terms: dict[int, float] = {}
+    for device in diesel_devices:
+        on_index = builder.var(("diesel_on_count", hour, device["index"]))
+        online_capacity_mw_coeff = float(device["power_upper"]) / 1000.0
+        response_index = builder.var((f"frequency_diesel_{response_key}_response", hour, device["index"]))
+        m_terms[on_index] = m_terms.get(on_index, 0.0) + 2.0 / float(freq["omega0_rad_per_s"]) * float(device["inertia_constant_h"]) * online_capacity_mw_coeff
+        k_terms[response_index] = k_terms.get(response_index, 0.0) + float(device["primary_frequency_coefficient_k"]) / 1000.0
+        d_terms[on_index] = d_terms.get(on_index, 0.0) + float(device["damping_coefficient_d"]) * online_capacity_mw_coeff
+    if freq["storage_frequency_regulation_enabled"]:
+        for device in grid_storage_pcs_devices:
+            response_index = builder.var((f"frequency_storage_{response_key}_response", hour, device["index"]))
+            m_terms[response_index] = m_terms.get(response_index, 0.0) + 2.0 / float(freq["omega0_rad_per_s"]) * float(device["storage_equivalent_inertia_constant_h"]) / 1000.0
+            k_terms[response_index] = k_terms.get(response_index, 0.0) + float(device["storage_equivalent_primary_frequency_coefficient_k"]) / 1000.0
+            d_terms[response_index] = d_terms.get(response_index, 0.0) + float(device["storage_equivalent_damping_coefficient_d"]) / 1000.0
+    ref = max(float(freq["load_ref_kw"]), FREQUENCY_EPS)
+    network_slope = float(freq["network_synchronization_coefficient_slope"])
+    k_terms[wind_power_index] = k_terms.get(wind_power_index, 0.0) + network_slope / ref
+    k_terms[pv_power_index] = k_terms.get(pv_power_index, 0.0) + network_slope / ref
+    k_constant = float(freq["network_synchronization_coefficient_base"]) - network_slope * float(load) / ref
+    d_constant = float(freq["load_frequency_coefficient_d"]) * float(load) / ref
+    return m_terms, 0.0, k_terms, k_constant, d_terms, d_constant
+
+
+def add_frequency_response_constraints(
+    builder: dispatch_milp.MilpModelBuilder,
+    *,
+    model: dict[str, Any],
+    hour: int,
+    diesel_devices: list[dict[str, Any]],
+    grid_storage_pcs_devices: list[dict[str, Any]],
+    grid_storage_power_terms: dict[int, float],
+    grid_storage_charge_index: int,
+    grid_storage_discharge_index: int,
+) -> None:
+    for device in diesel_devices:
+        power_index = builder.var(("diesel_power", hour, device["index"]))
+        on_index = builder.var(("diesel_on_count", hour, device["index"]))
+        up_index = builder.var(("frequency_diesel_up_response", hour, device["index"]))
+        down_index = builder.var(("frequency_diesel_down_response", hour, device["index"]))
+        builder.add_constraint({up_index: 1.0, power_index: 1.0, on_index: -float(device["power_upper"])}, -np.inf, 0.0)
+        builder.add_constraint({down_index: 1.0, power_index: -1.0, on_index: float(device["power_lower"])}, -np.inf, 0.0)
+    if not model["frequency"]["storage_frequency_regulation_enabled"] or not grid_storage_pcs_devices:
+        return
+    up_response_terms: dict[int, float] = {}
+    down_response_terms: dict[int, float] = {}
+    for device in grid_storage_pcs_devices:
+        up_index = builder.var(("frequency_storage_up_response", hour, device["index"]))
+        down_index = builder.var(("frequency_storage_down_response", hour, device["index"]))
+        up_available_index = builder.var(("grid_storage_up_available_count", hour, device["index"]))
+        down_available_index = builder.var(("grid_storage_down_available_count", hour, device["index"]))
+        builder.add_constraint({up_index: 1.0, up_available_index: -float(device["capacity"])}, -np.inf, 0.0)
+        builder.add_constraint({down_index: 1.0, down_available_index: -float(device["capacity"])}, -np.inf, 0.0)
+        up_response_terms[up_index] = 1.0
+        down_response_terms[down_index] = 1.0
+    up_headroom_terms = dict(up_response_terms)
+    up_headroom_terms[grid_storage_discharge_index] = up_headroom_terms.get(grid_storage_discharge_index, 0.0) + 1.0
+    up_headroom_terms[grid_storage_charge_index] = up_headroom_terms.get(grid_storage_charge_index, 0.0) - 1.0
+    for index, coefficient in grid_storage_power_terms.items():
+        up_headroom_terms[index] = up_headroom_terms.get(index, 0.0) - coefficient
+    builder.add_constraint(up_headroom_terms, -np.inf, 0.0)
+
+    down_headroom_terms = dict(down_response_terms)
+    down_headroom_terms[grid_storage_discharge_index] = down_headroom_terms.get(grid_storage_discharge_index, 0.0) - 1.0
+    down_headroom_terms[grid_storage_charge_index] = down_headroom_terms.get(grid_storage_charge_index, 0.0) + 1.0
+    for index, coefficient in grid_storage_power_terms.items():
+        down_headroom_terms[index] = down_headroom_terms.get(index, 0.0) - coefficient
+    builder.add_constraint(down_headroom_terms, -np.inf, 0.0)
+
+
+def add_frequency_security_constraints(
+    builder: dispatch_milp.MilpModelBuilder,
+    *,
+    model: dict[str, Any],
+    hour: int,
+    diesel_devices: list[dict[str, Any]],
+    grid_storage_pcs_devices: list[dict[str, Any]],
+    grid_storage_power_terms: dict[int, float],
+    grid_storage_charge_index: int,
+    grid_storage_discharge_index: int,
+    wind_power_index: int,
+    pv_power_index: int,
+    load: float,
+) -> None:
+    add_frequency_response_constraints(
+        builder,
+        model=model,
+        hour=hour,
+        diesel_devices=diesel_devices,
+        grid_storage_pcs_devices=grid_storage_pcs_devices,
+        grid_storage_power_terms=grid_storage_power_terms,
+        grid_storage_charge_index=grid_storage_charge_index,
+        grid_storage_discharge_index=grid_storage_discharge_index,
+    )
+    for scenario in ("min", "max"):
+        context = frequency_context(model, hour, scenario)
+        m_terms, m_constant, k_terms, k_constant, d_terms, d_constant = frequency_expression_components(
+            builder,
+            model=model,
+            hour=hour,
+            diesel_devices=diesel_devices,
+            grid_storage_pcs_devices=grid_storage_pcs_devices,
+            scenario=scenario,
+            wind_power_index=wind_power_index,
+            pv_power_index=pv_power_index,
+            load=load,
+        )
+        add_expression_constraint(builder, m_terms, m_constant, context["M_lo"], context["M_hi"])
+        add_expression_constraint(builder, k_terms, k_constant, context["K_lo"], context["K_hi"])
+        add_expression_constraint(builder, d_terms, d_constant, context["D_lo"], context["D_hi"])
+        add_expression_constraint(builder, m_terms, m_constant, context["rocof_m_min"], np.inf)
+        steady_terms = dict(k_terms)
+        add_scaled_terms(steady_terms, d_terms, 2.0 * math.pi)
+        add_expression_constraint(
+            builder,
+            steady_terms,
+            k_constant + 2.0 * math.pi * d_constant,
+            context["steady_dk_min"],
+            np.inf,
+        )
+        fitted_terms: dict[int, float] = {}
+        add_scaled_terms(fitted_terms, m_terms, context["a_M"])
+        add_scaled_terms(fitted_terms, k_terms, context["a_K"])
+        add_scaled_terms(fitted_terms, d_terms, context["a_D"])
+        fitted_constant = (
+            context["a_M"] * m_constant
+            + context["a_K"] * k_constant
+            + context["a_D"] * d_constant
+            + context["c0"]
+        )
+        if scenario == "min":
+            lower = model["frequency"]["nadir_lower_hz"] + model["frequency"]["lower_security_margin_hz"] + context["fit_error"]
+            add_expression_constraint(builder, fitted_terms, fitted_constant, lower, np.inf)
+        else:
+            upper = model["frequency"]["peak_upper_hz"] - model["frequency"]["upper_security_margin_hz"] - context["fit_error"]
+            add_expression_constraint(builder, fitted_terms, fitted_constant, -np.inf, upper)
 
 
 def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) -> None:
@@ -898,6 +1627,8 @@ def emit_solution_summary(
 def direct_zero_load_result(model: dict[str, Any], log: LogSink | None = None) -> dict[str, Any] | None:
     """Return the optimum directly when the full-year load is zero."""
 
+    if model.get("frequency", {}).get("enabled"):
+        return None
     if any(float(load) > 1e-9 for load in model["loads"]):
         return None
     quantities = {
@@ -1165,6 +1896,16 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
             grid_storage_up_capacity=grid_storage_up_capacity,
             grid_storage_down_capacity=grid_storage_down_capacity,
         )
+        frequency_fields = evaluate_frequency_fields(
+            model,
+            hour=hour,
+            load=load,
+            wind_power=wind_power,
+            pv_power=pv_power,
+            diesel_devices=diesel_devices,
+            grid_storage_pcs_devices=grid_storage_pcs_devices,
+            optional_value=optional_value,
+        )
         hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
         rows.append(
             {
@@ -1204,6 +1945,7 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "unmet_load": round(value(("unmet_load", hour)), 4),
                 "diesel_consumption": round(diesel_consumption, 8),
                 **security_fields,
+                **frequency_fields,
             }
         )
     return rows
@@ -1273,6 +2015,51 @@ def cost_summary_from_solution(model: dict[str, Any], solution: np.ndarray, tota
     }
 
 
+
+def build_safety_daily_rows(
+    dispatch_rows: list[dict[str, Any]],
+    daily_rows: list[dict[str, Any]],
+    nominal_frequency_hz: float,
+) -> list[dict[str, Any]]:
+    safety_rows: list[dict[str, Any]] = []
+    for day_index, daily_row in enumerate(daily_rows):
+        rows = dispatch_rows[day_index * 24 : (day_index + 1) * 24]
+        if not rows:
+            rows = dispatch_rows
+        if rows and any("frequency_min" in row or "frequency_max" in row for row in rows):
+            frequency_max = max(numeric(row.get("frequency_max"), nominal_frequency_hz) for row in rows)
+            frequency_min = min(numeric(row.get("frequency_min"), nominal_frequency_hz) for row in rows)
+        else:
+            unmet = numeric(daily_row.get("unmet_load_energy"), 0.0)
+            frequency_max = nominal_frequency_hz if unmet <= 0 else nominal_frequency_hz - 0.2
+            frequency_min = nominal_frequency_hz if unmet <= 0 else nominal_frequency_hz - 0.5
+        safety_rows.append(
+            {
+                "day": daily_row.get("day", day_index + 1),
+                "frequency_max": round(frequency_max, 4),
+                "frequency_min": round(frequency_min, 4),
+            }
+        )
+    return safety_rows
+
+
+def frequency_risk_hour_count(dispatch_rows: list[dict[str, Any]]) -> int:
+    count = 0
+    for row in dispatch_rows:
+        lower_margin = row.get("frequency_lower_margin_hz")
+        upper_margin = row.get("frequency_upper_margin_hz")
+        if lower_margin is not None or upper_margin is not None:
+            if numeric(lower_margin, 0.0) < -1e-7 or numeric(upper_margin, 0.0) < -1e-7:
+                count += 1
+        elif numeric(row.get("unmet_load"), 0.0) > 0:
+            count += 1
+    return count
+
+
+def min_frequency_margin(dispatch_rows: list[dict[str, Any]], field: str) -> float:
+    values = [numeric(row.get(field), math.inf) for row in dispatch_rows if row.get(field) is not None]
+    return round(min(values), 4) if values else 0.0
+
 def build_results(
     planning_rows: list[dict[str, Any]],
     dispatch_rows: list[dict[str, Any]],
@@ -1305,13 +2092,13 @@ def build_results(
         {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%"},
         {"指标": "频率风险点", "数值": sum(1 for row in dispatch_rows if numeric(row.get("unmet_load"), 0.0) > 0), "单位": "个"},
     ]
-    safety_daily = [
-        {"day": row["day"], "frequency_max": 50.0 if row["unmet_load_energy"] <= 0 else 49.8, "frequency_min": 50.0 if row["unmet_load_energy"] <= 0 else 49.5}
-        for row in daily
-    ]
-    highest_frequency = max((point["frequency_max"] for point in safety_daily), default=50.0)
-    lowest_frequency = min((point["frequency_min"] for point in safety_daily), default=50.0)
-    frequency_risk_hours = sum(1 for row in dispatch_rows if numeric(row.get("unmet_load"), 0.0) > 0)
+    nominal_frequency_hz = float(model.get("frequency", {}).get("nominal_frequency_hz", NOMINAL_FREQUENCY_HZ))
+    safety_daily = build_safety_daily_rows(dispatch_rows, daily, nominal_frequency_hz)
+    highest_frequency = max((point["frequency_max"] for point in safety_daily), default=nominal_frequency_hz)
+    lowest_frequency = min((point["frequency_min"] for point in safety_daily), default=nominal_frequency_hz)
+    frequency_risk_hours = frequency_risk_hour_count(dispatch_rows)
+    min_lower_margin = min_frequency_margin(dispatch_rows, "frequency_lower_margin_hz")
+    min_upper_margin = min_frequency_margin(dispatch_rows, "frequency_upper_margin_hz")
     green_table = [
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
         {"指标": "负荷总电量", "数值": totals["load_energy"], "单位": "kWh"},
@@ -1365,14 +2152,18 @@ def build_results(
         "green_table": green_table,
         "safety": [
             {"指标": "备用裕度", "数值": 0, "单位": "%", "说明": "基于优化出力结果统计"},
-            {"指标": "频率安全裕度", "数值": 1.0, "单位": "p.u.", "说明": "未供负荷为0时按通过处理"},
-            {"指标": "N-1校核", "数值": "通过" if frequency_risk_hours == 0 else "需复核", "单位": "", "说明": "规划求解结果的基础安全摘要"},
+            {"指标": "频率下限裕度", "数值": min_lower_margin, "单位": "Hz", "说明": "频率最低点约束的最小裕度"},
+            {"指标": "频率上限裕度", "数值": min_upper_margin, "单位": "Hz", "说明": "频率最高点约束的最小裕度"},
+            {"指标": "频率安全校核", "数值": "通过" if frequency_risk_hours == 0 else "需复核", "单位": "", "说明": "规划求解结果的动态频率安全摘要"},
         ],
         "safety_table": [
+            {"指标": "额定频率", "数值": round(nominal_frequency_hz, 4), "单位": "Hz"},
             {"指标": "向上扰动最大量", "数值": 0, "单位": "kW"},
             {"指标": "向下扰动最大量", "数值": 0, "单位": "kW"},
             {"指标": "最高频率", "数值": highest_frequency, "单位": "Hz"},
             {"指标": "最低频率", "数值": lowest_frequency, "单位": "Hz"},
+            {"指标": "频率下限最小裕度", "数值": min_lower_margin, "单位": "Hz"},
+            {"指标": "频率上限最小裕度", "数值": min_upper_margin, "单位": "Hz"},
             {"指标": "频率安全风险小时数", "数值": frequency_risk_hours, "单位": "h"},
             {"指标": "最大未供负荷", "数值": max((row["unmet_load"] for row in dispatch_rows), default=0), "单位": "kW"},
             {"指标": "最低储能SOC", "数值": min((row["storage_soc"] for row in dispatch_rows), default=0), "单位": "kWh"},

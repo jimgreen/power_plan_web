@@ -5734,8 +5734,7 @@ class PowerPlanServerTest(unittest.TestCase):
             "负荷向下扰动系数(0.0-0.5)",
             "新能源向下扰动系数(0.0-0.5)",
             "是否考虑频率安全约束",
-            "频率安全上限(1.0-1.5)",
-            "频率安全下限(0.5-1.0)",
+            "额定频率(Hz)",
             "频率最低点下限(Hz)",
             "频率最高点上限(Hz)",
             "频率下限安全裕度(Hz)",
@@ -5744,9 +5743,12 @@ class PowerPlanServerTest(unittest.TestCase):
             "RoCoF上限(Hz/s)",
             "稳态频率下限(Hz)",
             "稳态频率上限(Hz)",
+            "频率等效调速时间常数T(s)",
             "频率Nadir评估时长(s)",
             "Nadir线性化每轴采样点数",
             "Nadir线性化区间比例",
+            "频率下限扰动功率(kW)",
+            "频率上限扰动功率(kW)",
             "网络同步系数基值",
             "网络同步系数斜率",
             "网络同步系数基准负荷(kW)",
@@ -5755,9 +5757,14 @@ class PowerPlanServerTest(unittest.TestCase):
             "是否考虑负荷扰动",
         ):
             self.assertIn(label, script)
-        self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"frequency_nadir_lower_hz"'))
+        self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"nominal_frequency_hz"'))
+        self.assertLess(script.index('"nominal_frequency_hz"'), script.index('"frequency_nadir_lower_hz"'))
+        self.assertLess(script.index('"frequency_governor_time_constant_s"'), script.index('"frequency_nadir_evaluation_duration_s"'))
+        self.assertLess(script.index('"nadir_linearization_interval_ratio"'), script.index('"frequency_lower_disturbance_kw"'))
         self.assertLess(script.index('"network_synchronization_reference_load_kw"'), script.index('"storage_frequency_regulation_enabled"'))
         self.assertIn("Nadir线性化每轴采样点数必须为正整数", script)
+        self.assertIn("频率最低点下限(Hz)不能大于额定频率(Hz)", script)
+        self.assertIn("频率最高点上限(Hz)不能小于额定频率(Hz)", script)
         self.assertIn("稳态频率上限(Hz)不能小于稳态频率下限(Hz)", script)
         self.assertNotIn('["storage_charge_efficiency", "充电效率(0.0-1.0)", "number"', script)
         self.assertNotIn('["storage_discharge_efficiency", "放电效率(0.0-1.0)", "number"', script)
@@ -5795,7 +5802,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("数量下限(台)", script)
         self.assertIn("数量上限(台)", script)
         self.assertIn("数量上限不能小于数量下限", script)
-        self.assertIn("频率安全上限不能小于频率安全下限", script)
+        self.assertNotIn("频率安全上限不能小于频率安全下限", script)
         self.assertIn("规划求解时间上限(分钟)", script)
         self.assertIn("defaultValue: 60", script)
         self.assertIn("max: 120", script)
@@ -5860,13 +5867,13 @@ class PowerPlanServerTest(unittest.TestCase):
             "电-氢效率(Nm3/kWh)必须为正实数",
             "氢-电效率(kWh/Nm3)必须为正实数",
             "油耗率(kg/kWh)必须为正实数",
-            "惯量常数H(s)必须在1.0到10.0之间",
-            "一次调频系数K必须在0.1到1.0之间",
-            "阻尼系数D必须在0.001到1.0之间",
-            "调速时间常数T(s)必须在0.1到2.0之间",
-            "等效惯量常数H(s)必须在0.5到10.0之间",
-            "等效一次调频系数K必须在0.1到5.0之间",
-            "等效阻尼系数D必须在0.001到1.0之间",
+            "惯量常数H(s)必须在0到20.0之间",
+            "一次调频系数K必须在0到10.0之间",
+            "阻尼系数D必须在0到20.0之间",
+            "调速时间常数T(s)必须在0.0001到20.0之间",
+            "等效惯量常数H(s)必须在0到20.0之间",
+            "等效一次调频系数K必须在0到10.0之间",
+            "等效阻尼系数D必须在0到20.0之间",
             "功率下限(kW)必须为非负实数",
             "切入风速(m/s)必须为非负实数",
             "额定风速(m/s)必须为正实数",
@@ -6713,4 +6720,3 @@ class PowerPlanServerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

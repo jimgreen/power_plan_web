@@ -174,7 +174,8 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(overview["time_series_count"], 8760)
         self.assertIn("diesel_generators", overview)
         self.assertIn("planning_parameters", overview)
-        self.assertEqual(overview["planning_parameters"][0]["frequency_security_upper"], 1.5)
+        self.assertNotIn("frequency_security_upper", overview["planning_parameters"][0])
+        self.assertNotIn("frequency_security_lower", overview["planning_parameters"][0])
         self.assertFalse(any(item["level"] == "error" for item in overview["validation"]))
 
     def test_read_time_series_returns_only_time_series_rows(self):
@@ -500,10 +501,10 @@ class PlanningStoreTest(unittest.TestCase):
         payload["diesel_generators"][0]["cost"] = -0.1
         payload["diesel_generators"][0]["capacity"] = 0
         payload["diesel_generators"][0]["fuel_rate"] = 0
-        payload["diesel_generators"][0]["inertia_constant_h"] = 0.9
-        payload["diesel_generators"][0]["primary_frequency_coefficient_k"] = 0.09
-        payload["diesel_generators"][0]["damping_coefficient_d"] = 0.0009
-        payload["diesel_generators"][0]["governor_time_constant_t"] = 2.1
+        payload["diesel_generators"][0]["inertia_constant_h"] = -0.1
+        payload["diesel_generators"][0]["primary_frequency_coefficient_k"] = 10.1
+        payload["diesel_generators"][0]["damping_coefficient_d"] = 20.1
+        payload["diesel_generators"][0]["governor_time_constant_t"] = 20.1
         payload["wind_turbines"][0]["cut_in_wind_speed"] = -0.1
         payload["wind_turbines"][0]["rated_wind_speed"] = 0
         payload["wind_turbines"][0]["cut_out_wind_speed"] = -0.2
@@ -511,9 +512,9 @@ class PlanningStoreTest(unittest.TestCase):
         payload["storage_battery_packs"][0]["soc_upper"] = 1.2
         payload["storage_battery_packs"][0]["soc_lower"] = -0.1
         payload["storage_pcs"][0]["is_grid_forming"] = 2
-        payload["storage_pcs"][0]["storage_equivalent_inertia_constant_h"] = 0.4
-        payload["storage_pcs"][0]["storage_equivalent_primary_frequency_coefficient_k"] = 5.1
-        payload["storage_pcs"][0]["storage_equivalent_damping_coefficient_d"] = 0.0009
+        payload["storage_pcs"][0]["storage_equivalent_inertia_constant_h"] = -0.1
+        payload["storage_pcs"][0]["storage_equivalent_primary_frequency_coefficient_k"] = 10.1
+        payload["storage_pcs"][0]["storage_equivalent_damping_coefficient_d"] = 20.1
         payload["hydrogen_electrolyzers"][0]["electric_to_hydrogen_efficiency"] = 0
         payload["hydrogen_electrolyzers"][0]["power_lower"] = -0.1
         payload["fuel_cells"][0]["hydrogen_to_electric_efficiency"] = 0
@@ -533,13 +534,13 @@ class PlanningStoreTest(unittest.TestCase):
             "电-氢效率(Nm3/kWh)必须为正实数",
             "氢-电效率(kWh/Nm3)必须为正实数",
             "油耗率(kg/kWh)必须为正实数",
-            "惯量常数H(s)必须在1.0到10.0之间",
-            "一次调频系数K必须在0.1到1.0之间",
-            "阻尼系数D必须在0.001到1.0之间",
-            "调速时间常数T(s)必须在0.1到2.0之间",
-            "等效惯量常数H(s)必须在0.5到10.0之间",
-            "等效一次调频系数K必须在0.1到5.0之间",
-            "等效阻尼系数D必须在0.001到1.0之间",
+            "惯量常数H(s)必须在0到20.0之间",
+            "一次调频系数K必须在0到10.0之间",
+            "阻尼系数D必须在0到20.0之间",
+            "调速时间常数T(s)必须在0.0001到20.0之间",
+            "等效惯量常数H(s)必须在0到20.0之间",
+            "等效一次调频系数K必须在0到10.0之间",
+            "等效阻尼系数D必须在0到20.0之间",
             "功率下限(kW)必须为非负实数",
             "切入风速(m/s)必须为非负实数",
             "额定风速(m/s)必须为正实数",
@@ -597,8 +598,6 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["load_up_disturbance_factor"] = -0.1
         payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.6
         payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = "bad"
-        payload["planning_parameters"][0]["frequency_security_upper"] = 1.1
-        payload["planning_parameters"][0]["frequency_security_lower"] = 1.3
 
         messages = planning_store.validate_payload(payload)
 
@@ -611,7 +610,6 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertTrue(any("负荷向上扰动系数(0.0-0.5)不能小于0" in item["message"] for item in messages))
         self.assertTrue(any("负荷向下扰动系数(0.0-0.5)不能大于0.5" in item["message"] for item in messages))
         self.assertTrue(any("新能源向下扰动系数(0.0-0.5)必须为数值" in item["message"] for item in messages))
-        self.assertTrue(any("频率安全上限不能小于频率安全下限" in item["message"] for item in messages))
 
     def test_frequency_security_planning_parameters_include_extended_defaults_and_ranges(self):
         payload = planning_store.default_payload("方案A")
@@ -619,17 +617,21 @@ class PlanningStoreTest(unittest.TestCase):
         headers = planning_store.SHEET_SPECS["planning_parameters"][1]
 
         expected_defaults = {
+            "nominal_frequency_hz": 50.0,
             "frequency_nadir_lower_hz": 49.5,
             "frequency_peak_upper_hz": 50.5,
-            "frequency_lower_security_margin_hz": 0.1,
-            "frequency_upper_security_margin_hz": 0.1,
-            "load_frequency_coefficient_d": 1.0,
+            "frequency_lower_security_margin_hz": 0.0,
+            "frequency_upper_security_margin_hz": 0.0,
+            "load_frequency_coefficient_d": 0.0,
             "rocof_upper_hz_per_s": 1.0,
-            "steady_state_frequency_lower_hz": 49.8,
-            "steady_state_frequency_upper_hz": 50.2,
-            "frequency_nadir_evaluation_duration_s": 10.0,
-            "nadir_linearization_samples_per_axis": 5,
-            "nadir_linearization_interval_ratio": 1.0,
+            "steady_state_frequency_lower_hz": 49.5,
+            "steady_state_frequency_upper_hz": 50.5,
+            "frequency_governor_time_constant_s": 0.6,
+            "frequency_nadir_evaluation_duration_s": 20.0,
+            "nadir_linearization_samples_per_axis": 4,
+            "nadir_linearization_interval_ratio": 0.5,
+            "frequency_lower_disturbance_kw": 0.0,
+            "frequency_upper_disturbance_kw": 0.0,
             "network_synchronization_coefficient_base": 1.0,
             "network_synchronization_coefficient_slope": 0.0,
             "network_synchronization_reference_load_kw": 0.0,
@@ -638,38 +640,47 @@ class PlanningStoreTest(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertIn(key, headers)
                 self.assertEqual(row[key], default)
-        self.assertLess(headers.index("frequency_security_constraint_enabled"), headers.index("frequency_nadir_lower_hz"))
+        self.assertLess(headers.index("frequency_security_constraint_enabled"), headers.index("nominal_frequency_hz"))
+        self.assertLess(headers.index("nominal_frequency_hz"), headers.index("frequency_nadir_lower_hz"))
         self.assertLess(headers.index("frequency_nadir_lower_hz"), headers.index("frequency_peak_upper_hz"))
         self.assertLess(headers.index("network_synchronization_reference_load_kw"), headers.index("storage_frequency_regulation_enabled"))
 
+        row["nominal_frequency_hz"] = 44.9
         row["frequency_nadir_lower_hz"] = 44.9
-        row["frequency_peak_upper_hz"] = 55.1
+        row["frequency_peak_upper_hz"] = 65.1
         row["frequency_lower_security_margin_hz"] = -0.1
-        row["frequency_upper_security_margin_hz"] = 5.1
+        row["frequency_upper_security_margin_hz"] = 2.1
         row["load_frequency_coefficient_d"] = -0.1
         row["rocof_upper_hz_per_s"] = 0
         row["steady_state_frequency_lower_hz"] = 50.1
         row["steady_state_frequency_upper_hz"] = 49.9
+        row["frequency_governor_time_constant_s"] = 20.1
         row["frequency_nadir_evaluation_duration_s"] = 0
         row["nadir_linearization_samples_per_axis"] = 1.5
-        row["nadir_linearization_interval_ratio"] = 0
-        row["network_synchronization_coefficient_base"] = -0.1
+        row["nadir_linearization_interval_ratio"] = 0.049
+        row["frequency_lower_disturbance_kw"] = -0.1
+        row["frequency_upper_disturbance_kw"] = -0.1
+        row["network_synchronization_coefficient_base"] = -100.1
         row["network_synchronization_coefficient_slope"] = "bad"
         row["network_synchronization_reference_load_kw"] = -1
 
         message_text = "\n".join(item["message"] for item in planning_store.validate_payload(payload))
         for expected in (
+            "额定频率(Hz)不能小于45",
             "频率最低点下限(Hz)不能小于45",
-            "频率最高点上限(Hz)不能大于55",
+            "频率最高点上限(Hz)不能大于65",
             "频率下限安全裕度(Hz)不能小于0",
-            "频率上限安全裕度(Hz)不能大于5",
+            "频率上限安全裕度(Hz)不能大于2",
             "负荷频率系数D不能小于0",
             "RoCoF上限(Hz/s)不能小于0.0001",
             "稳态频率上限(Hz)不能小于稳态频率下限(Hz)",
-            "频率Nadir评估时长(s)不能小于0.1",
+            "频率等效调速时间常数T(s)不能大于20",
+            "频率Nadir评估时长(s)不能小于1",
             "Nadir线性化每轴采样点数必须为正整数",
-            "Nadir线性化区间比例不能小于0.0001",
-            "网络同步系数基值不能小于0",
+            "Nadir线性化区间比例不能小于0.05",
+            "频率下限扰动功率(kW)不能小于0",
+            "频率上限扰动功率(kW)不能小于0",
+            "网络同步系数基值不能小于-100",
             "网络同步系数斜率必须为数值",
             "网络同步系数基准负荷(kW)不能小于0",
         ):
