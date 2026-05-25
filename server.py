@@ -95,6 +95,7 @@ COMPARISON_WORKBOOK_CACHE = file_cache.FileCache("comparison_workbook", max_entr
 COMPARISON_CURVE_SLICE_CACHE = file_cache.FileCache("comparison_curve_slice", max_entries=512)
 LOAD_CURVE_TEMPLATE_CACHE = file_cache.FileCache("load_curve_templates", max_entries=8)
 STATIC_FILE_BYTES_CACHE = file_cache.FileCache("static_file_bytes", max_entries=256, copy_values=False)
+TASK_RESULT_FILE_LIST_CACHE = file_cache.FileCache("task_result_file_list", max_entries=256)
 COMPARISON_CURVE_GROUPS = {
     "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
     "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
@@ -170,6 +171,8 @@ NO_STORE_CACHE_CONTROL = "no-store, no-cache, max-age=0, must-revalidate"
 STATIC_ASSET_CACHE_CONTROL = "public, max-age=86400, stale-while-revalidate=3600"
 STATIC_DATA_CACHE_CONTROL = "public, max-age=3600"
 RESULT_WORKBOOK_READ_ERRORS = (BadZipFile, zlib.error, OSError, EOFError, KeyError, InvalidFileException)
+COMPRESSIBLE_CONTENT_PREFIXES = ("text/", "application/json", "application/javascript", "image/svg+xml")
+MIN_GZIP_RESPONSE_BYTES = 2048
 TIME_SERIES_IMPORT_ROW_COUNT = 8760
 TIME_SERIES_IMPORT_REQUIRED_COLUMNS = {
     "wind_speed": ("风速", ["wind_speed", "wind", "风速", "风速(m/s)", "风速ms", "风速米秒", "ws10m"]),
@@ -607,7 +610,6 @@ class OptimizationRuntime:
                 self._stop_requested = False
                 self._terminate_process_unlocked()
                 self._run_token += 1
-                token = self._run_token
                 self._append_log_unlocked("ok", f"启动规划求解，方案：{self.scheme}")
                 self._append_log_unlocked("info", "后台规划求解程序已启动")
                 self._event_queue = multiprocessing.Queue()
@@ -803,7 +805,6 @@ class OptimizationRuntime:
         green_ratio = round(min(92.0, 52.0 + self.progress * 0.34), 1)
         reserve_margin = round(max(12.0, 28.0 - self.progress * 0.05), 1)
         frequency_margin = round(1.08 + min(0.12, self.progress * 0.001), 3)
-        curtailed_ratio = round(max(1.0, 9.0 - self.progress * 0.04), 1)
         diesel_energy = round(max(480, 1580 - self.progress * 7.2), 1)
         wind_energy = round(2260 + self.progress * 8.6, 1)
         pv_energy = round(1880 + self.progress * 7.4, 1)
@@ -1480,6 +1481,10 @@ def list_evaluation_result_files_for_tasks(scheme: str) -> list[dict]:
     folder = PLANNING_STORE.scheme_dir(scheme)
     if not folder.exists():
         raise FileNotFoundError(f"方案不存在: {scheme}")
+    return TASK_RESULT_FILE_LIST_CACHE.get(folder, list_evaluation_result_files_for_tasks_uncached, variant="task_results")
+
+
+def list_evaluation_result_files_for_tasks_uncached(folder: Path) -> list[dict]:
     files = []
     for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
         if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
@@ -2476,7 +2481,6 @@ class EvaluationRuntime:
                 self._stop_requested = False
                 self._terminate_process_unlocked()
                 self._run_token += 1
-                token = self._run_token
                 self._append_log_unlocked("ok", f"启动方案评估，方案：{self.scheme}，结果：{self.result_filename}")
                 self._append_log_unlocked("info", "后台评估程序已启动")
                 self._event_queue = multiprocessing.Queue()
@@ -3556,7 +3560,7 @@ def build_snapshot(force_reload: bool = False) -> dict:
 
 
 def _json_response(payload: dict, status: int = 200, extra_headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     headers = {
         "Content-Type": "application/json; charset=utf-8",
         "Cache-Control": "no-store",
@@ -3564,6 +3568,37 @@ def _json_response(payload: dict, status: int = 200, extra_headers: dict[str, st
     if extra_headers:
         headers.update(extra_headers)
     return status, headers, body
+
+
+def response_is_compressible(headers: dict[str, str], body: bytes) -> bool:
+    if len(body) < MIN_GZIP_RESPONSE_BYTES:
+        return False
+    if headers.get("Content-Encoding"):
+        return False
+    content_type = str(headers.get("Content-Type", "")).lower()
+    return any(content_type.startswith(prefix) for prefix in COMPRESSIBLE_CONTENT_PREFIXES)
+
+
+def gzip_response_body_if_supported(request_headers, headers: dict[str, str], body: bytes) -> tuple[dict[str, str], bytes]:
+    if "gzip" not in str(request_headers.get("Accept-Encoding", "")).lower():
+        return headers, body
+    if not response_is_compressible(headers, body):
+        return headers, body
+    compressed = zlib.compressobj(level=6, wbits=16 + zlib.MAX_WBITS)
+    compressed_body = compressed.compress(body) + compressed.flush()
+    if len(compressed_body) >= len(body):
+        return headers, body
+    next_headers = dict(headers)
+    next_headers["Content-Encoding"] = "gzip"
+    next_headers["Vary"] = append_vary_header(next_headers.get("Vary", ""), "Accept-Encoding")
+    return next_headers, compressed_body
+
+
+def append_vary_header(current: str, value: str) -> str:
+    names = [item.strip() for item in str(current or "").split(",") if item.strip()]
+    if not any(item.lower() == value.lower() for item in names):
+        names.append(value)
+    return ", ".join(names)
 
 
 def _no_store_headers(*, vary_cookie: bool = False) -> dict[str, str]:
@@ -5239,6 +5274,8 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
         self._send(status, {"Content-Type": "text/plain; charset=utf-8"}, text.encode("utf-8"))
 
     def _send(self, status: int, headers: dict[str, str], body: bytes) -> None:
+        if int(status) not in (HTTPStatus.NOT_MODIFIED, HTTPStatus.NO_CONTENT):
+            headers, body = gzip_response_body_if_supported(self.headers, headers, body)
         self.send_response(int(status))
         for key, value in headers.items():
             self.send_header(key, value)

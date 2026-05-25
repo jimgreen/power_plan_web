@@ -6673,6 +6673,30 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertTrue(server._static_request_not_modified({"If-Modified-Since": headers["Last-Modified"]}, headers))
         self.assertFalse(server._static_request_not_modified({"If-None-Match": 'W/"stale"'}, headers))
 
+    def test_gzip_response_body_if_supported_compresses_large_text_payloads(self):
+        headers = {"Content-Type": "application/javascript"}
+        body = b"const value = 1;\n" * 500
+
+        compressed_headers, compressed_body = server.gzip_response_body_if_supported(
+            {"Accept-Encoding": "gzip, deflate"},
+            headers,
+            body,
+        )
+
+        self.assertEqual(compressed_headers["Content-Encoding"], "gzip")
+        self.assertEqual(compressed_headers["Vary"], "Accept-Encoding")
+        self.assertLess(len(compressed_body), len(body))
+
+    def test_gzip_response_body_if_supported_keeps_small_payloads_plain(self):
+        headers = {"Content-Type": "application/json; charset=utf-8"}
+        body = b'{"ok":true}'
+
+        next_headers, next_body = server.gzip_response_body_if_supported({"Accept-Encoding": "gzip"}, headers, body)
+
+        self.assertIs(next_headers, headers)
+        self.assertEqual(next_body, body)
+        self.assertNotIn("Content-Encoding", next_headers)
+
     def test_static_headers_keep_regular_data_files_publicly_cacheable(self):
         headers = server._static_headers(WEB_ROOT / "data" / "load_curve_templates.csv")
 

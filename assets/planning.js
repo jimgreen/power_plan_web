@@ -24,9 +24,12 @@ const state = {
   timeSeriesImportManualChartHeight: null,
   timeSeriesImportVisibleCurves: new Set(["wind_speed", "solar_irradiance", "temperature", "load"]),
   timeSeriesImportChartMeta: null,
+  timeSeriesImportChartFrame: 0,
   timeSeriesImportDrag: null,
   timeChartManualHeight: null,
   layoutObserver: null,
+  layoutFrame: 0,
+  timeChartRenderFrame: 0,
   schemeRailLayoutFrame: 0,
   pendingTimeSeriesImport: null,
   pendingLoadCurve: null,
@@ -380,9 +383,15 @@ function bindActions() {
   timeChart.addEventListener("mousemove", onChartMouseMove);
   timeChart.addEventListener("mouseleave", hideChartCursor);
   timeChart.addEventListener("pointerdown", startChartValueDrag);
+  document.getElementById("timeTable")?.addEventListener("input", (event) => {
+    if (event.target?.matches?.("[data-time-index][data-key]")) onTimeInput(event);
+  });
+  document.getElementById("timeSeriesImportPreview")?.addEventListener("input", (event) => {
+    if (event.target?.matches?.("[data-time-series-import-index][data-time-series-import-key]")) onTimeSeriesImportInput(event);
+  });
   document.addEventListener("mousemove", onHistogramMouseMove);
   document.addEventListener("mouseleave", hideHistogramTip);
-  window.addEventListener("resize", syncAdaptiveLayout);
+  window.addEventListener("resize", scheduleAdaptiveLayout);
 }
 
 function bindAdaptiveLayout() {
@@ -394,8 +403,16 @@ function bindAdaptiveLayout() {
     document.getElementById("planningTab"),
     document.getElementById("limitsTab"),
   ].filter(Boolean);
-  state.layoutObserver = new ResizeObserver(() => syncAdaptiveLayout());
+  state.layoutObserver = new ResizeObserver(() => scheduleAdaptiveLayout());
   targets.forEach((target) => state.layoutObserver.observe(target));
+}
+
+function scheduleAdaptiveLayout() {
+  if (state.layoutFrame) return;
+  state.layoutFrame = window.requestAnimationFrame(() => {
+    state.layoutFrame = 0;
+    syncAdaptiveLayout();
+  });
 }
 
 function syncAdaptiveLayout() {
@@ -403,10 +420,18 @@ function syncAdaptiveLayout() {
   applyAdaptiveSchemeRailLayout();
   applyAdaptiveTimeSeriesLayout();
   applyAdaptiveSummaryLayout();
-  renderChart();
+  scheduleRenderChart();
   if (!document.getElementById("mapPickerModal")?.hidden) {
     renderWeatherPreviewChart(state.pendingWeatherRows || []);
   }
+}
+
+function scheduleRenderChart() {
+  if (state.timeChartRenderFrame) return;
+  state.timeChartRenderFrame = window.requestAnimationFrame(() => {
+    state.timeChartRenderFrame = 0;
+    renderChart();
+  });
 }
 
 function applyPanelTableMaxHeight() {
@@ -1164,7 +1189,6 @@ function renderTimeSeriesImportPreview(rows) {
       .join("")}</tr>`)
     .join("");
   host.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th>${fields.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>`;
-  host.querySelectorAll("[data-time-series-import-index]").forEach((input) => input.addEventListener("input", onTimeSeriesImportInput));
 }
 
 function renderTimeSeriesImportChart(rows) {
@@ -1304,7 +1328,7 @@ function applyTimeSeriesImportValueEdit(event) {
     state.timeSeriesImportDrag.edited = true;
     state.timeSeriesImportDrag.lastPoint = point;
   }
-  renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  scheduleTimeSeriesImportChartRender();
   setTimeSeriesImportHint("导入曲线已调整，请确认后保存。", "ok");
   return true;
 }
@@ -1349,8 +1373,16 @@ function onTimeSeriesImportInput(event) {
   const nextValue = typeof value === "number" ? roundEditedCurveValue(clampEditedCurveValue(value, key)) : value;
   state.pendingTimeSeriesImport[index][key] = nextValue;
   if (input.value !== String(nextValue)) input.value = nextValue;
-  renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  scheduleTimeSeriesImportChartRender();
   setTimeSeriesImportHint("导入曲线已调整，请确认后保存。", "ok");
+}
+
+function scheduleTimeSeriesImportChartRender() {
+  if (state.timeSeriesImportChartFrame) return;
+  state.timeSeriesImportChartFrame = window.requestAnimationFrame(() => {
+    state.timeSeriesImportChartFrame = 0;
+    renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  });
 }
 
 function updateTimeSeriesImportCell(index, key, value) {
@@ -2948,14 +2980,13 @@ function renderTimeTable() {
         .join("")}</tr>`;
     })
     .join("")}</tbody></table>`;
-  container.querySelectorAll("input").forEach((input) => input.addEventListener("input", onTimeInput));
 }
 
 function onTimeInput(event) {
   const input = event.target;
   const row = state.payload.time_series[Number(input.dataset.timeIndex)];
   row[input.dataset.key] = coerceInput(input.value);
-  renderChart();
+  scheduleRenderChart();
   renderLimitSummary();
 }
 

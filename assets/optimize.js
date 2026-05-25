@@ -28,6 +28,7 @@ const state = {
   greenSeriesVisibility: null,
   safetySeriesVisibility: null,
   seriesToggleBound: false,
+  lastOptimizationRenderSignature: "",
 };
 
 const resultTabLabels = {
@@ -286,6 +287,7 @@ function clearOptimizationDisplayForSchemeSwitch(scheme = state.currentScheme) {
   state.curvePayload = null;
   state.loadedCurveKeys = new Set();
   state.hourlyCurvePreloadToken += 1;
+  state.lastOptimizationRenderSignature = "";
   state.greenDailyPoints = [];
   state.safetyDailyPoints = [];
   state.optimization = defaultOptimizationState(scheme);
@@ -366,6 +368,9 @@ function bindResultTabs() {
 }
 
 function renderOptimization(data) {
+  const renderSignature = JSON.stringify(data || {});
+  if (renderSignature && renderSignature === state.lastOptimizationRenderSignature) return;
+  state.lastOptimizationRenderSignature = renderSignature;
   updateOptimizationActions(data);
   renderMetrics(data.metrics || []);
   const allowEmptyResult = data.status === "切换中";
