@@ -5,6 +5,7 @@ const MIN_COMPARISON_TABLE_FR = 0;
 const HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8;
 const HOURLY_CURVE_PRELOAD_DELAY_MS = 300;
 const HOURLY_CURVE_PRELOAD_BATCH_DELAY_MS = 120;
+const RESULT_FILES_CACHE_TTL_MS = 15000;
 
 const state = {
   schemes: [],
@@ -20,6 +21,7 @@ const state = {
   curveDataKey: "",
   loadedCurveKeys: new Set(),
   hourlyCurvePreloadToken: 0,
+  resultFilesCache: new Map(),
 };
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -122,7 +124,7 @@ async function loadResultFilesForTabs(tabs) {
   const resultsByScheme = new Map();
   await Promise.all(
     schemes.map(async (scheme) => {
-      const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(scheme)}`);
+      const data = await loadResultFilesForScheme(scheme);
       resultsByScheme.set(scheme, data);
     }),
   );
@@ -138,8 +140,19 @@ async function loadResultFilesForTab(tab) {
     tab.result = "";
     return;
   }
-  const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(tab.scheme)}${tab.result ? `&filename=${encodeURIComponent(tab.result)}` : ""}`);
+  const data = await loadResultFilesForScheme(tab.scheme, tab.result);
   applyResultFilesToTab(tab, data.results || [], data.selected || "");
+}
+
+async function loadResultFilesForScheme(scheme, selected = "") {
+  const cacheKey = `${scheme}\0${selected || ""}`;
+  const cached = state.resultFilesCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.time < RESULT_FILES_CACHE_TTL_MS) return cached.data;
+  const selectedParam = selected ? `&filename=${encodeURIComponent(selected)}` : "";
+  const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(scheme)}${selectedParam}`);
+  state.resultFilesCache.set(cacheKey, { time: now, data });
+  return data;
 }
 
 function applyResultFilesToTab(tab, results, selected = "") {

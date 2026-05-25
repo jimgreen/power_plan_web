@@ -83,6 +83,9 @@
       statsPosition: null,
       statsDrag: null,
       suppressStatsPanelClick: false,
+      listInteractionsBound: false,
+      chartControlsBound: false,
+      annualLegendBound: false,
       hoverIndex: null,
       emptyText: options.emptyText || "暂无小时级曲线",
       promptText: options.promptText || "请选择小时级曲线",
@@ -137,13 +140,12 @@
         target.innerHTML = state.annualTable.length && options.enableAnnualBarComparison
           ? `${tabs}${renderAnnualModeSwitch()}`
           : `${tabs}<div class="empty-summary">${state.annualTable.length ? "年度统计以表格显示" : escapeHtml(message || "暂无年度统计")}</div>`;
-        bindGroupTabs(target);
-        bindAnnualModeSwitch(target);
+        bindCurveNameListInteractions(target);
         return;
       }
       if (!group.curves.length) {
         target.innerHTML = `${tabs}<div class="empty-summary">${escapeHtml(message || groupEmptyText())}</div>`;
-        bindGroupTabs(target);
+        bindCurveNameListInteractions(target);
         return;
       }
       target.innerHTML = `${tabs}<ul aria-multiselectable="true">${group.curves
@@ -152,16 +154,7 @@
           return `<li class="comparison-curve-name-item${active ? " active" : ""}" data-result-curve-name="${escapeHtml(name)}" role="option" aria-selected="${active ? "true" : "false"}" tabindex="0">${escapeHtml(name)}</li>`;
         })
         .join("")}</ul>`;
-      bindGroupTabs(target);
-      target.querySelectorAll("[data-result-curve-name]").forEach((item) => {
-        item.addEventListener("click", (event) => toggleCurve(item.dataset.resultCurveName || "", { multi: isMultiCurveSelectionEvent(event) }));
-        item.addEventListener("keydown", (event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            toggleCurve(item.dataset.resultCurveName || "", { multi: isMultiCurveSelectionEvent(event) });
-          }
-        });
-      });
+      bindCurveNameListInteractions(target);
     }
 
     function renderGroupTabs() {
@@ -181,27 +174,49 @@
       </div>`;
     }
 
-    function bindGroupTabs(target) {
-      target.querySelectorAll("[data-curve-group]").forEach((button) => {
-        button.addEventListener("click", () => {
-          state.activeGroup = button.dataset.curveGroup || "hourly";
-          state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
-          state.hoverIndex = null;
-          render();
-          notifySelectionChange();
-        });
+    function bindCurveNameListInteractions(target) {
+      if (!target || state.listInteractionsBound) return;
+      state.listInteractionsBound = true;
+      target.addEventListener("click", (event) => {
+        const groupButton = event.target.closest("[data-curve-group]");
+        if (groupButton && target.contains(groupButton)) {
+          activateCurveGroup(groupButton.dataset.curveGroup || "hourly");
+          return;
+        }
+        const modeButton = event.target.closest("[data-annual-view-mode]");
+        if (modeButton && target.contains(modeButton)) {
+          activateAnnualViewMode(modeButton.dataset.annualViewMode || "table");
+          return;
+        }
+        const curveItem = event.target.closest("[data-result-curve-name]");
+        if (curveItem && target.contains(curveItem)) {
+          toggleCurve(curveItem.dataset.resultCurveName || "", { multi: isMultiCurveSelectionEvent(event) });
+        }
+      });
+      target.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const curveItem = event.target.closest("[data-result-curve-name]");
+        if (!curveItem || !target.contains(curveItem)) return;
+        event.preventDefault();
+        toggleCurve(curveItem.dataset.resultCurveName || "", { multi: isMultiCurveSelectionEvent(event) });
       });
     }
 
-    function bindAnnualModeSwitch(target) {
-      target.querySelectorAll("[data-annual-view-mode]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const mode = button.dataset.annualViewMode === "bar" ? "bar" : "table";
-          if (state.annualViewMode === mode) return;
-          state.annualViewMode = mode;
-          render();
-        });
-      });
+    function activateCurveGroup(groupKey) {
+      const nextGroup = GROUP_DEFINITIONS.some((group) => group.key === groupKey) ? groupKey : "hourly";
+      if (state.activeGroup === nextGroup) return;
+      state.activeGroup = nextGroup;
+      state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
+      state.hoverIndex = null;
+      render();
+      notifySelectionChange();
+    }
+
+    function activateAnnualViewMode(modeValue) {
+      const mode = modeValue === "bar" ? "bar" : "table";
+      if (state.annualViewMode === mode) return;
+      state.annualViewMode = mode;
+      render();
     }
 
     function toggleCurve(name, options = {}) {
@@ -332,30 +347,27 @@
     }
 
     function bindRangeControls(target) {
-      target.querySelectorAll("[data-curve-range-scope]").forEach((button) => {
-        button.addEventListener("click", () => {
-          if (button.disabled) return;
-          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, scope: button.dataset.curveRangeScope || "year" }, state.activeGroup);
-          state.hoverIndex = null;
-          render();
-        });
+      if (!target || state.chartControlsBound) return;
+      state.chartControlsBound = true;
+      target.addEventListener("click", (event) => {
+        const scopeButton = event.target.closest("[data-curve-range-scope]");
+        if (!scopeButton || !target.contains(scopeButton) || scopeButton.disabled) return;
+        state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, scope: scopeButton.dataset.curveRangeScope || "year" }, state.activeGroup);
+        state.hoverIndex = null;
+        render();
       });
-      const monthSelect = target.querySelector("[data-curve-range-month]");
-      if (monthSelect) {
-        monthSelect.addEventListener("change", () => {
-          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, month: Number(monthSelect.value), day: 1 }, state.activeGroup);
+      target.addEventListener("change", (event) => {
+        if (event.target.matches("[data-curve-range-month]")) {
+          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, month: Number(event.target.value), day: 1 }, state.activeGroup);
           state.hoverIndex = null;
           render();
-        });
-      }
-      const daySelect = target.querySelector("[data-curve-range-day]");
-      if (daySelect) {
-        daySelect.addEventListener("change", () => {
-          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, day: Number(daySelect.value) }, state.activeGroup);
+        }
+        if (event.target.matches("[data-curve-range-day]")) {
+          state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, day: Number(event.target.value) }, state.activeGroup);
           state.hoverIndex = null;
           render();
-        });
-      }
+        }
+      });
     }
 
     function renderAnnualTable(target, message) {
@@ -543,12 +555,14 @@
     }
 
     function bindAnnualLegendToggles(target) {
-      target.querySelectorAll("[data-annual-series-toggle]").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          toggleAnnualSeriesVisibility(button.dataset.annualSeriesToggle || "");
-        });
+      if (!target || state.annualLegendBound) return;
+      state.annualLegendBound = true;
+      target.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-annual-series-toggle]");
+        if (!button || !target.contains(button)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        toggleAnnualSeriesVisibility(button.dataset.annualSeriesToggle || "");
       });
     }
 
