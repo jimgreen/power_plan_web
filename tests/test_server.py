@@ -1259,6 +1259,39 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(server.task_display_status(evaluation_payload["status"]), "计算超时")
         self.assertIn("最大用时", evaluation_payload["logs"][-1]["message"])
 
+    def test_optimization_done_export_uses_runtime_results_not_stale_workbook(self):
+        runtime = server.OptimizationRuntime("方案A")
+        new_results = {"curves": {"green_hourly": [{"load_down_disturbance_power": -97.35}]}}
+        captured = {}
+
+        def fake_export(payload):
+            captured["payload"] = payload
+            return WEB_ROOT / "tests" / "tmp_opt_results.xlsx"
+
+        with runtime._lock:
+            runtime.status = "运行中"
+            runtime.scheme = "方案A"
+            runtime.start_time = server._now_text()
+            with patch.object(
+                server,
+                "read_result_workbook_display_payload_for_response",
+                side_effect=AssertionError("导出本次规划结果时不应读取旧结果工作簿"),
+            ), patch.object(server, "export_optimization_results_workbook", side_effect=fake_export):
+                runtime._handle_process_event_unlocked(
+                    {
+                        "type": "done",
+                        "metrics": [{"label": "度电成本", "value": 1.23, "unit": "元"}],
+                        "results": new_results,
+                    }
+                )
+
+        self.assertEqual(runtime.status, "已完成")
+        self.assertEqual(captured["payload"]["results"], new_results)
+        self.assertEqual(
+            captured["payload"]["results"]["curves"]["green_hourly"][0]["load_down_disturbance_power"],
+            -97.35,
+        )
+
     def test_tasks_api_queues_jobs_and_starts_next_after_current_finishes(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
         original_evaluation_runtime = server.EVALUATION_RUNTIME

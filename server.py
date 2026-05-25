@@ -747,7 +747,7 @@ class OptimizationRuntime:
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
             self.status = "已完成"
             self.end_time = _now_text()
-            result_path = export_optimization_results_workbook(self._payload_unlocked())
+            result_path = export_optimization_results_workbook(self._payload_unlocked(read_workbook=False))
             self.result_file = str(result_path)
             self._results_exported = True
             self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
@@ -772,11 +772,11 @@ class OptimizationRuntime:
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
 
-    def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
+    def _payload_unlocked(self, include_hourly_curves: bool = True, read_workbook: bool = True) -> dict:
         result_path = optimization_result_workbook_path(self.scheme)
         workbook_payload = (
             read_result_workbook_display_payload_for_response(result_path, include_hourly_curves=include_hourly_curves)
-            if self.status != "运行中"
+            if read_workbook and self.status != "运行中"
             else None
         )
         if workbook_payload:
@@ -1213,7 +1213,7 @@ class OptimizationRuntime:
     def _export_results_once_unlocked(self) -> None:
         if self._results_exported:
             return
-        result_path = export_optimization_results_workbook(self._payload_unlocked())
+        result_path = export_optimization_results_workbook(self._payload_unlocked(read_workbook=False))
         self.result_file = str(result_path)
         self._results_exported = True
 
@@ -2655,7 +2655,7 @@ class EvaluationRuntime:
             self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
             dispatch_rows = event.get("dispatch_rows") if isinstance(event.get("dispatch_rows"), list) else []
-            result_path = export_evaluation_results_workbook(self._payload_unlocked(), dispatch_rows)
+            result_path = export_evaluation_results_workbook(self._payload_unlocked(read_workbook=False), dispatch_rows)
             self.result_file = str(result_path)
             self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
             self.status = "已完成"
@@ -2693,9 +2693,9 @@ class EvaluationRuntime:
         if message:
             self._append_log_unlocked(level, message)
 
-    def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
+    def _payload_unlocked(self, include_hourly_curves: bool = True, read_workbook: bool = True) -> dict:
         workbook_payload = None
-        if self.status != "运行中" and self.result_filename:
+        if read_workbook and self.status != "运行中" and self.result_filename:
             try:
                 workbook_payload = read_result_workbook_display_payload_for_response(
                     evaluation_result_path(self.scheme, self.result_filename),
