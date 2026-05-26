@@ -517,36 +517,42 @@ button:disabled {
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
+  min-height: 38px;
   min-width: 0;
   overflow-x: auto;
+  white-space: nowrap;
 }
 
 .task-type-tab {
   flex: 0 0 auto;
   min-width: 132px;
   height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 0 16px;
-  border: 1px solid rgba(21, 211, 255, 0.28);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.74);
-  color: #486966;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: #e7f2ef;
+  color: #0d5c59;
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 800;
   cursor: pointer;
+  box-shadow: none;
 }
 
 .task-type-tab:hover,
 .task-type-tab:focus-visible {
-  border-color: rgba(13, 197, 229, 0.56);
-  color: #0d5c59;
+  border-color: rgba(13, 92, 89, 0.22);
+  background: #d8ebe6;
   outline: none;
 }
 
-.task-type-tab.active {
-  border-color: rgba(13, 197, 229, 0.66);
-  background: linear-gradient(135deg, #18d8f0, #15c884);
-  color: #ffffff;
-  box-shadow: 0 10px 20px rgba(13, 92, 89, 0.16);
+.task-type-tab.active,
+.task-type-tab[aria-selected="true"] {
+  border-color: #0d5c59;
+  background: #0d5c59;
+  color: #fff;
 }
 
 .tasks-panel .status-error {
@@ -6219,6 +6225,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .main-nav button,
 body[data-home-theme]:not([data-home-theme="default"]) .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .scheme-actions button,
 body[data-home-theme]:not([data-home-theme="default"]) .task-actions button,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab,
@@ -6257,6 +6264,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .month-tab:focus-visible 
 body[data-home-theme]:not([data-home-theme="default"]) .main-nav .active,
 body[data-home-theme]:not([data-home-theme="default"]) .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab[aria-selected="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle.active {
@@ -6960,6 +6969,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .main-nav button,
 body[data-home-theme]:not([data-home-theme="default"]) .tab,
 body[data-home-theme]:not([data-home-theme="default"]) .summary-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab,
@@ -7005,6 +7015,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .scheme-actions .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .summary-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab[aria-selected="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button[aria-pressed="true"],
