@@ -2925,6 +2925,307 @@ class EvaluationRuntimeManager:
         return str(scheme or "未选择方案").strip() or "未选择方案"
 
 
+class FrequencyEvaluationRuntime:
+    """Lightweight runtime for frequency-only checks against a result workbook."""
+
+    def __init__(self, scheme: str = "") -> None:
+        self.status = "待启动"
+        self.scheme = str(scheme or "").strip()
+        self.result_filename = ""
+        self.result_file = ""
+        self.start_time = ""
+        self.end_time = ""
+        self.process_id: int | None = None
+        self._metrics: list[dict] = []
+        self._summary: list[dict] = []
+        self._frequency_table: list[dict] = []
+        self._curves: dict = {"safety_daily": []}
+        self._logs: list[dict[str, str]] = []
+        self._lock = threading.Lock()
+        self._append_log_unlocked("info", "频率计算待启动")
+
+    def snapshot(self, include_hourly_curves: bool = True) -> dict:
+        with self._lock:
+            if self.status != "运行中" and self.result_filename:
+                self._load_workbook_payload_unlocked()
+            return self._payload_unlocked()
+
+    def task_snapshot(self) -> dict:
+        with self._lock:
+            return self._task_payload_unlocked()
+
+    def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
+        target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
+        if action == "cancel_queue":
+            target_filename = selected_evaluation_result_filename(target_scheme, filename)
+            with self._lock:
+                self.scheme = target_scheme
+                self.result_filename = target_filename
+                self.result_file = self._safe_result_file_unlocked(target_scheme, target_filename)
+                self.status = "退出队列"
+                self.start_time = ""
+                self.end_time = ""
+                self.process_id = None
+                self._append_log_unlocked("info", "退出等待队列")
+                return self._payload_unlocked()
+
+        if action == "start":
+            target_filename = selected_evaluation_result_filename(target_scheme, filename)
+            if not target_filename:
+                raise ValueError("请先选择结果文件")
+            target_path = evaluation_result_path(target_scheme, target_filename)
+            if not target_path.exists():
+                raise FileNotFoundError(f"结果文件不存在: {target_path.name}")
+            with self._lock:
+                if self.status == "运行中":
+                    raise OptimizationStateError("running", f"方案“{target_scheme}”正在进行频率计算，无法再次启动")
+                self.status = "运行中"
+                self.scheme = target_scheme
+                self.result_filename = target_filename
+                self.result_file = str(target_path)
+                self.start_time = _now_text()
+                self.end_time = ""
+                self.process_id = None
+                self._metrics = []
+                self._summary = []
+                self._frequency_table = []
+                self._curves = {"safety_daily": []}
+                self._append_log_unlocked("ok", f"启动频率计算，方案：{self.scheme}，结果：{self.result_filename}")
+            try:
+                payload = build_frequency_evaluation_payload(target_path)
+            except Exception as exc:
+                with self._lock:
+                    self.status = "失败"
+                    self.end_time = _now_text()
+                    self._append_log_unlocked("error", f"频率计算失败：{exc}")
+                    return self._payload_unlocked()
+                raise
+            with self._lock:
+                self._metrics = payload["metrics"]
+                self._summary = payload["summary"]
+                self._frequency_table = payload["frequency_table"]
+                self._curves = payload["curves"]
+                self.status = "已完成"
+                self.end_time = _now_text()
+                self._append_log_unlocked("ok", "频率计算完成")
+                return self._payload_unlocked()
+
+        if action == "stop":
+            with self._lock:
+                if self.status != "运行中":
+                    raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行中的频率计算")
+                self.status = "计算中止"
+                self.end_time = _now_text()
+                self._append_log_unlocked("warn", "停止频率计算")
+                return self._payload_unlocked()
+
+        raise ValueError(f"unknown frequency action: {action}")
+
+    def _payload_unlocked(self) -> dict:
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "result_filename": self.result_filename,
+            "result_file": self.result_file,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
+            "metrics": self._metrics_unlocked(),
+            "summary": list(self._summary),
+            "frequency_table": list(self._frequency_table),
+            "curves": dict(self._curves),
+            "logs": list(self._logs),
+        }
+
+    def _task_payload_unlocked(self) -> dict:
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "result_filename": self.result_filename,
+            "result_file": self.result_file,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
+            "logs": list(self._logs),
+        }
+
+    def _metrics_unlocked(self) -> list[dict]:
+        base = [
+            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "开始", "value": self.start_time or "-", "unit": ""},
+            {"label": "完成", "value": self.end_time or "-", "unit": ""},
+        ]
+        labels = {item["label"] for item in base}
+        for metric in self._metrics:
+            if isinstance(metric, dict) and metric.get("label") not in labels:
+                base.append(metric)
+                labels.add(metric.get("label"))
+        for label, unit in [("最低频率", "Hz"), ("最高频率", "Hz"), ("频率安全风险小时数", "h")]:
+            if label not in labels:
+                base.append({"label": label, "value": "-", "unit": unit})
+        return base
+
+    def _load_workbook_payload_unlocked(self) -> None:
+        try:
+            path = evaluation_result_path(self.scheme, self.result_filename)
+            if not path.exists():
+                return
+            payload = build_frequency_evaluation_payload(path)
+        except Exception:
+            return
+        self.result_file = str(path)
+        self._metrics = payload["metrics"]
+        self._summary = payload["summary"]
+        self._frequency_table = payload["frequency_table"]
+        self._curves = payload["curves"]
+
+    def _safe_result_file_unlocked(self, scheme: str, filename: str) -> str:
+        try:
+            return str(evaluation_result_path(scheme, filename)) if filename else ""
+        except ValueError:
+            return ""
+
+    def _append_log_unlocked(self, level: str, message: str) -> None:
+        self._logs.append({"time": _now_text(), "level": level, "message": message})
+        if len(self._logs) > 1000:
+            del self._logs[:-1000]
+
+
+class FrequencyEvaluationRuntimeManager:
+    def __init__(self) -> None:
+        self._runtimes: dict[str, FrequencyEvaluationRuntime] = {}
+        self._lock = threading.Lock()
+
+    def snapshot(self, scheme: str = "", filename: str = "", include_hourly_curves: bool = True) -> dict:
+        runtime = self._runtime_for_result(scheme, filename)
+        payload = runtime.snapshot(include_hourly_curves=include_hourly_curves)
+        append_task_control_state(
+            payload,
+            "frequency",
+            self._scheme_name(scheme),
+            payload.get("result_filename") or self._result_filename(self._scheme_name(scheme), filename),
+        )
+        return payload
+
+    def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
+        return self._runtime_for_result(scheme, filename).apply(action, scheme=self._scheme_name(scheme), filename=filename)
+
+    def runtimes(self) -> dict[str, FrequencyEvaluationRuntime]:
+        with self._lock:
+            return dict(self._runtimes)
+
+    def _runtime_for_result(self, scheme: str = "", filename: str = "") -> FrequencyEvaluationRuntime:
+        scheme_name = self._scheme_name(scheme)
+        result_filename = self._result_filename(scheme_name, filename)
+        key = f"{scheme_name}\0{result_filename}"
+        with self._lock:
+            if key not in self._runtimes:
+                runtime = FrequencyEvaluationRuntime(scheme=scheme_name)
+                runtime.result_filename = result_filename
+                runtime.result_file = runtime._safe_result_file_unlocked(scheme_name, result_filename)
+                self._runtimes[key] = runtime
+            return self._runtimes[key]
+
+    @staticmethod
+    def _result_filename(scheme: str, filename: str = "") -> str:
+        selected = str(filename or "").strip()
+        if selected:
+            return selected
+        try:
+            return selected_evaluation_result_filename(scheme)
+        except (FileNotFoundError, ValueError):
+            return ""
+
+    @staticmethod
+    def _scheme_name(scheme: str = "") -> str:
+        return str(scheme or "未选择方案").strip() or "未选择方案"
+
+
+def build_frequency_evaluation_payload(path: Path) -> dict:
+    workbook_payload = read_result_workbook_display_payload(path, include_hourly_curves=False)
+    results = workbook_payload.get("results", {})
+    safety_table = [dict(row) for row in results.get("safety_table", []) if isinstance(row, dict)]
+    safety_daily = [dict(row) for row in results.get("curves", {}).get("safety_daily", []) if isinstance(row, dict)]
+    frequency_metrics = frequency_metrics_from_rows(safety_table, safety_daily)
+    return {
+        "metrics": frequency_metrics,
+        "summary": frequency_summary_rows(frequency_metrics),
+        "frequency_table": frequency_detail_rows(safety_table, frequency_metrics),
+        "curves": {"safety_daily": safety_daily},
+    }
+
+
+def frequency_metrics_from_rows(safety_table: list[dict], safety_daily: list[dict]) -> list[dict]:
+    values_by_label = {str(row.get("指标", "")).strip(): row for row in safety_table}
+    highest = frequency_number(values_by_label.get("最高频率", {}).get("数值"))
+    lowest = frequency_number(values_by_label.get("最低频率", {}).get("数值"))
+    risk_hours = frequency_number(values_by_label.get("频率安全风险小时数", {}).get("数值"))
+    if highest is None:
+        highest_values = [frequency_number(row.get("frequency_max")) for row in safety_daily]
+        highest_values = [value for value in highest_values if value is not None]
+        highest = max(highest_values) if highest_values else None
+    if lowest is None:
+        lowest_values = [frequency_number(row.get("frequency_min")) for row in safety_daily]
+        lowest_values = [value for value in lowest_values if value is not None]
+        lowest = min(lowest_values) if lowest_values else None
+    if risk_hours is None and highest is not None and lowest is not None:
+        risk_hours = sum(
+            1
+            for row in safety_daily
+            if (frequency_number(row.get("frequency_max")) or 50.0) > 50.5
+            or (frequency_number(row.get("frequency_min")) or 50.0) < 49.5
+        )
+    return [
+        {"label": "最低频率", "value": round(lowest, 3) if lowest is not None else "-", "unit": "Hz"},
+        {"label": "最高频率", "value": round(highest, 3) if highest is not None else "-", "unit": "Hz"},
+        {"label": "频率安全风险小时数", "value": int(risk_hours) if risk_hours is not None else "-", "unit": "h"},
+    ]
+
+
+def frequency_summary_rows(metrics: list[dict]) -> list[dict]:
+    return [
+        {"指标": metric.get("label", ""), "数值": metric.get("value", ""), "单位": metric.get("unit", "")}
+        for metric in metrics
+    ]
+
+
+def frequency_detail_rows(safety_table: list[dict], metrics: list[dict]) -> list[dict]:
+    selected_labels = {
+        "最高频率",
+        "最低频率",
+        "频率安全风险小时数",
+        "向上扰动最大量",
+        "向下扰动最大量",
+        "频率下限裕度",
+        "频率上限裕度",
+        "初始频率变化率",
+        "上限场景初始频率变化率",
+        "等效惯量M",
+        "等效调频系数K",
+    }
+    rows = [row for row in safety_table if str(row.get("指标", "")).strip() in selected_labels]
+    existing = {str(row.get("指标", "")).strip() for row in rows}
+    for metric in metrics:
+        label = str(metric.get("label", "")).strip()
+        if label and label not in existing:
+            rows.append({"指标": label, "数值": metric.get("value", ""), "单位": metric.get("unit", "")})
+    return rows
+
+
+def frequency_number(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(str(value).strip().replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 class TaskScheduler:
     """Serial queue for calculation tasks that should wait for existing jobs."""
 
@@ -3011,12 +3312,16 @@ def runtime_for_task_item(item: dict):
         return OPTIMIZATION_RUNTIME.runtimes().get(scheme)
     if task_type_key == "evaluation":
         return EVALUATION_RUNTIME.runtimes().get(f"{scheme}\0{result}")
+    if task_type_key == "frequency":
+        return FREQUENCY_EVALUATION_RUNTIME.runtimes().get(f"{scheme}\0{result}")
     return None
 
 
 def any_calculation_running_unlocked() -> bool:
     return any(runtime.status == "运行中" for runtime in OPTIMIZATION_RUNTIME.runtimes().values()) or any(
         runtime.status == "运行中" for runtime in EVALUATION_RUNTIME.runtimes().values()
+    ) or any(
+        runtime.status == "运行中" for runtime in FREQUENCY_EVALUATION_RUNTIME.runtimes().values()
     )
 
 
@@ -3026,7 +3331,9 @@ def start_task_item_unlocked(item: dict) -> dict:
         return OPTIMIZATION_RUNTIME.apply("start", scheme=item.get("scheme", ""))
     if task_type_key == "evaluation":
         return EVALUATION_RUNTIME.apply("start", scheme=item.get("scheme", ""), filename=item.get("result", ""))
-    raise ValueError("任务类型必须为规划计算或方案评估")
+    if task_type_key == "frequency":
+        return FREQUENCY_EVALUATION_RUNTIME.apply("start", scheme=item.get("scheme", ""), filename=item.get("result", ""))
+    raise ValueError("任务类型必须为规划计算、方案评估或频率计算")
 
 
 def build_task_list(schedule: bool = True) -> list[dict]:
@@ -3053,24 +3360,39 @@ def build_task_list(schedule: bool = True) -> list[dict]:
             result_name = str(result_item.get("name") or "").strip()
             if not result_name:
                 continue
-            if not task_list_evaluation_result_is_eligible(result_item):
-                continue
             key = f"{scheme}\0{result_name}"
-            eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
-            eval_state = (
-                eval_runtime.task_snapshot()
-                if eval_runtime
-                else default_task_runtime_state(scheme, result_filename=result_name)
-            )
-            eval_task = task_from_runtime_state(
-                "evaluation",
-                eval_state,
-                scheme=scheme,
-                result=result_name,
-                queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
-                queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
-            )
-            tasks[eval_task["id"]] = eval_task
+            if task_list_evaluation_result_is_eligible(result_item):
+                eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
+                eval_state = (
+                    eval_runtime.task_snapshot()
+                    if eval_runtime
+                    else default_task_runtime_state(scheme, result_filename=result_name)
+                )
+                eval_task = task_from_runtime_state(
+                    "evaluation",
+                    eval_state,
+                    scheme=scheme,
+                    result=result_name,
+                    queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
+                    queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
+                )
+                tasks[eval_task["id"]] = eval_task
+            if task_list_frequency_result_is_eligible(result_item):
+                freq_runtime = FREQUENCY_EVALUATION_RUNTIME.runtimes().get(key)
+                freq_state = (
+                    freq_runtime.task_snapshot()
+                    if freq_runtime
+                    else default_task_runtime_state(scheme, result_filename=result_name)
+                )
+                freq_task = task_from_runtime_state(
+                    "frequency",
+                    freq_state,
+                    scheme=scheme,
+                    result=result_name,
+                    queued=TASK_SCHEDULER.is_queued("frequency", scheme, result_name),
+                    queue_position=TASK_SCHEDULER.queue_position("frequency", scheme, result_name),
+                )
+                tasks[freq_task["id"]] = freq_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
         state = runtime.task_snapshot()
@@ -3100,6 +3422,20 @@ def build_task_list(schedule: bool = True) -> list[dict]:
         )
         tasks[task["id"]] = task
 
+    for key, runtime in FREQUENCY_EVALUATION_RUNTIME.runtimes().items():
+        scheme, result = split_evaluation_runtime_key(key)
+        queued = TASK_SCHEDULER.is_queued("frequency", scheme, result)
+        state = runtime.task_snapshot()
+        task = task_from_runtime_state(
+            "frequency",
+            state,
+            scheme=scheme,
+            result=result,
+            queued=queued,
+            queue_position=TASK_SCHEDULER.queue_position("frequency", scheme, result),
+        )
+        tasks[task["id"]] = task
+
     return sorted((task for task in tasks.values() if task_list_item_is_visible(task)), key=task_sort_key)
 
 
@@ -3108,13 +3444,19 @@ def task_list_evaluation_result_is_eligible(result_item: dict) -> bool:
     return bool(result_name) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME and bool(result_item.get("readable", True))
 
 
+def task_list_frequency_result_is_eligible(result_item: dict) -> bool:
+    result_name = str(result_item.get("name") or "").strip()
+    return bool(result_name) and bool(result_item.get("readable", True))
+
+
 def task_list_item_is_visible(task: dict) -> bool:
     """Hide rows that business rules made completely non-operable."""
     return bool(task.get("queued") or task.get("can_start") or task.get("can_queue") or task.get("can_stop"))
 
 
 def task_sort_key(item: dict) -> tuple[int, str, str]:
-    type_rank = 0 if item.get("task_type_key") == "optimization" else 1
+    type_ranks = {"optimization": 0, "evaluation": 1, "frequency": 2}
+    type_rank = type_ranks.get(item.get("task_type_key"), 9)
     return type_rank, str(item.get("scheme") or ""), str(item.get("result") or "")
 
 
@@ -3167,7 +3509,8 @@ def task_from_runtime_state(
     process_id = state.get("process_id") or ""
     if isinstance(process_id, str) and process_id.isdigit():
         process_id = int(process_id)
-    task_type = "规划计算" if task_type_key == "optimization" else "方案评估"
+    task_type_labels = {"optimization": "规划计算", "evaluation": "方案评估", "frequency": "频率计算"}
+    task_type = task_type_labels.get(task_type_key, "未知任务")
     task_id = f"{task_type_key}::{scheme}::{normalized_result}"
     return {
         "id": task_id,
@@ -3228,6 +3571,8 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
             state = OPTIMIZATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"])
         elif task_type_key == "evaluation":
             state = EVALUATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"], filename=item["result"])
+        elif task_type_key == "frequency":
+            state = FREQUENCY_EVALUATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"], filename=item["result"])
         else:
             state = default_task_runtime_state(item["scheme"], item["result"])
         tasks = build_task_list()
@@ -3256,7 +3601,18 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
         )
         tasks = build_task_list()
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
-    raise ValueError("任务类型必须为规划计算或方案评估")
+    if task_type_key == "frequency":
+        TASK_SCHEDULER.remove(task_type_key, scheme, result)
+        state = FREQUENCY_EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
+        task = task_from_runtime_state(
+            "frequency",
+            state,
+            scheme=state.get("scheme") or scheme,
+            result=state.get("result_filename") or result,
+        )
+        tasks = build_task_list()
+        return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
+    raise ValueError("任务类型必须为规划计算、方案评估或频率计算")
 
 
 def normalize_task_action(action: str) -> str:
@@ -3316,6 +3672,9 @@ def task_control_state_for_item(task_type_key: str, scheme: str, result: str = "
     if item["task_type_key"] == "evaluation":
         task["can_start"] = task["can_start"] and bool(item["result"]) and item["result"] != OPTIMIZATION_RESULT_WORKBOOK_NAME
         task["can_queue"] = task["can_queue"] and bool(item["result"]) and item["result"] != OPTIMIZATION_RESULT_WORKBOOK_NAME
+    if item["task_type_key"] == "frequency":
+        task["can_start"] = task["can_start"] and bool(item["result"])
+        task["can_queue"] = task["can_queue"] and bool(item["result"])
     return task
 
 
@@ -3358,6 +3717,8 @@ def normalize_task_type_key(value: str) -> str:
         return "optimization"
     if text in {"evaluation", "eval", "方案评估"}:
         return "evaluation"
+    if text in {"frequency", "freq", "频率计算"}:
+        return "frequency"
     return ""
 
 
@@ -3686,6 +4047,7 @@ def _load_initial_simu_runtime() -> SimuRuntime:
 SIMU_RUNTIME = _load_initial_simu_runtime()
 OPTIMIZATION_RUNTIME = OptimizationRuntimeManager()
 EVALUATION_RUNTIME = EvaluationRuntimeManager()
+FREQUENCY_EVALUATION_RUNTIME = FrequencyEvaluationRuntimeManager()
 TASK_SCHEDULER = TaskScheduler()
 DATA_SOURCE = CsvDataSource()
 PLANNING_STORE = planning_store.PlanningStore()
@@ -5179,6 +5541,12 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
+    if path == "/api/frequency/status":
+        scheme = query_params.get("scheme", [""])[0]
+        filename = query_params.get("filename", [""])[0]
+        light = truthy_json_value(query_params.get("light", ["0"])[0])
+        include_hourly_curves = not light
+        return _json_response(FREQUENCY_EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
     if path.startswith("/api/evaluation/"):
         return handle_evaluation_results_api_path(path, "GET", b"", query)
     if path == "/api/optimization/status":
@@ -5215,6 +5583,20 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
             scheme = str(payload.get("scheme", ""))
             filename = str(payload.get("filename", ""))
             state = EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
+        except OptimizationStateError as exc:
+            return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return _json_response({"ok": True, "state": state})
+    if path == "/api/frequency/control":
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            action = str(payload.get("action", ""))
+            scheme = str(payload.get("scheme", ""))
+            filename = str(payload.get("filename", ""))
+            state = FREQUENCY_EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
         except FileNotFoundError as exc:

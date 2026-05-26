@@ -3,11 +3,11 @@ const taskState = {
   loading: false,
   pollTimer: null,
   heightSyncFrame: 0,
+  activeTaskType: "optimization",
   evaluationSchemeFilter: "",
-  manualOptimizationTaskHeight: null,
+  frequencySchemeFilter: "",
   lastRenderedTaskSignature: "",
 };
-const TASK_SECTION_MIN_HEIGHT = 140;
 const TASK_COLUMN_GROUP = `
       <colgroup>
         <col class="task-col-scheme">
@@ -25,9 +25,12 @@ const TASK_COLUMN_GROUP = `
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("optimizationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("evaluationTaskTable")?.addEventListener("click", handleTaskAction);
+  document.getElementById("frequencyTaskTable")?.addEventListener("click", handleTaskAction);
+  document.querySelectorAll("[data-task-page]").forEach((button) => {
+    button.addEventListener("click", () => switchTaskPage(button.dataset.taskPage || "optimization"));
+  });
   document.getElementById("evaluationSchemeFilter")?.addEventListener("change", handleEvaluationSchemeFilterChange);
-  document.getElementById("taskTableResizeHandle")?.addEventListener("pointerdown", startTaskTableResize);
-  window.addEventListener("resize", scheduleTaskSectionHeights);
+  document.getElementById("frequencySchemeFilter")?.addEventListener("change", handleFrequencySchemeFilterChange);
   loadTasks().catch(showTaskError);
   taskState.pollTimer = window.setInterval(() => loadTasks({ silent: true }).catch(showTaskError), 4000);
 });
@@ -71,12 +74,13 @@ function applyTasksPayload(payload, options = {}) {
 
 function renderTasks() {
   const hadEvaluationSchemeFilter = Boolean(taskState.evaluationSchemeFilter);
-  const filterReset = renderEvaluationSchemeFilter();
+  const hadFrequencySchemeFilter = Boolean(taskState.frequencySchemeFilter);
+  const evaluationFilterReset = renderSchemeFilter("evaluation", "evaluationSchemeFilter", "evaluationSchemeFilter");
+  const frequencyFilterReset = renderSchemeFilter("frequency", "frequencySchemeFilter", "frequencySchemeFilter");
   renderTaskSection("optimization", "optimizationTaskTable", "暂无规划计算任务");
   renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
-  if (!hadEvaluationSchemeFilter || filterReset || !taskState.evaluationSchemeFilter) {
-    scheduleTaskSectionHeights();
-  }
+  renderTaskSection("frequency", "frequencyTaskTable", "暂无频率计算任务");
+  updateTaskPageVisibility();
 }
 
 function renderTaskSection(taskTypeKey, targetId, emptyText) {
@@ -114,23 +118,28 @@ function renderTaskSection(taskTypeKey, targetId, emptyText) {
 
 function filteredTasksForSection(taskTypeKey) {
   const tasks = taskState.tasks.filter((task) => task.task_type_key === taskTypeKey);
-  if (taskTypeKey !== "evaluation" || !taskState.evaluationSchemeFilter) return tasks;
-  return tasks.filter((task) => String(task.scheme || "") === taskState.evaluationSchemeFilter);
+  if (taskTypeKey === "evaluation" && taskState.evaluationSchemeFilter) {
+    return tasks.filter((task) => String(task.scheme || "") === taskState.evaluationSchemeFilter);
+  }
+  if (taskTypeKey === "frequency" && taskState.frequencySchemeFilter) {
+    return tasks.filter((task) => String(task.scheme || "") === taskState.frequencySchemeFilter);
+  }
+  return tasks;
 }
 
-function renderEvaluationSchemeFilter() {
-  const select = document.getElementById("evaluationSchemeFilter");
+function renderSchemeFilter(taskTypeKey, selectId, stateKey) {
+  const select = document.getElementById(selectId);
   if (!select) return false;
   const schemeNames = Array.from(
-    new Set(taskState.tasks.filter((task) => task.task_type_key === "evaluation").map((task) => String(task.scheme || "").trim()).filter(Boolean))
+    new Set(taskState.tasks.filter((task) => task.task_type_key === taskTypeKey).map((task) => String(task.scheme || "").trim()).filter(Boolean))
   ).sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
   let filterReset = false;
-  if (taskState.evaluationSchemeFilter && !schemeNames.includes(taskState.evaluationSchemeFilter)) {
-    taskState.evaluationSchemeFilter = "";
+  if (taskState[stateKey] && !schemeNames.includes(taskState[stateKey])) {
+    taskState[stateKey] = "";
     filterReset = true;
   }
   select.innerHTML = [`<option value="">全部方案</option>`, ...schemeNames.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)].join("");
-  select.value = taskState.evaluationSchemeFilter;
+  select.value = taskState[stateKey];
   translateNode(select);
   return filterReset;
 }
@@ -138,9 +147,30 @@ function renderEvaluationSchemeFilter() {
 function handleEvaluationSchemeFilterChange(event) {
   taskState.evaluationSchemeFilter = String(event.target?.value || "");
   renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
-  if (!taskState.evaluationSchemeFilter) {
-    scheduleTaskSectionHeights();
-  }
+}
+
+function handleFrequencySchemeFilterChange(event) {
+  taskState.frequencySchemeFilter = String(event.target?.value || "");
+  renderTaskSection("frequency", "frequencyTaskTable", "暂无频率计算任务");
+}
+
+function switchTaskPage(taskTypeKey) {
+  if (!["optimization", "evaluation", "frequency"].includes(taskTypeKey)) return;
+  taskState.activeTaskType = taskTypeKey;
+  updateTaskPageVisibility();
+}
+
+function updateTaskPageVisibility() {
+  document.querySelectorAll("[data-task-page]").forEach((button) => {
+    const active = button.dataset.taskPage === taskState.activeTaskType;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll("[data-task-section]").forEach((section) => {
+    const active = section.dataset.taskSection === taskState.activeTaskType;
+    section.classList.toggle("active", active);
+    section.hidden = !active;
+  });
 }
 
 function renderTaskRow(task) {
@@ -216,99 +246,6 @@ function setTaskError(message) {
   if (!target) return;
   target.textContent = message || "";
   target.hidden = !message;
-  scheduleTaskSectionHeights();
-}
-
-function scheduleTaskSectionHeights() {
-  if (taskState.heightSyncFrame) {
-    window.cancelAnimationFrame(taskState.heightSyncFrame);
-  }
-  taskState.heightSyncFrame = window.requestAnimationFrame(() => {
-    taskState.heightSyncFrame = 0;
-    syncTaskSectionHeights();
-  });
-}
-
-function syncTaskSectionHeights() {
-  const panel = document.querySelector(".tasks-panel");
-  const optimizationSection = panel?.querySelector(".task-section-optimization");
-  const evaluationSection = panel?.querySelector(".task-section-evaluation");
-  const resizeHandle = document.getElementById("taskTableResizeHandle");
-  if (!panel || !optimizationSection || !evaluationSection) return;
-
-  const styles = window.getComputedStyle(panel);
-  const paddingTop = parseFloat(styles.paddingTop || "0") || 0;
-  const paddingBottom = parseFloat(styles.paddingBottom || "0") || 0;
-  const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
-  const handleHeight = resizeHandle?.getBoundingClientRect().height || 0;
-  const panelContentHeight = Math.max(0, panel.clientHeight - paddingTop - paddingBottom);
-  const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panelContentHeight - handleHeight - rowGap * 2);
-
-  const optimizationDesiredHeight = measureTaskSectionHeight(optimizationSection);
-
-  let optimizationHeight;
-  if (Number.isFinite(taskState.manualOptimizationTaskHeight)) {
-    optimizationHeight = taskState.manualOptimizationTaskHeight;
-  } else {
-    optimizationHeight = optimizationDesiredHeight;
-  }
-  optimizationHeight = clamp(optimizationHeight, TASK_SECTION_MIN_HEIGHT, availableHeight - TASK_SECTION_MIN_HEIGHT);
-  const evaluationHeight = Math.max(TASK_SECTION_MIN_HEIGHT, availableHeight - optimizationHeight);
-
-  panel.style.setProperty("--optimization-task-section-height", `${Math.round(optimizationHeight)}px`);
-  panel.style.setProperty("--evaluation-task-section-height", `${Math.round(evaluationHeight)}px`);
-}
-
-function startTaskTableResize(event) {
-  if (event.button !== undefined && event.button !== 0) return;
-  const handle = event.currentTarget;
-  const panel = document.querySelector(".tasks-panel");
-  const optimizationSection = panel?.querySelector(".task-section-optimization");
-  const evaluationSection = panel?.querySelector(".task-section-evaluation");
-  if (!panel || !optimizationSection || !evaluationSection) return;
-  event.preventDefault();
-  handle.classList.add("dragging");
-  handle.setPointerCapture?.(event.pointerId);
-  const startY = event.clientY;
-  const startHeight = optimizationSection.getBoundingClientRect().height;
-
-  const applyHeight = (nextHeight) => {
-    const styles = window.getComputedStyle(panel);
-    const paddingTop = parseFloat(styles.paddingTop || "0") || 0;
-    const paddingBottom = parseFloat(styles.paddingBottom || "0") || 0;
-    const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
-    const handleHeight = handle.getBoundingClientRect().height || 0;
-    const availableHeight = Math.max(TASK_SECTION_MIN_HEIGHT * 2, panel.clientHeight - paddingTop - paddingBottom - handleHeight - rowGap * 2);
-    taskState.manualOptimizationTaskHeight = clamp(nextHeight, TASK_SECTION_MIN_HEIGHT, availableHeight - TASK_SECTION_MIN_HEIGHT);
-    panel.style.setProperty("--optimization-task-section-height", `${Math.round(taskState.manualOptimizationTaskHeight)}px`);
-    panel.style.setProperty("--evaluation-task-section-height", `${Math.round(availableHeight - taskState.manualOptimizationTaskHeight)}px`);
-  };
-
-  const onMove = (moveEvent) => applyHeight(startHeight + moveEvent.clientY - startY);
-  const onEnd = () => {
-    handle.classList.remove("dragging");
-    handle.releasePointerCapture?.(event.pointerId);
-    document.removeEventListener("pointermove", onMove);
-    document.removeEventListener("pointerup", onEnd);
-    document.removeEventListener("pointercancel", onEnd);
-  };
-  document.addEventListener("pointermove", onMove);
-  document.addEventListener("pointerup", onEnd);
-  document.addEventListener("pointercancel", onEnd);
-}
-
-function measureTaskSectionHeight(section) {
-  const styles = window.getComputedStyle(section);
-  const rowGap = parseFloat(styles.rowGap || styles.gap || "0") || 0;
-  const headHeight = section.querySelector(".task-section-head")?.getBoundingClientRect().height || 0;
-  const tableElement = section.querySelector(".task-table table");
-  const emptyElement = section.querySelector(".task-empty");
-  const contentHeight = tableElement?.getBoundingClientRect().height || emptyElement?.getBoundingClientRect().height || 0;
-  return Math.max(TASK_SECTION_MIN_HEIGHT, Math.ceil(headHeight + rowGap + contentHeight));
-}
-
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
 }
 
 function translateNode(target) {
