@@ -151,6 +151,7 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "diesel_price",
             "green_power_ratio_lower",
             "optimization_time_limit_minutes",
+            "preferred_solver",
             "initial_storage_soc_ratio",
             "initial_hydrogen_storage_ratio",
             "post_disturbance_power_balance_enabled",
@@ -290,6 +291,7 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "diesel_price": 0,
     "green_power_ratio_lower": 0,
     "optimization_time_limit_minutes": 60,
+    "preferred_solver": "auto",
     "initial_storage_soc_ratio": 0.5,
     "initial_hydrogen_storage_ratio": 0.5,
     "storage_frequency_regulation_enabled": 0,
@@ -460,7 +462,29 @@ def normalize_planning_parameter_row(row: dict[str, Any]) -> dict[str, Any]:
     normalized = with_field_defaults(row, SHEET_SPECS["planning_parameters"][1], "planning_parameters")
     for field in PLANNING_BOOLEAN_FIELDS:
         normalized[field] = numeric_boolean_value(normalized.get(field, 0))
+    normalized["preferred_solver"] = normalize_preferred_solver(normalized.get("preferred_solver"))
     return normalized
+
+
+def normalize_preferred_solver(value: Any) -> str:
+    solver = str(value or "auto").strip().lower()
+    aliases = {
+        "": "auto",
+        "automatic": "auto",
+        "自动": "auto",
+        "自动选择": "auto",
+        "grb": "gurobi",
+        "gurobi": "gurobi",
+        "cplx": "cplex",
+        "cplex": "cplex",
+        "msk": "mosek",
+        "mosek": "mosek",
+        "highs": "scipy",
+        "scipy": "scipy",
+        "scipy highs": "scipy",
+        "scipy-highs": "scipy",
+    }
+    return aliases.get(solver, "auto")
 
 
 def with_field_defaults(row: dict[str, Any], headers: list[str], key: str = "") -> dict[str, Any]:
@@ -1080,6 +1104,9 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
     time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 120)
     if time_limit is not None and not float(time_limit).is_integer():
         messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
+    preferred_solver = normalize_preferred_solver(row.get("preferred_solver"))
+    if preferred_solver not in {"auto", "gurobi", "cplex", "mosek", "scipy"}:
+        messages.append({"level": "error", "message": "优先求解器必须为auto、gurobi、cplex、mosek或scipy"})
     number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
     number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
     for key, label in (

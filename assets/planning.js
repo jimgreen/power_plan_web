@@ -99,6 +99,7 @@ const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 120, integer: true, positive: true, defaultValue: 60 }],
+  ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "MOSEK"], ["scipy", "SciPy HiGHS"]] }],
   ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
@@ -140,6 +141,7 @@ const planningParameterGroups = [
       "diesel_price",
       "green_power_ratio_lower",
       "optimization_time_limit_minutes",
+      "preferred_solver",
       "initial_storage_soc_ratio",
       "initial_hydrogen_storage_ratio",
     ],
@@ -3165,6 +3167,13 @@ function planningParameterControl(key, type, options, value, group = null, group
     const checked = truthyPlanningValue(value);
     return `<select class="planning-bool-select" data-planning-key="${key}" data-planning-type="boolean" ${disabled ? "disabled" : ""}><option value="1" ${checked ? "selected" : ""}>是</option><option value="0" ${checked ? "" : "selected"}>否</option></select>`;
   }
+  if (type === "select") {
+    const selectedValue = String(value || options.defaultValue || "");
+    const optionMarkup = (options.options || [])
+      .map(([optionValue, optionLabel]) => `<option value="${escapeHtml(optionValue)}" ${String(optionValue) === selectedValue ? "selected" : ""}>${escapeHtml(optionLabel)}</option>`)
+      .join("");
+    return `<select class="planning-select" data-planning-key="${key}" data-planning-type="select" ${disabled ? "disabled" : ""}>${optionMarkup}</select>`;
+  }
   const attrs = [
     `data-planning-key="${key}"`,
     'type="number"',
@@ -3188,7 +3197,14 @@ function onPlanningGroupToggle(event) {
 function onPlanningParameterInput(event) {
   const input = event.target;
   const row = planningParameterRow();
-  row[input.dataset.planningKey] = input.dataset.planningType === "boolean" ? numericBooleanPlanningValue(input.value) : input.type === "checkbox" ? input.checked : coerceInput(input.value);
+  row[input.dataset.planningKey] =
+    input.dataset.planningType === "boolean"
+      ? numericBooleanPlanningValue(input.value)
+      : input.dataset.planningType === "select"
+        ? input.value
+        : input.type === "checkbox"
+          ? input.checked
+          : coerceInput(input.value);
   renderLimitSummary();
   renderSummary();
 }
@@ -3215,6 +3231,11 @@ function normalizePlanningParameterRow(row) {
     if (type === "boolean") {
       normalized[key] = numericBooleanPlanningValue(normalized[key]);
     }
+    if (type === "select") {
+      const spec = planningParameterSpecsByKey.get(key);
+      const validValues = new Set((spec?.[3]?.options || []).map(([value]) => String(value)));
+      normalized[key] = validValues.has(String(normalized[key])) ? String(normalized[key]) : spec?.[3]?.defaultValue || "";
+    }
   });
   return normalized;
 }
@@ -3229,11 +3250,20 @@ function renderPlanningParameterSummaryTable() {
 
 function formatPlanningParameterValue(value, type) {
   if (type === "boolean") return truthyPlanningValue(value) ? "是" : "否";
+  if (type === "select") {
+    const spec = Array.from(planningParameterSpecsByKey.values()).find(([key]) => key && false);
+  }
   return value;
+}
+
+function formatPlanningParameterSelectValue(value, options) {
+  const selected = (options.options || []).find(([optionValue]) => String(optionValue) === String(value));
+  return selected ? selected[1] : value;
 }
 
 function planningParameterRangeText(type, options) {
   if (type === "boolean") return "是/否";
+  if (type === "select") return (options.options || []).map(([, label]) => label).join(" / ");
   if (options.min !== undefined && options.max !== undefined) return `${options.min} - ${options.max}`;
   if (options.min !== undefined) return `不小于 ${options.min}`;
   if (options.max !== undefined) return `不大于 ${options.max}`;
