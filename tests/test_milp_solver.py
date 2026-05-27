@@ -75,6 +75,18 @@ class MilpSolverTest(unittest.TestCase):
         self.assertEqual(result.solver, "cplex")
         cplex_mock.assert_called_once()
 
+    def test_solver_option_failure_falls_back_to_default_order(self):
+        args = self._tiny_problem()
+        with patch.object(milp_solver, "solve_milp_with_cplex", side_effect=RuntimeError("no cplex"), create=True) as cplex_mock, \
+                patch.object(milp_solver, "solve_milp_with_gurobi", return_value=self._fake_result("gurobi")) as gurobi_mock, \
+                patch.object(milp_solver, "solve_milp_with_scipy") as scipy_mock:
+            result = milp_solver.solve_milp(*args, options={"solver": "cplex"}, problem_name="测试模型")
+
+        self.assertEqual(result.solver, "gurobi")
+        cplex_mock.assert_called_once()
+        gurobi_mock.assert_called_once()
+        scipy_mock.assert_not_called()
+
     def test_solver_option_cplx_alias_calls_cplex_only(self):
         args = self._tiny_problem()
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=AssertionError("unexpected gurobi")), \

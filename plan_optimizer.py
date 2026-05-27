@@ -464,6 +464,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     )
     optimization_time_limit_minutes = int(min(120, max(10, round(numeric(raw_time_limit_minutes, 60)))))
     optimization_time_limit_seconds = optimization_time_limit_minutes * 60
+    preferred_solver = normalize_preferred_solver(planning_parameters.get("preferred_solver"))
     initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))
     initial_hydrogen_storage_ratio = min(
         1.0,
@@ -510,6 +511,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "green_ratio_lower": green_ratio_lower,
         "optimization_time_limit_minutes": optimization_time_limit_minutes,
         "optimization_time_limit_seconds": optimization_time_limit_seconds,
+        "preferred_solver": preferred_solver,
         "initial_storage_soc_ratio": initial_storage_soc_ratio,
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
         "storage_charge_efficiency": storage_charge_efficiency,
@@ -909,6 +911,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         builder,
         options={
             "time_limit": model["optimization_time_limit_seconds"],
+            "solver": model.get("preferred_solver", "auto"),
             "mip_rel_gap": 0.01,
             "disp": False,
             "solver_log": True,
@@ -949,6 +952,27 @@ def raise_if_solver_timed_out(result: Any, problem_name: str = "规划求解") -
         return
     message = str(getattr(result, "message", "") or "求解器达到时间上限")
     raise CalculationTimeoutError(f"{problem_name}达到优化求解时间上限，计算超时：{message}")
+
+
+def normalize_preferred_solver(value: Any) -> str:
+    solver = str(value or "auto").strip().lower()
+    aliases = {
+        "": "auto",
+        "automatic": "auto",
+        "自动": "auto",
+        "自动选择": "auto",
+        "grb": "gurobi",
+        "gurobi": "gurobi",
+        "cplx": "cplex",
+        "cplex": "cplex",
+        "msk": "mosek",
+        "mosek": "mosek",
+        "highs": "scipy",
+        "scipy": "scipy",
+        "scipy highs": "scipy",
+        "scipy-highs": "scipy",
+    }
+    return aliases.get(solver, "auto")
 
 
 def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

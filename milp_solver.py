@@ -18,6 +18,26 @@ CUSTOM_SOLVER_OPTIONS = {
     "solver_log_line_limit",
     "solver_log_interval",
 }
+DEFAULT_SOLVER_ORDER = ("gurobi", "cplex", "mosek", "scipy")
+SOLVER_ALIASES = {
+    "": "auto",
+    "auto": "auto",
+    "automatic": "auto",
+    "grb": "gurobi",
+    "gurobi": "gurobi",
+    "cplx": "cplex",
+    "cplex": "cplex",
+    "msk": "mosek",
+    "mosek": "mosek",
+    "highs": "scipy",
+    "scipy": "scipy",
+}
+SOLVER_LABELS = {
+    "gurobi": "Gurobi",
+    "cplex": "CPLEX",
+    "mosek": "MOSEK",
+    "scipy": "SciPy",
+}
 
 TIMEOUT_TEXT_MARKERS = (
     "time_limit",
@@ -130,7 +150,7 @@ def solve_milp(
     # The solver adapter keeps backend selection and logging behavior in one
     # place so planning and evaluation can share the same solve entry point.
     options = dict(options or {})
-    solver = str(options.pop("solver", "auto") or "auto").strip().lower()
+    solver = normalize_solver_name(options.pop("solver", "auto"))
     emit_solver_input_summary(
         objective,
         integrality,
@@ -142,68 +162,56 @@ def solve_milp(
         log,
     )
 
-    if solver in ("auto", ""):
-        # Auto mode prefers the commercial solvers first because they usually
-        # handle the yearly model size better than the open-source fallback.
-        try:
-            return solve_milp_with_gurobi(
-                objective,
-                integrality,
-                lower_bounds,
-                upper_bounds,
-                constraint_matrix,
-                constraint_lower,
-                constraint_upper,
-                options,
-                log,
-                problem_name,
-            )
-        except Exception as exc:
-            emit(log, "warn", f"Gurobi求解器不可用，改用CPLEX求解器：{exc}", None)
-        try:
-            return solve_milp_with_cplex(
-                objective,
-                integrality,
-                lower_bounds,
-                upper_bounds,
-                constraint_matrix,
-                constraint_lower,
-                constraint_upper,
-                options,
-                log,
-                problem_name,
-            )
-        except Exception as exc:
-            emit(log, "warn", f"CPLEX求解器不可用，改用MOSEK求解器：{exc}", None)
-        try:
-            return solve_milp_with_mosek(
-                objective,
-                integrality,
-                lower_bounds,
-                upper_bounds,
-                constraint_matrix,
-                constraint_lower,
-                constraint_upper,
-                options,
-                log,
-                problem_name,
-            )
-        except Exception as exc:
-            emit(log, "warn", f"MOSEK求解器不可用，改用SciPy求解器：{exc}", None)
-        return solve_milp_with_scipy(
-            objective,
-            integrality,
-            lower_bounds,
-            upper_bounds,
-            constraint_matrix,
-            constraint_lower,
-            constraint_upper,
-            options,
-            log,
-            problem_name,
-        )
+    if solver == "auto":
+        solver_order = list(DEFAULT_SOLVER_ORDER)
+    elif solver in DEFAULT_SOLVER_ORDER:
+        solver_order = [solver, *(candidate for candidate in DEFAULT_SOLVER_ORDER if candidate != solver)]
+    else:
+        raise ValueError(f"未知MILP求解器：{solver}")
 
-    if solver in ("gurobi", "grb"):
+    for index, candidate in enumerate(solver_order):
+        try:
+            return solve_milp_with_backend(
+                candidate,
+                objective,
+                integrality,
+                lower_bounds,
+                upper_bounds,
+                constraint_matrix,
+                constraint_lower,
+                constraint_upper,
+                options,
+                log,
+                problem_name,
+            )
+        except Exception as exc:
+            next_solver = solver_order[index + 1] if index + 1 < len(solver_order) else ""
+            if not next_solver:
+                raise
+            emit(log, "warn", f"{SOLVER_LABELS[candidate]}求解器不可用，改用{SOLVER_LABELS[next_solver]}求解器：{exc}", None)
+
+    raise RuntimeError("没有可用的MILP求解器")
+
+
+def normalize_solver_name(value: Any) -> str:
+    solver = str(value or "auto").strip().lower()
+    return SOLVER_ALIASES.get(solver, solver)
+
+
+def solve_milp_with_backend(
+    solver: str,
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    constraint_matrix: Any,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+    options: dict[str, Any],
+    log: LogSink | None,
+    problem_name: str,
+) -> SimpleNamespace:
+    if solver == "gurobi":
         return solve_milp_with_gurobi(
             objective,
             integrality,
@@ -216,8 +224,7 @@ def solve_milp(
             log,
             problem_name,
         )
-
-    if solver in ("cplex", "cplx"):
+    if solver == "cplex":
         return solve_milp_with_cplex(
             objective,
             integrality,
@@ -230,8 +237,7 @@ def solve_milp(
             log,
             problem_name,
         )
-
-    if solver in ("mosek", "msk"):
+    if solver == "mosek":
         return solve_milp_with_mosek(
             objective,
             integrality,
@@ -244,8 +250,7 @@ def solve_milp(
             log,
             problem_name,
         )
-
-    if solver in ("scipy", "highs"):
+    if solver == "scipy":
         return solve_milp_with_scipy(
             objective,
             integrality,
@@ -258,7 +263,6 @@ def solve_milp(
             log,
             problem_name,
         )
-
     raise ValueError(f"未知MILP求解器：{solver}")
 
 
