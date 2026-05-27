@@ -23,6 +23,7 @@ const FREQUENCY_8760_SERIES = [
 document.addEventListener("DOMContentLoaded", () => {
   bindFrequencyActions();
   bindFrequencyTabs();
+  bindFrequencyMetricsResize();
   bindFrequencyTimeResultResize();
   loadFrequencyPage().catch(showFrequencyError);
 });
@@ -91,23 +92,45 @@ function bindFrequencyTabs() {
   });
 }
 
+function bindFrequencyMetricsResize() {
+  bindFrequencyHorizontalResize({
+    handleId: "frequencyMetricsResizeHandle",
+    layoutSelector: ".frequency-metrics-layout",
+    cssVariable: "--frequency-metrics-table-width",
+    defaultWidth: 360,
+    minWidth: 240,
+    rightMinWidth: 360,
+  });
+}
+
 function bindFrequencyTimeResultResize() {
-  const handle = document.getElementById("frequencyTimeResultResizeHandle");
-  const layout = document.querySelector(".frequency-time-result-layout");
+  bindFrequencyHorizontalResize({
+    handleId: "frequencyTimeResultResizeHandle",
+    layoutSelector: ".frequency-time-result-layout",
+    cssVariable: "--frequency-time-info-width",
+    defaultWidth: 360,
+    minWidth: 220,
+    rightMinWidth: 320,
+  });
+}
+
+function bindFrequencyHorizontalResize({ handleId, layoutSelector, cssVariable, defaultWidth, minWidth, rightMinWidth }) {
+  const handle = document.getElementById(handleId);
+  const layout = document.querySelector(layoutSelector);
   if (!handle || !layout || handle.dataset.resizeBound === "true") return;
   handle.dataset.resizeBound = "true";
   const bounds = () => {
     const width = layout.getBoundingClientRect().width || 900;
-    return { min: 220, max: Math.max(260, width - 320) };
+    return { min: minWidth, max: Math.max(minWidth + 40, width - rightMinWidth) };
   };
   const currentWidth = () => {
-    const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--frequency-time-info-width"));
-    return Number.isFinite(value) ? value : 360;
+    const value = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue(cssVariable));
+    return Number.isFinite(value) ? value : defaultWidth;
   };
   const applyWidth = (width) => {
     const limits = bounds();
     const next = Math.min(limits.max, Math.max(limits.min, width));
-    document.documentElement.style.setProperty("--frequency-time-info-width", `${Math.round(next)}px`);
+    document.documentElement.style.setProperty(cssVariable, `${Math.round(next)}px`);
     handle.setAttribute("aria-valuenow", String(Math.round(next)));
     handle.setAttribute("aria-valuemin", String(Math.round(limits.min)));
     handle.setAttribute("aria-valuemax", String(Math.round(limits.max)));
@@ -400,12 +423,11 @@ async function refreshFrequencyTimeCurve() {
   const params = new URLSearchParams({
     scheme: frequencyState.currentScheme,
     filename: frequencyState.selectedResultFile,
-    year: document.getElementById("frequencyCurveYear")?.value || "",
-    month: document.getElementById("frequencyCurveMonth")?.value || "",
-    day: document.getElementById("frequencyCurveDay")?.value || "",
+    month: selectedFrequencyCurveDatePart("month"),
+    day: selectedFrequencyCurveDatePart("day"),
     hour: document.getElementById("frequencyCurveHour")?.value || "",
   });
-  renderFrequencyTimeCurve(null, "正在读取频率分时曲线...");
+  renderFrequencyTimeCurve(null, "正在读取分时曲线...");
   const data = await frequencyApi(`/api/frequency/time-curve?${params.toString()}`);
   frequencyState.frequencyTimeCurve = data;
   applyFrequencyTimeSelection(data.selection || {});
@@ -414,37 +436,45 @@ async function refreshFrequencyTimeCurve() {
 }
 
 function initializeFrequencyTimeControls(rows) {
-  const yearInput = document.getElementById("frequencyCurveYear");
-  const monthInput = document.getElementById("frequencyCurveMonth");
-  const dayInput = document.getElementById("frequencyCurveDay");
+  const dateInput = document.getElementById("frequencyCurveDate");
   const hourInput = document.getElementById("frequencyCurveHour");
-  if (!yearInput || yearInput.value || !Array.isArray(rows) || !rows.length) return;
+  if (!dateInput || dateInput.value || !Array.isArray(rows) || !rows.length) return;
   const first = rows[0] || {};
   const parts = parseFrequencyTimeText(first["时间"]);
   if (!parts) return;
-  yearInput.value = parts.year;
-  monthInput.value = parts.month;
-  dayInput.value = parts.day;
-  hourInput.value = parts.hour;
+  dateInput.value = frequencyDateInputValue(parts);
+  if (hourInput) hourInput.value = parts.hour;
 }
 
 function applyFrequencyTimeSelection(selection) {
   if (!selection) return;
-  const values = {
-    frequencyCurveYear: selection.year,
-    frequencyCurveMonth: selection.month,
-    frequencyCurveDay: selection.day,
-    frequencyCurveHour: selection.hour,
-  };
-  Object.entries(values).forEach(([id, value]) => {
-    const input = document.getElementById(id);
-    if (input && value !== "" && value != null) input.value = value;
-  });
+  const dateInput = document.getElementById("frequencyCurveDate");
+  const hourInput = document.getElementById("frequencyCurveHour");
+  if (dateInput && selection.month !== "" && selection.day !== "") {
+    dateInput.value = frequencyDateInputValue(selection);
+  }
+  if (hourInput && selection.hour !== "" && selection.hour != null) {
+    hourInput.value = selection.hour;
+  }
 }
 
 function parseFrequencyTimeText(value) {
   const match = String(value || "").match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2})/);
   return match ? { year: match[1], month: match[2], day: match[3], hour: match[4] } : null;
+}
+
+function selectedFrequencyCurveDatePart(part) {
+  const value = document.getElementById("frequencyCurveDate")?.value || "";
+  const match = value.match(/\d{4}-(\d{2})-(\d{2})/);
+  if (!match) return "";
+  return part === "month" ? String(Number(match[1])) : String(Number(match[2]));
+}
+
+function frequencyDateInputValue(parts) {
+  const year = String(parts.year || "2026").padStart(4, "0");
+  const month = String(parts.month || "1").padStart(2, "0");
+  const day = String(parts.day || "1").padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function renderFrequencyTimeInfoTable(rows) {
@@ -454,7 +484,7 @@ function renderFrequencyTimeInfoTable(rows) {
   target.innerHTML = normalized.length ? renderSimpleTable(normalized, ["指标", "数值", "单位"]) : '<div class="empty-summary">暂无该时刻频率信息</div>';
 }
 
-function renderFrequencyTimeCurve(data, message = "暂无频率分时曲线") {
+function renderFrequencyTimeCurve(data, message = "暂无分时曲线") {
   const target = document.getElementById("frequencyCurveChart");
   if (!target) return;
   const high = Array.isArray(data?.curves?.high) ? data.curves.high.filter((point) => Number.isFinite(Number(point.frequency))) : [];
@@ -480,7 +510,7 @@ function renderFrequencyTimeCurve(data, message = "暂无频率分时曲线") {
   const lowPath = timeLinePath(low, xAt, yAt);
   const ticks = [yMax, 50.5, 50.0, 49.5, yMin].filter((value, index, list) => list.indexOf(value) === index);
   target.innerHTML = `
-    <svg class="safety-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="频率分时曲线">
+    <svg class="safety-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="分时曲线">
       ${ticks.map((tick) => `<line class="safety-grid-line" x1="${margin.left}" y1="${yAt(tick).toFixed(2)}" x2="${width - margin.right}" y2="${yAt(tick).toFixed(2)}"></line><text class="safety-tick-label" x="${margin.left - 8}" y="${(yAt(tick) + 4).toFixed(2)}">${escapeHtml(tick.toFixed(1))}</text>`).join("")}
       <line class="safety-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
       <line class="safety-center-line" x1="${margin.left}" y1="${yAt(50).toFixed(2)}" x2="${width - margin.right}" y2="${yAt(50).toFixed(2)}"></line>

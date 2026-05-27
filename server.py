@@ -3458,7 +3458,6 @@ def read_frequency_time_curve_payload(
     path: Path,
     *,
     hour_index: str = "",
-    year: str = "",
     month: str = "",
     day: str = "",
     hour: str = "",
@@ -3473,7 +3472,7 @@ def read_frequency_time_curve_payload(
         if "频率8760结果" not in workbook.sheetnames or "频率曲线" not in workbook.sheetnames:
             raise ValueError("频率曲线文件缺少频率8760结果或频率曲线工作表")
         summaries = worksheet_dict_rows(workbook["频率8760结果"])
-        target_summary = select_frequency_time_summary(summaries, hour_index=hour_index, year=year, month=month, day=day, hour=hour)
+        target_summary = select_frequency_time_summary(summaries, hour_index=hour_index, month=month, day=day, hour=hour)
         target_hour = int(frequency_number(target_summary.get("hour_index")) or 0)
         if target_hour <= 0:
             raise ValueError("频率曲线文件中的小时序号无效")
@@ -3516,7 +3515,6 @@ def select_frequency_time_summary(
     summaries: list[dict],
     *,
     hour_index: str = "",
-    year: str = "",
     month: str = "",
     day: str = "",
     hour: str = "",
@@ -3530,7 +3528,6 @@ def select_frequency_time_summary(
                 return summary
         raise ValueError(f"未找到第{requested_hour}小时的频率结果")
     requested_parts = {
-        "year": frequency_int_or_none(year),
         "month": frequency_int_or_none(month),
         "day": frequency_int_or_none(day),
         "hour": frequency_int_or_none(hour),
@@ -3540,7 +3537,7 @@ def select_frequency_time_summary(
             parts = frequency_datetime_parts(summary.get("datetime"))
             if parts and all(parts[key] == requested_parts[key] for key in requested_parts):
                 return summary
-        raise ValueError(f"未找到{year}年{month}月{day}日{hour}时的频率结果")
+        raise ValueError(f"未找到{month}月{day}日{hour}时的频率结果")
     return summaries[0]
 
 
@@ -6182,14 +6179,12 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
             filename = query_params.get("filename", [""])[0]
             selected = selected_evaluation_result_filename(scheme, filename)
             hour_index = query_params.get("hour_index", [""])[0]
-            year = query_params.get("year", [""])[0]
             month = query_params.get("month", [""])[0]
             day = query_params.get("day", [""])[0]
             hour = query_params.get("hour", [""])[0]
             payload = read_frequency_time_curve_payload(
                 frequency_curve_result_path(scheme, selected),
                 hour_index=hour_index,
-                year=year,
                 month=month,
                 day=day,
                 hour=hour,

@@ -2573,8 +2573,8 @@ button:disabled {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(240px, var(--frequency-metrics-table-width, 360px)) 10px minmax(0, 1fr);
+  gap: 0;
 }
 
 .frequency-metrics-layout > .data-table {
@@ -2583,7 +2583,7 @@ button:disabled {
 
 .frequency-8760-curve-board {
   flex: 1 1 auto;
-  min-height: 360px;
+  min-height: 0;
   overflow: auto;
   border: 1px solid #d7e4e0;
   border-radius: 16px;
@@ -4771,6 +4771,18 @@ td input[type="checkbox"] {
   }
   .result-column-resize-handle {
     display: none;
+  }
+  .frequency-metrics-layout,
+  .frequency-time-result-layout {
+    grid-template-columns: minmax(220px, var(--frequency-metrics-table-width, 340px)) 10px minmax(320px, 1fr);
+    overflow-x: auto;
+  }
+  .frequency-time-result-layout {
+    grid-template-columns: minmax(220px, var(--frequency-time-info-width, 340px)) 10px minmax(320px, 1fr);
+  }
+  .frequency-metrics-layout > .result-column-resize-handle,
+  .frequency-time-result-layout > .result-column-resize-handle {
+    display: block;
   }
   .overview-column-resize-handle {
     display: none;
