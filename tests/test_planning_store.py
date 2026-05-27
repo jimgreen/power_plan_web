@@ -611,6 +611,16 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertTrue(any("负荷向下扰动系数(0.0-0.5)不能大于0.5" in item["message"] for item in messages))
         self.assertTrue(any("新能源向下扰动系数(0.0-0.5)必须为数值" in item["message"] for item in messages))
 
+    def test_validate_planning_parameters_accepts_preferred_solver_text(self):
+        payload = planning_store.default_payload("方案A")
+        payload["planning_parameters"][0]["preferred_solver"] = "cplex"
+
+        messages = planning_store.validate_payload(payload, require_time_series=False)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        self.assertNotIn("优先求解器必须为数值", message_text)
+        self.assertNotIn("优先求解器选项无效", message_text)
+
     def test_frequency_security_planning_parameters_include_extended_defaults_and_ranges(self):
         payload = planning_store.default_payload("方案A")
         row = payload["planning_parameters"][0]

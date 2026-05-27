@@ -3549,6 +3549,13 @@ function collectPlanningParameterWarnings() {
   const messages = [];
   planningParameterSpecs.forEach(([key, label, type, options]) => {
     if (type === "boolean") return;
+    if (type === "select") {
+      const allowedValues = new Set((options.options || []).map(([value]) => String(value)));
+      if (!allowedValues.has(String(row[key] ?? ""))) {
+        messages.push({ level: "error", message: `${label}选项无效` });
+      }
+      return;
+    }
     const value = Number(row[key]);
     if (!Number.isFinite(value)) {
       messages.push({ level: "error", message: `${label}必须为数值` });
