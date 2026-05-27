@@ -356,11 +356,11 @@ function renderFrequency8760CurveBoard(rows) {
   }
   const width = 1180;
   const laneHeight = 78;
-  const margin = { top: 22, right: 26, bottom: 30, left: 118 };
+  const margin = { top: 22, right: 40, bottom: 34, left: 118 };
   const plotWidth = width - margin.left - margin.right;
   const height = margin.top + margin.bottom + laneHeight * drawableSeries.length;
   const xAt = (hour) => margin.left + ((Math.max(1, Math.min(8760, hour)) - 1) / 8759) * plotWidth;
-  const lanes = drawableSeries.map((series, laneIndex) => {
+  const laneModels = drawableSeries.map((series, laneIndex) => {
     const laneTop = margin.top + laneIndex * laneHeight;
     const values = series.values.map((point) => point.value);
     const rawMin = Math.min(...values);
@@ -369,23 +369,111 @@ function renderFrequency8760CurveBoard(rows) {
     const yMin = rawMin - span * 0.08;
     const yMax = rawMax + span * 0.08;
     const yAt = (value) => laneTop + 10 + ((yMax - value) / Math.max(0.00001, yMax - yMin)) * (laneHeight - 24);
-    const path = series.values
+    const sampled = frequencyDownsample(series.values, 720);
+    const path = sampled
       .map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(point.hour).toFixed(2)} ${yAt(point.value).toFixed(2)}`)
       .join(" ");
+    const average = values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
+    return { ...series, laneTop, rawMin, rawMax, average, yAt, path, count: values.length };
+  });
+  const lanes = laneModels.map((series) => {
     return `
       <g class="frequency-8760-lane">
-        <text class="frequency-8760-series-label" x="${margin.left - 12}" y="${(laneTop + laneHeight / 2).toFixed(2)}">${escapeHtml(series.key)}</text>
-        <line class="frequency-8760-grid" x1="${margin.left}" y1="${(laneTop + laneHeight - 12).toFixed(2)}" x2="${width - margin.right}" y2="${(laneTop + laneHeight - 12).toFixed(2)}"></line>
-        <text class="frequency-8760-value-label" x="${width - margin.right + 4}" y="${(laneTop + 15).toFixed(2)}">${escapeHtml(formatCompactNumber(rawMax))}</text>
-        <text class="frequency-8760-value-label" x="${width - margin.right + 4}" y="${(laneTop + laneHeight - 12).toFixed(2)}">${escapeHtml(formatCompactNumber(rawMin))}</text>
-        <path class="frequency-8760-line" d="${path}" style="stroke:${series.color}"></path>
+        <text class="frequency-8760-series-label" x="${margin.left - 12}" y="${(series.laneTop + laneHeight / 2).toFixed(2)}">${escapeHtml(series.key)}</text>
+        <line class="frequency-8760-grid" x1="${margin.left}" y1="${(series.laneTop + laneHeight - 12).toFixed(2)}" x2="${width - margin.right}" y2="${(series.laneTop + laneHeight - 12).toFixed(2)}"></line>
+        <text class="frequency-8760-value-label" x="${width - margin.right + 4}" y="${(series.laneTop + 15).toFixed(2)}">${escapeHtml(formatCompactNumber(series.rawMax))}</text>
+        <text class="frequency-8760-value-label" x="${width - margin.right + 4}" y="${(series.laneTop + laneHeight - 12).toFixed(2)}">${escapeHtml(formatCompactNumber(series.rawMin))}</text>
+        <path class="frequency-8760-line" d="${series.path}" style="stroke:${series.color}"></path>
       </g>`;
   }).join("");
   target.innerHTML = `
-    <svg class="frequency-8760-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="8760点频率指标曲线">
-      ${[1, 2190, 4380, 6570, 8760].map((hour) => `<line class="frequency-8760-x-grid" x1="${xAt(hour).toFixed(2)}" y1="${margin.top}" x2="${xAt(hour).toFixed(2)}" y2="${height - margin.bottom}"></line><text class="frequency-8760-x-label" x="${xAt(hour).toFixed(2)}" y="${height - 8}">${hour}</text>`).join("")}
-      ${lanes}
-    </svg>`;
+    <div class="comparison-chart-frame frequency-8760-chart-frame" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
+      <svg class="frequency-8760-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="8760点频率指标曲线">
+        ${[1, 2190, 4380, 6570, 8760].map((hour) => `<line class="frequency-8760-x-grid" x1="${xAt(hour).toFixed(2)}" y1="${margin.top}" x2="${xAt(hour).toFixed(2)}" y2="${height - margin.bottom}"></line>`).join("")}
+        ${lanes}
+        <g id="frequency8760Hover" hidden>
+          <line class="comparison-chart-hover-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
+        </g>
+        <rect class="comparison-chart-hover-capture frequency-8760-hover-capture" x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${height - margin.top - margin.bottom}"></rect>
+      </svg>
+      ${renderFrequency8760AxisLabels({ margin, width, height })}
+      ${renderFrequency8760Stats(laneModels)}
+      <div id="frequency8760Tooltip" class="comparison-chart-tooltip" hidden></div>
+    </div>`;
+  bindFrequency8760Hover({ width, height, margin, plotWidth, series: laneModels });
+}
+
+function renderFrequency8760AxisLabels({ margin, width }) {
+  const xTicks = [1, 2190, 4380, 6570, 8760].map((hour) => ({ ratio: (hour - 1) / 8759, label: hour }));
+  return `<div class="comparison-chart-x-axis" aria-hidden="true">${xTicks
+    .map((tick) => `<span style="left:${(tick.ratio * 100).toFixed(2)}%">${escapeHtml(tick.label)}</span>`)
+    .join("")}</div>`;
+}
+
+function renderFrequency8760Stats(series) {
+  return `<div class="comparison-curve-stats frequency-8760-stats" aria-label="8760点频率指标统计">${series.map((item) => `
+    <section>
+      <strong style="border-left:4px solid ${item.color}; padding-left:7px">${escapeHtml(item.key)}</strong>
+      <span>最小 ${escapeHtml(formatCompactNumber(item.rawMin))}</span>
+      <span>最大 ${escapeHtml(formatCompactNumber(item.rawMax))}</span>
+      <span>平均 ${escapeHtml(formatCompactNumber(item.average))}</span>
+      <span>点数 ${escapeHtml(item.count)}</span>
+    </section>`).join("")}</div>`;
+}
+
+function bindFrequency8760Hover(chart) {
+  const target = document.getElementById("frequency8760CurveBoard");
+  const capture = target?.querySelector(".frequency-8760-hover-capture");
+  const tooltip = document.getElementById("frequency8760Tooltip");
+  if (!target || !capture || !tooltip) return;
+  capture.addEventListener("mousemove", (event) => {
+    const rect = capture.getBoundingClientRect();
+    const ratio = Math.min(Math.max((event.clientX - rect.left) / Math.max(rect.width, 1), 0), 1);
+    const hour = Math.round(ratio * 8759) + 1;
+    renderFrequency8760Hover(chart, event, hour);
+  });
+  capture.addEventListener("mouseleave", () => {
+    document.getElementById("frequency8760Hover")?.setAttribute("hidden", "");
+    tooltip.hidden = true;
+  });
+}
+
+function renderFrequency8760Hover(chart, event, hour) {
+  const hover = document.getElementById("frequency8760Hover");
+  const tooltip = document.getElementById("frequency8760Tooltip");
+  const board = document.getElementById("frequency8760CurveBoard");
+  if (!hover || !tooltip || !board) return;
+  const ratio = (Math.max(1, Math.min(8760, hour)) - 1) / 8759;
+  const x = chart.margin.left + ratio * chart.plotWidth;
+  hover.removeAttribute("hidden");
+  hover.querySelector("line")?.setAttribute("x1", x.toFixed(2));
+  hover.querySelector("line")?.setAttribute("x2", x.toFixed(2));
+  const rows = chart.series.map((series) => {
+    const point = nearestFrequencyPoint(series.values, hour);
+    return { label: series.key, value: point?.value, color: series.color };
+  });
+  tooltip.innerHTML = `
+    <h3>第${escapeHtml(hour)}小时</h3>
+    ${rows.map((row) => `<div><span style="border-left:4px solid ${row.color}; padding-left:7px">${escapeHtml(row.label)}</span><strong>${escapeHtml(formatCompactNumber(row.value))}</strong></div>`).join("")}`;
+  tooltip.hidden = false;
+  const bounds = board.getBoundingClientRect();
+  const tooltipX = Math.min(Math.max(event.clientX - bounds.left + 14, 8), Math.max(bounds.width - tooltip.offsetWidth - 8, 8));
+  const tooltipY = Math.min(Math.max(event.clientY - bounds.top + 14, 8), Math.max(bounds.height - tooltip.offsetHeight - 8, 8));
+  tooltip.style.left = `${Math.round(tooltipX)}px`;
+  tooltip.style.top = `${Math.round(tooltipY)}px`;
+}
+
+function nearestFrequencyPoint(points, hour) {
+  return points.reduce((best, point) => {
+    if (!best) return point;
+    return Math.abs(point.hour - hour) < Math.abs(best.hour - hour) ? point : best;
+  }, null);
+}
+
+function frequencyDownsample(points, limit) {
+  if (points.length <= limit) return points;
+  const step = Math.ceil(points.length / limit);
+  return points.filter((_, index) => index % step === 0 || index === points.length - 1);
 }
 
 function renderSimpleTable(rows, preferredColumns = null) {
@@ -510,7 +598,7 @@ function renderFrequencyTimeCurve(data, message = "暂无分时曲线") {
   const lowPath = timeLinePath(low, xAt, yAt);
   const ticks = [yMax, 50.5, 50.0, 49.5, yMin].filter((value, index, list) => list.indexOf(value) === index);
   target.innerHTML = `
-    <svg class="safety-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="分时曲线">
+    <svg class="safety-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="分时曲线">
       ${ticks.map((tick) => `<line class="safety-grid-line" x1="${margin.left}" y1="${yAt(tick).toFixed(2)}" x2="${width - margin.right}" y2="${yAt(tick).toFixed(2)}"></line><text class="safety-tick-label" x="${margin.left - 8}" y="${(yAt(tick) + 4).toFixed(2)}">${escapeHtml(tick.toFixed(1))}</text>`).join("")}
       <line class="safety-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
       <line class="safety-center-line" x1="${margin.left}" y1="${yAt(50).toFixed(2)}" x2="${width - margin.right}" y2="${yAt(50).toFixed(2)}"></line>

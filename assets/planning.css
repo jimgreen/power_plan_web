@@ -2582,25 +2582,34 @@ button:disabled {
 }
 
 .frequency-8760-curve-board {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  padding: 12px;
+  overflow: hidden;
   border: 1px solid #d7e4e0;
   border-radius: 16px;
-  background: #fff;
+  background: #f8fbfa;
+}
+
+.frequency-8760-chart-frame {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 .frequency-8760-svg {
   display: block;
   width: 100%;
-  min-width: 980px;
   height: 100%;
-  min-height: 620px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .frequency-8760-line {
   fill: none;
-  stroke-width: 1.7;
+  stroke-width: 2.2;
   vector-effect: non-scaling-stroke;
 }
 
@@ -2631,6 +2640,18 @@ button:disabled {
 
 .frequency-8760-x-label {
   text-anchor: middle;
+}
+
+.frequency-8760-stats {
+  max-width: min(720px, calc(100% - 100px));
+}
+
+.frequency-8760-stats section {
+  grid-template-columns: minmax(130px, 1fr) repeat(4, auto);
+}
+
+.frequency-8760-hover-capture {
+  pointer-events: all;
 }
 
 .frequency-time-curve-panel {
@@ -2683,6 +2704,16 @@ button:disabled {
 }
 
 .frequency-time-curve-chart {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.frequency-time-curve-chart > .safety-chart-svg {
+  width: 100%;
+  height: 100%;
   min-height: 0;
 }
 

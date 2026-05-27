@@ -5676,13 +5676,24 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("scheduleFrequencyPolling();", frequency_script)
         self.assertIn("window.setTimeout(() => refreshFrequencyStatus().catch(showFrequencyError), 250)", frequency_script)
         self.assertIn("/api/frequency/time-curve", frequency_script)
+        self.assertIn('preserveAspectRatio="none"', frequency_script)
+        self.assertIn("comparison-chart-frame frequency-8760-chart-frame", frequency_script)
+        self.assertIn("function bindFrequency8760Hover", frequency_script)
+        self.assertIn("function renderFrequency8760Stats", frequency_script)
+        self.assertIn("frequencyDownsample(series.values, 720)", frequency_script)
         self.assertIn(".frequency-metrics-layout", css)
         self.assertIn("--frequency-metrics-table-width", css)
         self.assertIn(".frequency-8760-curve-board", css)
+        self.assertIn(".frequency-8760-chart-frame", css)
         self.assertIn(".frequency-8760-line", css)
+        self.assertIn(".frequency-8760-stats", css)
+        self.assertIn(".frequency-8760-hover-capture", css)
         self.assertIn(".frequency-time-curve-panel", css)
         self.assertIn(".frequency-time-result-layout", css)
         self.assertIn("--frequency-time-info-width", css)
+        frequency_time_chart_css = css.split(".frequency-time-curve-chart {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: grid", frequency_time_chart_css)
+        self.assertIn("grid-template-rows: minmax(0, 1fr) auto", frequency_time_chart_css)
 
     def test_frequency_time_curve_payload_reads_selected_hour_curves(self):
         path = WEB_ROOT / "tests" / "tmp_frequency_time_curve.xlsx"
