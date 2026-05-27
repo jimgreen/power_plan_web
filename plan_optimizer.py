@@ -1715,6 +1715,7 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
             for device in model["device_rows"]["photovoltaics"]
         )
         renewable_available = wind_available + pv_available
+        renewable_power = 0.0
         hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
         security_fields = dispatch_security_curve_fields(
             model,
@@ -1737,13 +1738,17 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
                 "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
                 "load": load,
                 "diesel_power": 0.0,
+                "diesel_capacity": 0.0,
                 "wind_available": round(wind_available, 4),
                 "wind_power": 0.0,
                 "pv_available": round(pv_available, 4),
                 "pv_power": 0.0,
+                "renewable_power": round(renewable_power, 4),
                 "renewable_available": round(renewable_available, 4),
                 "renewable_ratio": 0.0,
                 "storage_power": 0.0,
+                "grid_storage_capacity": 0.0,
+                "grid_storage_power": 0.0,
                 "storage_charge": 0.0,
                 "storage_discharge": 0.0,
                 "storage_soc": initial_storage,
@@ -1900,6 +1905,10 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
             optional_value(("diesel_on_count", hour, device["index"])) * device["power_upper"]
             for device in diesel_devices
         )
+        grid_storage_capacity = sum(
+            optional_value(("grid_storage_on_count", hour, device["index"])) * device["capacity"]
+            for device in grid_storage_pcs_devices
+        )
         grid_storage_up_capacity = sum(
             optional_value(("grid_storage_up_available_count", hour, device["index"])) * device["capacity"]
             for device in grid_storage_pcs_devices
@@ -1940,13 +1949,17 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
                 "load": round(load, 4),
                 "diesel_power": round(diesel_power, 4),
+                "diesel_capacity": round(diesel_capacity, 4),
                 "wind_available": round(wind_available, 4),
                 "wind_power": round(wind_power, 4),
                 "pv_available": round(pv_available, 4),
                 "pv_power": round(pv_power, 4),
+                "renewable_power": round(renewable_energy, 4),
                 "renewable_available": round(renewable_available, 4),
                 "renewable_ratio": round(estimate.percent(renewable_energy, load), 4),
                 "storage_power": round(storage_power, 4),
+                "grid_storage_capacity": round(grid_storage_capacity, 4),
+                "grid_storage_power": round(grid_storage_power, 4),
                 "storage_charge": round(storage_charge, 4),
                 "storage_discharge": round(storage_discharge, 4),
                 "storage_soc": round(value(("storage_soc", hour)), 4),

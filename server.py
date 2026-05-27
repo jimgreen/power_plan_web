@@ -205,12 +205,16 @@ RESULT_WORKBOOK_HEADER_TO_FIELD.update(
         "环境温度": "temperature",
         "负荷总功率": "load",
         "柴发总功率": "diesel_power",
+        "柴发开机容量": "diesel_capacity",
         "风力最大可发": "wind_available",
         "风机总功率": "wind_power",
         "光伏最大可发": "pv_available",
         "光伏总功率": "pv_power",
+        "新能源总出力": "renewable_power",
         "新能源最大可发": "renewable_available",
         "电储能总功率": "storage_power",
+        "构网储能总容量": "grid_storage_capacity",
+        "构网储能总功率": "grid_storage_power",
         "电储电量": "storage_soc",
         "电制氢总功率": "hydrogen_production_power",
         "储氢罐氢储量": "hydrogen_storage",
@@ -1419,14 +1423,18 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "temperature",
             "load",
             "diesel_power",
+            "diesel_capacity",
             "wind_available",
             "wind_power",
             "pv_available",
             "pv_power",
+            "renewable_power",
             "renewable_available",
             "renewable_ratio",
             "renewable_curtailed_rate",
             "storage_power",
+            "grid_storage_capacity",
+            "grid_storage_power",
             "storage_soc",
             "hydrogen_production_power",
             "hydrogen_storage",
@@ -1475,14 +1483,18 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "temperature": "环境温度",
             "load": "负荷总功率",
             "diesel_power": "柴发总功率",
+            "diesel_capacity": "柴发开机容量",
             "wind_available": "风力最大可发",
             "wind_power": "风机总功率",
             "pv_available": "光伏最大可发",
             "pv_power": "光伏总功率",
+            "renewable_power": "新能源总出力",
             "renewable_available": "新能源最大可发",
             "renewable_ratio": "新能源占比",
             "renewable_curtailed_rate": "新能源弃电率",
             "storage_power": "电储能总功率",
+            "grid_storage_capacity": "构网储能总容量",
+            "grid_storage_power": "构网储能总功率",
             "storage_soc": "电储电量",
             "hydrogen_production_power": "电制氢总功率",
             "hydrogen_storage": "储氢罐氢储量",
@@ -2943,6 +2955,7 @@ class FrequencyEvaluationRuntime:
         self._metrics: list[dict] = []
         self._summary: list[dict] = []
         self._frequency_table: list[dict] = []
+        self._frequency_8760_table: list[dict] = []
         self._curves: dict = {"safety_daily": []}
         self._logs: list[dict[str, str]] = []
         self._lock = threading.Lock()
@@ -2995,11 +3008,19 @@ class FrequencyEvaluationRuntime:
                 self._metrics = []
                 self._summary = []
                 self._frequency_table = []
+                self._frequency_8760_table = []
                 self._curves = {"safety_daily": []}
                 self._append_log_unlocked("ok", f"启动频率计算，方案：{self.scheme}，结果：{self.result_filename}")
             try:
+                self._append_log_threadsafe("info", "读取方案参数")
                 scheme_payload = PLANNING_STORE.read_scheme(target_scheme)
-                payload = build_frequency_evaluation_payload(target_path, scheme=target_scheme, scheme_payload=scheme_payload, generate_curves=True)
+                payload = build_frequency_evaluation_payload(
+                    target_path,
+                    scheme=target_scheme,
+                    scheme_payload=scheme_payload,
+                    generate_curves=True,
+                    log_callback=self._append_log_threadsafe,
+                )
             except Exception as exc:
                 with self._lock:
                     self.status = "失败"
@@ -3011,6 +3032,7 @@ class FrequencyEvaluationRuntime:
                 self._metrics = payload["metrics"]
                 self._summary = payload["summary"]
                 self._frequency_table = payload["frequency_table"]
+                self._frequency_8760_table = payload.get("frequency_8760_table", [])
                 self._curves = payload["curves"]
                 self.frequency_result_file = payload.get("frequency_result_file", "")
                 self.status = "已完成"
@@ -3043,6 +3065,7 @@ class FrequencyEvaluationRuntime:
             "metrics": self._metrics_unlocked(),
             "summary": list(self._summary),
             "frequency_table": list(self._frequency_table),
+            "frequency_8760_table": list(self._frequency_8760_table),
             "curves": dict(self._curves),
             "logs": list(self._logs),
         }
@@ -3089,6 +3112,7 @@ class FrequencyEvaluationRuntime:
         self._metrics = payload["metrics"]
         self._summary = payload["summary"]
         self._frequency_table = payload["frequency_table"]
+        self._frequency_8760_table = payload.get("frequency_8760_table", [])
         self._curves = payload["curves"]
         self.frequency_result_file = payload.get("frequency_result_file", self.frequency_result_file)
 
@@ -3109,6 +3133,10 @@ class FrequencyEvaluationRuntime:
         self._logs.append({"time": _now_text(), "level": level, "message": message})
         if len(self._logs) > 1000:
             del self._logs[:-1000]
+
+    def _append_log_threadsafe(self, level: str, message: str) -> None:
+        with self._lock:
+            self._append_log_unlocked(level, message)
 
 
 class FrequencyEvaluationRuntimeManager:
@@ -3166,29 +3194,53 @@ def build_frequency_evaluation_payload(
     scheme: str = "",
     scheme_payload: dict | None = None,
     generate_curves: bool = False,
+    log_callback=None,
 ) -> dict:
+    emit_frequency_log(log_callback, "info", f"读取结果文件：{path.name}")
     workbook_payload = read_result_workbook_display_payload(path, include_hourly_curves=False)
     results = workbook_payload.get("results", {})
     safety_table = [dict(row) for row in results.get("safety_table", []) if isinstance(row, dict)]
     safety_daily = [dict(row) for row in results.get("curves", {}).get("safety_daily", []) if isinstance(row, dict)]
+    emit_frequency_log(log_callback, "info", f"已读取频率安全指标：{len(safety_table)}行，日曲线：{len(safety_daily)}点")
     frequency_result_file = ""
     curve_row_count = 0
+    frequency_8760_table: list[dict] = []
     if scheme_payload is None and scheme and generate_curves:
         try:
             scheme_payload = PLANNING_STORE.read_scheme(scheme)
         except Exception:
             scheme_payload = None
     if scheme and scheme_payload is not None and generate_curves:
+        emit_frequency_log(log_callback, "info", "读取调度结果8760点")
         dispatch_rows = read_frequency_dispatch_rows(path)
         if dispatch_rows:
-            frequency_result_path = export_frequency_curve_workbook(scheme, path.name, scheme_payload, dispatch_rows)
+            emit_frequency_log(log_callback, "info", f"开始生成{len(dispatch_rows)}个时刻的频率仿真曲线")
+            frequency_results = []
+            for index, result in enumerate(iter_frequency_result_rows(scheme_payload, dispatch_rows), start=1):
+                frequency_results.append(result)
+                if index == 1 or index % 1000 == 0 or index == len(dispatch_rows):
+                    emit_frequency_log(log_callback, "info", f"频率曲线生成进度：{index}/{len(dispatch_rows)}")
+            emit_frequency_log(log_callback, "info", "整理频率8760点指标")
+            frequency_8760_table = frequency_8760_display_rows_from_results(frequency_results, scheme_payload)
+            emit_frequency_log(log_callback, "info", "写入频率计算结果文件")
+            frequency_result_path = export_frequency_curve_workbook(
+                scheme,
+                path.name,
+                scheme_payload,
+                dispatch_rows,
+                frequency_results=frequency_results,
+                log_callback=log_callback,
+            )
             frequency_result_file = str(frequency_result_path)
             curve_row_count = len(dispatch_rows) * 2
+            emit_frequency_log(log_callback, "ok", f"频率计算结果文件已生成：{frequency_result_path.name}，曲线{curve_row_count}条")
     elif scheme:
         existing_curve_path = frequency_curve_result_path(scheme, path.name)
         if existing_curve_path.exists():
+            emit_frequency_log(log_callback, "info", f"读取已有频率曲线文件：{existing_curve_path.name}")
             frequency_result_file = str(existing_curve_path)
-            curve_row_count = TIME_SERIES_IMPORT_ROW_COUNT * 2
+            frequency_8760_table = read_frequency_8760_display_rows(existing_curve_path, scheme_payload)
+            curve_row_count = len(frequency_8760_table) * 2 if frequency_8760_table else TIME_SERIES_IMPORT_ROW_COUNT * 2
     frequency_metrics = frequency_metrics_from_rows(safety_table, safety_daily)
     if frequency_result_file:
         frequency_metrics.append({"label": "频率曲线文件", "value": Path(frequency_result_file).name, "unit": ""})
@@ -3197,9 +3249,15 @@ def build_frequency_evaluation_payload(
         "metrics": frequency_metrics,
         "summary": frequency_summary_rows(frequency_metrics),
         "frequency_table": frequency_detail_rows(safety_table, frequency_metrics),
+        "frequency_8760_table": frequency_8760_table,
         "curves": {"safety_daily": safety_daily},
         "frequency_result_file": frequency_result_file,
     }
+
+
+def emit_frequency_log(log_callback, level: str, message: str) -> None:
+    if callable(log_callback):
+        log_callback(level, message)
 
 
 def read_frequency_dispatch_rows(path: Path) -> list[dict]:
@@ -3222,7 +3280,14 @@ def frequency_curve_result_path(scheme: str, filename: str) -> Path:
     return PLANNING_STORE.scheme_dir(str(scheme or "未选择方案")) / f"{source_stem}_frequency_curves.xlsx"
 
 
-def export_frequency_curve_workbook(scheme: str, filename: str, scheme_payload: dict, dispatch_rows: list[dict]) -> Path:
+def export_frequency_curve_workbook(
+    scheme: str,
+    filename: str,
+    scheme_payload: dict,
+    dispatch_rows: list[dict],
+    frequency_results: list[dict] | None = None,
+    log_callback=None,
+) -> Path:
     result_path = frequency_curve_result_path(scheme, filename)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook(write_only=True)
@@ -3232,15 +3297,21 @@ def export_frequency_curve_workbook(scheme: str, filename: str, scheme_payload: 
     curve_headers = frequency_curve_headers()
     summary_sheet.append(summary_headers)
     curve_sheet.append(curve_headers)
-    for result in iter_frequency_result_rows(scheme_payload, dispatch_rows):
+    results = frequency_results if frequency_results is not None else iter_frequency_result_rows(scheme_payload, dispatch_rows)
+    total_results = len(frequency_results) if isinstance(frequency_results, list) else len(dispatch_rows)
+    for index, result in enumerate(results, start=1):
         summary_sheet.append([result["summary"].get(header, "") for header in summary_headers])
         for row in result["curves"]:
             curve_sheet.append([row.get(header, "") for header in curve_headers])
+        if index == 1 or index % 1000 == 0 or index == total_results:
+            emit_frequency_log(log_callback, "info", f"频率结果写入进度：{index}/{total_results}")
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
     try:
+        emit_frequency_log(log_callback, "info", "保存频率曲线Excel文件")
         file_ops.save_workbook_with_retry(workbook, tmp_path, "频率曲线文件")
     finally:
         workbook.close()
+    emit_frequency_log(log_callback, "info", "替换频率曲线结果文件")
     replace_result_workbook_with_retry(tmp_path, result_path)
     return result_path
 
@@ -3250,7 +3321,13 @@ def frequency_8760_result_headers() -> list[str]:
         "hour_index",
         "datetime",
         "grid_model",
+        "diesel_capacity",
         "diesel_on",
+        "diesel_power",
+        "load",
+        "renewable_power",
+        "grid_storage_capacity",
+        "storage_power",
         "storage_charge",
         "storage_discharge",
         "equivalent_inertia_m",
@@ -3272,7 +3349,13 @@ def frequency_curve_headers() -> list[str]:
         "datetime",
         "curve_type",
         "grid_model",
+        "diesel_capacity",
         "diesel_on",
+        "diesel_power",
+        "load",
+        "renewable_power",
+        "grid_storage_capacity",
+        "storage_power",
         "storage_charge",
         "storage_discharge",
         "equivalent_inertia_m",
@@ -3298,8 +3381,251 @@ def iter_frequency_curve_rows(scheme_payload: dict, dispatch_rows: list[dict]):
         yield from result["curves"]
 
 
+def frequency_diesel_unit_capacity(scheme_payload: dict) -> float | None:
+    try:
+        diesel_devices = plan_optimizer.normalized_device_rows(scheme_payload).get("diesel_generators", [])
+    except Exception:
+        return None
+    capacities = [float(device.get("power_upper") or device.get("capacity") or 0.0) for device in diesel_devices]
+    capacities = [capacity for capacity in capacities if capacity > 0]
+    return capacities[0] if len(capacities) == 1 else None
+
+
+def frequency_grid_storage_capacity(scheme_payload: dict) -> float | None:
+    try:
+        storage_devices = plan_optimizer.normalized_device_rows(scheme_payload).get("storage_pcs", [])
+    except Exception:
+        return None
+    capacity = sum(
+        float(device.get("capacity") or 0.0) * float(device.get("quantity_upper") or 0.0)
+        for device in storage_devices
+        if device.get("is_grid_forming")
+    )
+    return capacity if capacity > 0 else None
+
+
+def frequency_8760_display_rows_from_results(results: list[dict], scheme_payload: dict | None = None) -> list[dict]:
+    summaries = [dict(result.get("summary", {})) for result in results if isinstance(result, dict)]
+    return frequency_8760_display_rows_from_summaries(summaries, scheme_payload)
+
+
+def frequency_8760_display_rows_from_summaries(summaries: list[dict], scheme_payload: dict | None = None) -> list[dict]:
+    diesel_unit_capacity = frequency_diesel_unit_capacity(scheme_payload or {})
+    rows: list[dict] = []
+    for summary in summaries:
+        diesel_capacity = frequency_number(summary.get("diesel_capacity"))
+        if diesel_capacity is None and diesel_unit_capacity is not None:
+            diesel_capacity = (frequency_number(summary.get("diesel_on")) or 0.0) * diesel_unit_capacity
+        rows.append(
+            {
+                "小时": summary.get("hour_index", ""),
+                "时间": summary.get("datetime", ""),
+                "柴发开机容量": round(diesel_capacity, 4) if diesel_capacity is not None else "",
+                "向上最大扰动": summary.get("max_up_disturbance_mw", ""),
+                "向下最大扰动": summary.get("max_down_disturbance_mw", ""),
+                "优化频率最大值": summary.get("source_frequency_max_hz", ""),
+                "优化频率最小值": summary.get("source_frequency_min_hz", ""),
+                "仿真频率最大值": summary.get("calculated_max_frequency_hz", ""),
+                "仿真频率最小值": summary.get("calculated_min_frequency_hz", ""),
+            }
+        )
+    return rows
+
+
+def read_frequency_8760_display_rows(path: Path, scheme_payload: dict | None = None) -> list[dict]:
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return []
+    try:
+        if "频率8760结果" not in workbook.sheetnames:
+            return []
+        sheet = workbook["频率8760结果"]
+        raw_rows = list(sheet.iter_rows(values_only=True))
+    finally:
+        workbook.close()
+    if not raw_rows:
+        return []
+    headers = [str(value or "").strip() for value in raw_rows[0]]
+    summaries = [
+        {headers[index]: value for index, value in enumerate(row) if index < len(headers) and headers[index]}
+        for row in raw_rows[1:]
+    ]
+    return frequency_8760_display_rows_from_summaries(summaries, scheme_payload)
+
+
+def read_frequency_time_curve_payload(
+    path: Path,
+    *,
+    hour_index: str = "",
+    year: str = "",
+    month: str = "",
+    day: str = "",
+    hour: str = "",
+) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"频率曲线文件不存在: {path.name}")
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"频率曲线文件无法读取: {path.name}") from exc
+    try:
+        if "频率8760结果" not in workbook.sheetnames or "频率曲线" not in workbook.sheetnames:
+            raise ValueError("频率曲线文件缺少频率8760结果或频率曲线工作表")
+        summaries = worksheet_dict_rows(workbook["频率8760结果"])
+        target_summary = select_frequency_time_summary(summaries, hour_index=hour_index, year=year, month=month, day=day, hour=hour)
+        target_hour = int(frequency_number(target_summary.get("hour_index")) or 0)
+        if target_hour <= 0:
+            raise ValueError("频率曲线文件中的小时序号无效")
+        curve_rows = [
+            row
+            for row in worksheet_dict_rows(workbook["频率曲线"])
+            if int(frequency_number(row.get("hour_index")) or 0) == target_hour
+        ]
+    finally:
+        workbook.close()
+    if not curve_rows:
+        raise ValueError(f"未找到第{target_hour}小时的频率曲线")
+    high_curve = next((row for row in curve_rows if str(row.get("curve_type", "")).strip() == "最高频率曲线"), None)
+    low_curve = next((row for row in curve_rows if str(row.get("curve_type", "")).strip() == "最低频率曲线"), None)
+    if high_curve is None or low_curve is None:
+        raise ValueError(f"第{target_hour}小时的高频曲线或低频曲线缺失")
+    selection = frequency_time_selection_payload(target_summary)
+    return {
+        "selection": selection,
+        "summary_table": frequency_time_summary_table(target_summary),
+        "curves": {
+            "high": frequency_curve_points_from_row(high_curve),
+            "low": frequency_curve_points_from_row(low_curve),
+        },
+    }
+
+
+def worksheet_dict_rows(sheet) -> list[dict]:
+    raw_rows = list(sheet.iter_rows(values_only=True))
+    if not raw_rows:
+        return []
+    headers = [str(value or "").strip() for value in raw_rows[0]]
+    return [
+        {headers[index]: value for index, value in enumerate(row) if index < len(headers) and headers[index]}
+        for row in raw_rows[1:]
+    ]
+
+
+def select_frequency_time_summary(
+    summaries: list[dict],
+    *,
+    hour_index: str = "",
+    year: str = "",
+    month: str = "",
+    day: str = "",
+    hour: str = "",
+) -> dict:
+    if not summaries:
+        raise ValueError("频率8760结果为空")
+    requested_hour = frequency_int_or_none(hour_index)
+    if requested_hour is not None:
+        for summary in summaries:
+            if int(frequency_number(summary.get("hour_index")) or 0) == requested_hour:
+                return summary
+        raise ValueError(f"未找到第{requested_hour}小时的频率结果")
+    requested_parts = {
+        "year": frequency_int_or_none(year),
+        "month": frequency_int_or_none(month),
+        "day": frequency_int_or_none(day),
+        "hour": frequency_int_or_none(hour),
+    }
+    if all(value is not None for value in requested_parts.values()):
+        for summary in summaries:
+            parts = frequency_datetime_parts(summary.get("datetime"))
+            if parts and all(parts[key] == requested_parts[key] for key in requested_parts):
+                return summary
+        raise ValueError(f"未找到{year}年{month}月{day}日{hour}时的频率结果")
+    return summaries[0]
+
+
+def frequency_int_or_none(value) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def frequency_datetime_parts(value) -> dict[str, int] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return {"year": dt.year, "month": dt.month, "day": dt.day, "hour": dt.hour}
+        except ValueError:
+            continue
+    match = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2})", text)
+    if not match:
+        return None
+    return {
+        "year": int(match.group(1)),
+        "month": int(match.group(2)),
+        "day": int(match.group(3)),
+        "hour": int(match.group(4)),
+    }
+
+
+def frequency_time_selection_payload(summary: dict) -> dict:
+    parts = frequency_datetime_parts(summary.get("datetime")) or {}
+    return {
+        "hour_index": summary.get("hour_index", ""),
+        "datetime": summary.get("datetime", ""),
+        "year": parts.get("year", ""),
+        "month": parts.get("month", ""),
+        "day": parts.get("day", ""),
+        "hour": parts.get("hour", ""),
+    }
+
+
+def frequency_time_summary_table(summary: dict) -> list[dict]:
+    rows = [
+        ("柴发开机总容量", "diesel_capacity", "kW"),
+        ("柴发总功率", "diesel_power", "kW"),
+        ("负荷总功率", "load", "kW"),
+        ("新能源总出力", "renewable_power", "kW"),
+        ("向上最大扰动", "max_up_disturbance_mw", "MW"),
+        ("向下最大扰动", "max_down_disturbance_mw", "MW"),
+        ("优化频率最大值", "source_frequency_max_hz", "Hz"),
+        ("优化频率最小值", "source_frequency_min_hz", "Hz"),
+        ("仿真频率最大值", "calculated_max_frequency_hz", "Hz"),
+        ("仿真频率最小值", "calculated_min_frequency_hz", "Hz"),
+    ]
+    return [
+        {"指标": label, "数值": frequency_summary_value(summary, key), "单位": unit}
+        for label, key, unit in rows
+    ]
+
+
+def frequency_summary_value(summary: dict, key: str):
+    value = summary.get(key, "")
+    numeric = frequency_number(value)
+    return round(numeric, 5) if numeric is not None else value
+
+
+def frequency_curve_points_from_row(row: dict) -> list[dict]:
+    points: list[dict] = []
+    for index in range(FREQUENCY_CURVE_POINT_COUNT):
+        header = frequency_curve_point_header(index)
+        value = frequency_number(row.get(header))
+        if value is not None:
+            points.append({"time": round(index * FREQUENCY_CURVE_STEP_SECONDS, 2), "frequency": round(value, 5)})
+    return points
+
+
 def iter_frequency_result_rows(scheme_payload: dict, dispatch_rows: list[dict]):
     planning_parameters = frequency_planning_parameters(scheme_payload)
+    diesel_unit_capacity = frequency_diesel_unit_capacity(scheme_payload)
+    default_grid_storage_capacity = frequency_grid_storage_capacity(scheme_payload)
     loads = [frequency_number(row.get("load")) or 0.0 for row in dispatch_rows]
     nominal_frequency = min(65.0, max(45.0, plan_optimizer.numeric(planning_parameters.get("nominal_frequency_hz"), plan_optimizer.NOMINAL_FREQUENCY_HZ)))
     governor_t = max(0.0, plan_optimizer.numeric(planning_parameters.get("frequency_governor_time_constant_s"), 0.6))
@@ -3322,11 +3648,27 @@ def iter_frequency_result_rows(scheme_payload: dict, dispatch_rows: list[dict]):
         m_eq = frequency_number(row.get("equivalent_inertia_m")) or 0.0
         k_eq = frequency_number(row.get("equivalent_primary_frequency_k")) or 0.0
         d_eq = frequency_number(row.get("equivalent_damping_d")) or 0.0
+        diesel_on = row.get("diesel_on", "")
+        diesel_capacity = frequency_number(row.get("diesel_capacity"))
+        if diesel_capacity is None and diesel_unit_capacity is not None:
+            diesel_capacity = (frequency_number(diesel_on) or 0.0) * diesel_unit_capacity
+        renewable_power = frequency_number(row.get("renewable_power"))
+        if renewable_power is None:
+            renewable_power = (frequency_number(row.get("wind_power")) or 0.0) + (frequency_number(row.get("pv_power")) or 0.0)
+        grid_storage_capacity = frequency_number(row.get("grid_storage_capacity"))
+        if grid_storage_capacity is None:
+            grid_storage_capacity = default_grid_storage_capacity
         base = {
             "hour_index": hour_index,
             "datetime": row.get("datetime", ""),
             "grid_model": round(grid_model, 4),
-            "diesel_on": row.get("diesel_on", ""),
+            "diesel_capacity": round(diesel_capacity, 4) if diesel_capacity is not None else "",
+            "diesel_on": diesel_on,
+            "diesel_power": round(frequency_number(row.get("diesel_power")) or 0.0, 4),
+            "load": round(load, 4),
+            "renewable_power": round(renewable_power, 4) if renewable_power is not None else "",
+            "grid_storage_capacity": round(grid_storage_capacity, 4) if grid_storage_capacity is not None else "",
+            "storage_power": round(frequency_number(row.get("storage_power")) or 0.0, 4),
             "storage_charge": round(frequency_number(row.get("storage_charge")) or 0.0, 4),
             "storage_discharge": round(frequency_number(row.get("storage_discharge")) or 0.0, 4),
             "equivalent_inertia_m": round(m_eq, 4),
@@ -5834,6 +6176,29 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         return _json_response(FREQUENCY_EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
+    if path == "/api/frequency/time-curve":
+        try:
+            scheme = query_params.get("scheme", [""])[0]
+            filename = query_params.get("filename", [""])[0]
+            selected = selected_evaluation_result_filename(scheme, filename)
+            hour_index = query_params.get("hour_index", [""])[0]
+            year = query_params.get("year", [""])[0]
+            month = query_params.get("month", [""])[0]
+            day = query_params.get("day", [""])[0]
+            hour = query_params.get("hour", [""])[0]
+            payload = read_frequency_time_curve_payload(
+                frequency_curve_result_path(scheme, selected),
+                hour_index=hour_index,
+                year=year,
+                month=month,
+                day=day,
+                hour=hour,
+            )
+            return _json_response(payload)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     if path.startswith("/api/evaluation/"):
         return handle_evaluation_results_api_path(path, "GET", b"", query)
     if path == "/api/optimization/status":

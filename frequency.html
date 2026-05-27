@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>频率计算 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260527-frequency1">
+  <link rel="stylesheet" href="assets/planning.css?v=20260528-frequency-time">
 </head>
 <body>
   <main class="planning-shell">
@@ -68,17 +68,31 @@
           <div class="result-tabs" role="tablist" aria-label="频率计算结果切换">
             <button id="frequencyLogViewToggle" class="result-tab" data-result-tab="logs" type="button" aria-selected="false">评估日志</button>
             <button class="result-tab active" data-result-tab="metrics" type="button" aria-selected="true">频率指标</button>
-            <button class="result-tab" data-result-tab="curve" type="button" aria-selected="false">频率日曲线</button>
+            <button class="result-tab" data-result-tab="curve" type="button" aria-selected="false">频率分时曲线</button>
           </div>
           <div id="frequencyLogPanel" class="result-panel optimization-log-result-panel" data-result-panel="logs" role="tabpanel" hidden>
             <div id="frequencyLogs" class="optimization-logs" aria-live="polite"></div>
           </div>
           <div id="frequencyMetricsPanel" class="result-panel active" data-result-panel="metrics" role="tabpanel">
-            <div id="frequencyMetricsTable" class="data-table safety-result-table"></div>
+            <div class="frequency-metrics-layout">
+              <div id="frequencyMetricsTable" class="data-table safety-result-table"></div>
+              <div id="frequency8760CurveBoard" class="frequency-8760-curve-board" aria-label="8760点频率指标曲线"></div>
+            </div>
           </div>
           <div id="frequencyCurvePanel" class="result-panel" data-result-panel="curve" role="tabpanel" hidden>
-            <section class="safety-chart-card safety-frequency-chart" aria-label="频率日曲线">
-              <div id="frequencyCurveChart" class="safety-chart-viewport"></div>
+            <section class="frequency-time-curve-panel" aria-label="频率分时曲线">
+              <div class="frequency-time-controls" aria-label="频率分时曲线时刻选择">
+                <label>年<input id="frequencyCurveYear" type="number" min="1900" max="9999" inputmode="numeric"></label>
+                <label>月<input id="frequencyCurveMonth" type="number" min="1" max="12" inputmode="numeric"></label>
+                <label>日<input id="frequencyCurveDay" type="number" min="1" max="31" inputmode="numeric"></label>
+                <label>时<input id="frequencyCurveHour" type="number" min="0" max="23" inputmode="numeric"></label>
+                <button id="frequencyCurveQuery" class="primary" type="button">查询</button>
+              </div>
+              <div class="frequency-time-result-layout">
+                <div id="frequencyTimeInfoTable" class="data-table safety-result-table"></div>
+                <div id="frequencyTimeResultResizeHandle" class="result-column-resize-handle" role="separator" tabindex="0" aria-label="调整该时刻指标表和频率分时曲线宽度" aria-orientation="vertical"></div>
+                <div id="frequencyCurveChart" class="safety-chart-viewport frequency-time-curve-chart"></div>
+              </div>
             </section>
           </div>
         </section>
@@ -87,6 +101,6 @@
   </main>
   <script src="assets/i18n.js?v=20260518-fit-text4"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/frequency.js?v=20260527-frequency-calc1"></script>
+  <script src="assets/frequency.js?v=20260528-frequency-time"></script>
 </body>
 </html>

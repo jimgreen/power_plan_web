@@ -2569,6 +2569,123 @@ button:disabled {
   min-width: 520px;
 }
 
+.frequency-metrics-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.frequency-metrics-layout > .data-table {
+  max-height: none;
+}
+
+.frequency-8760-curve-board {
+  flex: 1 1 auto;
+  min-height: 360px;
+  overflow: auto;
+  border: 1px solid #d7e4e0;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.frequency-8760-svg {
+  display: block;
+  width: 100%;
+  min-width: 980px;
+  height: 100%;
+  min-height: 620px;
+}
+
+.frequency-8760-line {
+  fill: none;
+  stroke-width: 1.7;
+  vector-effect: non-scaling-stroke;
+}
+
+.frequency-8760-grid,
+.frequency-8760-x-grid {
+  stroke: #dce9e5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.frequency-8760-x-grid {
+  stroke-dasharray: 5 6;
+}
+
+.frequency-8760-series-label {
+  fill: #25413f;
+  font-size: 13px;
+  font-weight: 800;
+  text-anchor: end;
+  dominant-baseline: central;
+}
+
+.frequency-8760-value-label,
+.frequency-8760-x-label {
+  fill: #61726f;
+  font-size: 11px;
+}
+
+.frequency-8760-x-label {
+  text-anchor: middle;
+}
+
+.frequency-time-curve-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.frequency-time-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.frequency-time-controls label {
+  display: grid;
+  gap: 5px;
+  color: #536762;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.frequency-time-controls input {
+  width: 92px;
+  height: 36px;
+  border: 1px solid #cbded8;
+  border-radius: 10px;
+  padding: 0 10px;
+  color: #173431;
+  font-weight: 800;
+  background: #fff;
+}
+
+.frequency-time-controls button {
+  height: 36px;
+}
+
+.frequency-time-result-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, var(--frequency-time-info-width, 360px)) 10px minmax(0, 1fr);
+  gap: 0;
+}
+
+.frequency-time-result-layout > .data-table {
+  max-height: none;
+}
+
+.frequency-time-curve-chart {
+  min-height: 0;
+}
+
 .chart-hover-line {
   stroke: #102b2a;
   stroke-width: 1.4;

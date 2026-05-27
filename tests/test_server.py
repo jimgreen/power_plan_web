@@ -5582,6 +5582,11 @@ class PowerPlanServerTest(unittest.TestCase):
                 "load": 100,
                 "wind_power": 20,
                 "pv_power": 10,
+                "diesel_capacity": 200,
+                "diesel_power": 80,
+                "renewable_power": 30,
+                "grid_storage_capacity": 50,
+                "storage_power": 1,
                 "diesel_on": 2,
                 "storage_charge": 3,
                 "storage_discharge": 4,
@@ -5607,10 +5612,22 @@ class PowerPlanServerTest(unittest.TestCase):
             "source_frequency_min_hz",
             "calculated_max_frequency_hz",
             "calculated_min_frequency_hz",
+            "diesel_capacity",
+            "diesel_power",
+            "load",
+            "renewable_power",
+            "grid_storage_capacity",
+            "storage_power",
         ):
             self.assertIn(header, server.frequency_8760_result_headers())
             self.assertIn(header, server.frequency_curve_headers())
 
+        self.assertEqual(summary["diesel_capacity"], 200)
+        self.assertEqual(summary["diesel_power"], 80)
+        self.assertEqual(summary["load"], 100)
+        self.assertEqual(summary["renewable_power"], 30)
+        self.assertEqual(summary["grid_storage_capacity"], 50)
+        self.assertEqual(summary["storage_power"], 1)
         self.assertEqual(summary["max_up_disturbance_mw"], 0.2)
         self.assertEqual(summary["max_down_disturbance_mw"], -0.15)
         self.assertEqual(summary["source_frequency_max_hz"], 50.42)
@@ -5619,6 +5636,162 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(summary["calculated_max_frequency_hz"], max(upper_curve[header] for header in time_headers))
         self.assertEqual(lower_curve["calculated_min_frequency_hz"], summary["calculated_min_frequency_hz"])
         self.assertEqual(upper_curve["calculated_max_frequency_hz"], summary["calculated_max_frequency_hz"])
+
+    def test_frequency_8760_curve_board_exposes_requested_metric_series(self):
+        frequency_script = (WEB_ROOT / "assets" / "frequency.js").read_text(encoding="utf-8")
+        frequency_page = (WEB_ROOT / "frequency.html").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        results = [
+            {
+                "summary": {
+                    "hour_index": 1,
+                    "datetime": "2026-01-01 00:00",
+                    "diesel_capacity": 200,
+                    "max_up_disturbance_mw": 0.2,
+                    "max_down_disturbance_mw": -0.15,
+                    "source_frequency_max_hz": 50.42,
+                    "source_frequency_min_hz": 49.58,
+                    "calculated_max_frequency_hz": 50.35,
+                    "calculated_min_frequency_hz": 49.65,
+                }
+            }
+        ]
+
+        rows = server.frequency_8760_display_rows_from_results(results, {})
+        self.assertEqual(rows[0]["柴发开机容量"], 200)
+        for label in ("向上最大扰动", "向下最大扰动", "优化频率最大值", "优化频率最小值", "仿真频率最大值", "仿真频率最小值"):
+            self.assertIn(label, rows[0])
+            self.assertIn(label, frequency_script)
+        self.assertIn("frequency8760CurveBoard", frequency_page)
+        self.assertIn("function renderFrequency8760CurveBoard", frequency_script)
+        self.assertIn("data.frequency_8760_table", frequency_script)
+        self.assertIn("频率分时曲线", frequency_page)
+        self.assertIn("frequencyCurveYear", frequency_page)
+        self.assertIn("frequencyTimeResultResizeHandle", frequency_page)
+        self.assertIn("function refreshFrequencyTimeCurve", frequency_script)
+        self.assertIn("function bindFrequencyTimeResultResize", frequency_script)
+        self.assertIn("scheduleFrequencyPolling();", frequency_script)
+        self.assertIn("window.setTimeout(() => refreshFrequencyStatus().catch(showFrequencyError), 250)", frequency_script)
+        self.assertIn("/api/frequency/time-curve", frequency_script)
+        self.assertIn(".frequency-metrics-layout", css)
+        self.assertIn(".frequency-8760-curve-board", css)
+        self.assertIn(".frequency-8760-line", css)
+        self.assertIn(".frequency-time-curve-panel", css)
+        self.assertIn(".frequency-time-result-layout", css)
+        self.assertIn("--frequency-time-info-width", css)
+
+    def test_frequency_time_curve_payload_reads_selected_hour_curves(self):
+        path = WEB_ROOT / "tests" / "tmp_frequency_time_curve.xlsx"
+        workbook = Workbook()
+        summary = workbook.active
+        summary.title = "频率8760结果"
+        summary.append(server.frequency_8760_result_headers())
+        summary.append([
+            1,
+            "2026-01-02 03:00",
+            1.0,
+            200,
+            2,
+            80,
+            100,
+            30,
+            50,
+            1,
+            0,
+            0,
+            10,
+            0.8,
+            1.2,
+            0.2,
+            -0.15,
+            50.42,
+            49.58,
+            50.35,
+            49.65,
+        ])
+        curve = workbook.create_sheet("频率曲线")
+        curve_headers = server.frequency_curve_headers()
+        curve.append(curve_headers)
+        low_row = {header: "" for header in curve_headers}
+        high_row = {header: "" for header in curve_headers}
+        low_row.update({"hour_index": 1, "datetime": "2026-01-02 03:00", "curve_type": "最低频率曲线"})
+        high_row.update({"hour_index": 1, "datetime": "2026-01-02 03:00", "curve_type": "最高频率曲线"})
+        for index in range(server.FREQUENCY_CURVE_POINT_COUNT):
+            header = server.frequency_curve_point_header(index)
+            low_row[header] = 50 - index * 0.001
+            high_row[header] = 50 + index * 0.001
+        curve.append([low_row.get(header, "") for header in curve_headers])
+        curve.append([high_row.get(header, "") for header in curve_headers])
+        try:
+            workbook.save(path)
+            payload = server.read_frequency_time_curve_payload(path, year="2026", month="1", day="2", hour="3")
+        finally:
+            workbook.close()
+            if path.exists():
+                path.unlink()
+
+        self.assertEqual(payload["selection"]["hour_index"], 1)
+        metrics = {row["指标"]: row["数值"] for row in payload["summary_table"]}
+        self.assertEqual(metrics["柴发开机总容量"], 200)
+        self.assertEqual(metrics["柴发总功率"], 80)
+        self.assertEqual(metrics["负荷总功率"], 100)
+        self.assertEqual(metrics["新能源总出力"], 30)
+        self.assertEqual(metrics["向上最大扰动"], 0.2)
+        self.assertEqual(metrics["向下最大扰动"], -0.15)
+        self.assertEqual(len(payload["curves"]["high"]), server.FREQUENCY_CURVE_POINT_COUNT)
+        self.assertEqual(len(payload["curves"]["low"]), server.FREQUENCY_CURVE_POINT_COUNT)
+        self.assertEqual(payload["curves"]["high"][0], {"time": 0.0, "frequency": 50.0})
+        self.assertEqual(payload["curves"]["low"][1]["time"], 0.05)
+
+    def test_frequency_curve_export_emits_progress_logs(self):
+        scheme = "测试频率日志方案"
+        filename = "logcase_results.xlsx"
+        result_path = server.frequency_curve_result_path(scheme, filename)
+        logs: list[tuple[str, str]] = []
+        summary = {
+            "hour_index": 1,
+            "datetime": "2026-01-01 00:00",
+            "grid_model": 1,
+            "diesel_capacity": 100,
+            "diesel_on": 1,
+            "diesel_power": 50,
+            "load": 80,
+            "renewable_power": 30,
+            "grid_storage_capacity": 20,
+            "storage_power": 0,
+            "storage_charge": 0,
+            "storage_discharge": 0,
+            "equivalent_inertia_m": 10,
+            "load_response_d": 0.8,
+            "equivalent_primary_frequency_k": 1.2,
+            "max_up_disturbance_mw": 0.2,
+            "max_down_disturbance_mw": -0.15,
+            "source_frequency_max_hz": 50.2,
+            "source_frequency_min_hz": 49.8,
+            "calculated_max_frequency_hz": 50.1,
+            "calculated_min_frequency_hz": 49.9,
+        }
+        curves = [
+            {"hour_index": 1, "datetime": "2026-01-01 00:00", "curve_type": "最低频率曲线"},
+            {"hour_index": 1, "datetime": "2026-01-01 00:00", "curve_type": "最高频率曲线"},
+        ]
+        try:
+            server.export_frequency_curve_workbook(
+                scheme,
+                filename,
+                {},
+                [],
+                frequency_results=[{"summary": summary, "curves": curves}],
+                log_callback=lambda level, message: logs.append((level, message)),
+            )
+        finally:
+            if result_path.exists():
+                result_path.unlink()
+
+        messages = [message for _, message in logs]
+        self.assertTrue(any("频率结果写入进度" in message for message in messages))
+        self.assertTrue(any("保存频率曲线Excel文件" in message for message in messages))
+        self.assertTrue(any("替换频率曲线结果文件" in message for message in messages))
 
     def test_calculation_result_frontends_display_numeric_values_with_two_decimals(self):
         optimize_script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
