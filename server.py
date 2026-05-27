@@ -3226,11 +3226,16 @@ def export_frequency_curve_workbook(scheme: str, filename: str, scheme_payload: 
     result_path = frequency_curve_result_path(scheme, filename)
     result_path.parent.mkdir(parents=True, exist_ok=True)
     workbook = Workbook(write_only=True)
-    sheet = workbook.create_sheet("频率曲线")
-    headers = frequency_curve_headers()
-    sheet.append(headers)
-    for row in iter_frequency_curve_rows(scheme_payload, dispatch_rows):
-        sheet.append([row.get(header, "") for header in headers])
+    summary_sheet = workbook.create_sheet("频率8760结果")
+    curve_sheet = workbook.create_sheet("频率曲线")
+    summary_headers = frequency_8760_result_headers()
+    curve_headers = frequency_curve_headers()
+    summary_sheet.append(summary_headers)
+    curve_sheet.append(curve_headers)
+    for result in iter_frequency_result_rows(scheme_payload, dispatch_rows):
+        summary_sheet.append([result["summary"].get(header, "") for header in summary_headers])
+        for row in result["curves"]:
+            curve_sheet.append([row.get(header, "") for header in curve_headers])
     tmp_path = result_path.with_name(f".{result_path.name}.tmp")
     try:
         file_ops.save_workbook_with_retry(workbook, tmp_path, "频率曲线文件")
@@ -3238,6 +3243,26 @@ def export_frequency_curve_workbook(scheme: str, filename: str, scheme_payload: 
         workbook.close()
     replace_result_workbook_with_retry(tmp_path, result_path)
     return result_path
+
+
+def frequency_8760_result_headers() -> list[str]:
+    return [
+        "hour_index",
+        "datetime",
+        "grid_model",
+        "diesel_on",
+        "storage_charge",
+        "storage_discharge",
+        "equivalent_inertia_m",
+        "load_response_d",
+        "equivalent_primary_frequency_k",
+        "max_up_disturbance_mw",
+        "max_down_disturbance_mw",
+        "source_frequency_max_hz",
+        "source_frequency_min_hz",
+        "calculated_max_frequency_hz",
+        "calculated_min_frequency_hz",
+    ]
 
 
 def frequency_curve_headers() -> list[str]:
@@ -3253,6 +3278,12 @@ def frequency_curve_headers() -> list[str]:
         "equivalent_inertia_m",
         "load_response_d",
         "equivalent_primary_frequency_k",
+        "max_up_disturbance_mw",
+        "max_down_disturbance_mw",
+        "source_frequency_max_hz",
+        "source_frequency_min_hz",
+        "calculated_max_frequency_hz",
+        "calculated_min_frequency_hz",
         "disturbance_mw",
         *time_headers,
     ]
@@ -3263,7 +3294,12 @@ def frequency_curve_point_header(index: int) -> str:
 
 
 def iter_frequency_curve_rows(scheme_payload: dict, dispatch_rows: list[dict]):
-    planning_parameters = scheme_payload.get("planning_parameters") if isinstance(scheme_payload.get("planning_parameters"), dict) else {}
+    for result in iter_frequency_result_rows(scheme_payload, dispatch_rows):
+        yield from result["curves"]
+
+
+def iter_frequency_result_rows(scheme_payload: dict, dispatch_rows: list[dict]):
+    planning_parameters = frequency_planning_parameters(scheme_payload)
     loads = [frequency_number(row.get("load")) or 0.0 for row in dispatch_rows]
     nominal_frequency = min(65.0, max(45.0, plan_optimizer.numeric(planning_parameters.get("nominal_frequency_hz"), plan_optimizer.NOMINAL_FREQUENCY_HZ)))
     governor_t = max(0.0, plan_optimizer.numeric(planning_parameters.get("frequency_governor_time_constant_s"), 0.6))
@@ -3299,18 +3335,49 @@ def iter_frequency_curve_rows(scheme_payload: dict, dispatch_rows: list[dict]):
         }
         lower_disturbance = frequency_number(row.get("frequency_delta_p_mw")) or 0.0
         upper_disturbance = frequency_number(row.get("frequency_upper_delta_p_mw")) or 0.0
-        yield frequency_curve_output_row(
-            base,
-            "最低频率曲线",
-            lower_disturbance,
-            frequency_response_curve_points(m_eq, k_eq, d_eq, governor_t, lower_disturbance, nominal_frequency),
+        lower_points = frequency_response_curve_points(m_eq, k_eq, d_eq, governor_t, lower_disturbance, nominal_frequency)
+        upper_points = frequency_response_curve_points(m_eq, k_eq, d_eq, governor_t, upper_disturbance, nominal_frequency)
+        calculated_min_frequency = round(min(lower_points), 5) if lower_points else ""
+        calculated_max_frequency = round(max(upper_points), 5) if upper_points else ""
+        source_frequency_max = frequency_number(row.get("frequency_max"))
+        source_frequency_min = frequency_number(row.get("frequency_min"))
+        summary = dict(base)
+        summary.update(
+            {
+                "max_up_disturbance_mw": round(lower_disturbance, 4),
+                "max_down_disturbance_mw": round(upper_disturbance, 4),
+                "source_frequency_max_hz": round(source_frequency_max, 5) if source_frequency_max is not None else "",
+                "source_frequency_min_hz": round(source_frequency_min, 5) if source_frequency_min is not None else "",
+                "calculated_max_frequency_hz": calculated_max_frequency,
+                "calculated_min_frequency_hz": calculated_min_frequency,
+            }
         )
-        yield frequency_curve_output_row(
-            base,
-            "最高频率曲线",
-            upper_disturbance,
-            frequency_response_curve_points(m_eq, k_eq, d_eq, governor_t, upper_disturbance, nominal_frequency),
-        )
+        yield {
+            "summary": summary,
+            "curves": [
+                frequency_curve_output_row(
+                    summary,
+                    "最低频率曲线",
+                    lower_disturbance,
+                    lower_points,
+                ),
+                frequency_curve_output_row(
+                    summary,
+                    "最高频率曲线",
+                    upper_disturbance,
+                    upper_points,
+                ),
+            ],
+        }
+
+
+def frequency_planning_parameters(scheme_payload: dict) -> dict:
+    rows = scheme_payload.get("planning_parameters") if isinstance(scheme_payload, dict) else {}
+    if isinstance(rows, dict):
+        return rows
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    return {}
 
 
 def frequency_curve_output_row(base: dict, curve_type: str, disturbance_mw: float, points: list[float]) -> dict:

@@ -5573,6 +5573,53 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".safety-center-line", css)
         self.assertIn(".safety-result-table", css)
 
+    def test_frequency_calculation_rows_include_source_and_calculated_extremes(self):
+        scheme_payload = {"planning_parameters": [{"nominal_frequency_hz": 50, "frequency_governor_time_constant_s": 0.6}]}
+        dispatch_rows = [
+            {
+                "hour_index": 1,
+                "datetime": "2026-01-01 00:00",
+                "load": 100,
+                "wind_power": 20,
+                "pv_power": 10,
+                "diesel_on": 2,
+                "storage_charge": 3,
+                "storage_discharge": 4,
+                "equivalent_inertia_m": 10,
+                "equivalent_primary_frequency_k": 1.2,
+                "equivalent_damping_d": 0.8,
+                "frequency_delta_p_mw": 0.2,
+                "frequency_upper_delta_p_mw": -0.15,
+                "frequency_max": 50.42,
+                "frequency_min": 49.58,
+            }
+        ]
+
+        outputs = list(server.iter_frequency_result_rows(scheme_payload, dispatch_rows))
+        summary = outputs[0]["summary"]
+        lower_curve, upper_curve = outputs[0]["curves"]
+        time_headers = [server.frequency_curve_point_header(index) for index in range(server.FREQUENCY_CURVE_POINT_COUNT)]
+
+        for header in (
+            "max_up_disturbance_mw",
+            "max_down_disturbance_mw",
+            "source_frequency_max_hz",
+            "source_frequency_min_hz",
+            "calculated_max_frequency_hz",
+            "calculated_min_frequency_hz",
+        ):
+            self.assertIn(header, server.frequency_8760_result_headers())
+            self.assertIn(header, server.frequency_curve_headers())
+
+        self.assertEqual(summary["max_up_disturbance_mw"], 0.2)
+        self.assertEqual(summary["max_down_disturbance_mw"], -0.15)
+        self.assertEqual(summary["source_frequency_max_hz"], 50.42)
+        self.assertEqual(summary["source_frequency_min_hz"], 49.58)
+        self.assertEqual(summary["calculated_min_frequency_hz"], min(lower_curve[header] for header in time_headers))
+        self.assertEqual(summary["calculated_max_frequency_hz"], max(upper_curve[header] for header in time_headers))
+        self.assertEqual(lower_curve["calculated_min_frequency_hz"], summary["calculated_min_frequency_hz"])
+        self.assertEqual(upper_curve["calculated_max_frequency_hz"], summary["calculated_max_frequency_hz"])
+
     def test_calculation_result_frontends_display_numeric_values_with_two_decimals(self):
         optimize_script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
         evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
