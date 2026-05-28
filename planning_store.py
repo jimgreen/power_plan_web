@@ -22,6 +22,7 @@ import file_ops
 WEB_ROOT = Path(__file__).resolve().parent
 DEFAULT_SCHEME_ROOT = WEB_ROOT / "planning_schemes"
 WORKBOOK_NAME = "parameters.xlsx"
+TIME_SERIES_WORKBOOK_NAME = "time_series.xlsx"
 WORKBOOK_XML = "xl/workbook.xml"
 WORKBOOK_RELS_XML = "xl/_rels/workbook.xml.rels"
 MAIN_XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -534,17 +535,27 @@ class PlanningStore:
     def workbook_path(self, name: str) -> Path:
         return self.scheme_dir(name) / WORKBOOK_NAME
 
+    def time_series_workbook_path(self, name: str) -> Path:
+        return self.scheme_dir(name) / TIME_SERIES_WORKBOOK_NAME
+
     def list_schemes(self) -> list[dict[str, Any]]:
         schemes: list[dict[str, Any]] = []
         for folder in sorted(self.root.iterdir(), key=lambda item: item.name):
             if not folder.is_dir():
                 continue
             workbook = folder / WORKBOOK_NAME
+            time_series_workbook = folder / TIME_SERIES_WORKBOOK_NAME
+            modified_at = None
+            if workbook.exists():
+                modified_at = workbook.stat().st_mtime
+            if time_series_workbook.exists():
+                time_series_modified_at = time_series_workbook.stat().st_mtime
+                modified_at = max(modified_at or time_series_modified_at, time_series_modified_at)
             schemes.append(
                 {
                     "name": folder.name,
                     "has_workbook": workbook.exists(),
-                    "modified_at": workbook.stat().st_mtime if workbook.exists() else None,
+                    "modified_at": modified_at,
                 }
             )
         return schemes
@@ -593,7 +604,7 @@ class PlanningStore:
         folder = self.scheme_dir(clean)
         folder.mkdir(parents=True, exist_ok=True)
         payload = sanitize_payload_names(deepcopy(payload))
-        workbook = build_workbook(payload | {"scheme": clean})
+        workbook = build_workbook(payload | {"scheme": clean}, include_keys=[key for key in SHEET_SPECS if key != "time_series"])
         tmp_path = folder / f".{WORKBOOK_NAME}.tmp"
         final_path = folder / WORKBOOK_NAME
         try:
@@ -601,13 +612,24 @@ class PlanningStore:
         finally:
             workbook.close()
         replace_workbook_with_retry(tmp_path, final_path)
+        if "time_series" in payload and time_series_changed(self.time_series_workbook_path(clean), final_path, payload.get("time_series")):
+            time_series_workbook = build_time_series_workbook(payload | {"scheme": clean})
+            time_series_tmp_path = folder / f".{TIME_SERIES_WORKBOOK_NAME}.tmp"
+            time_series_final_path = folder / TIME_SERIES_WORKBOOK_NAME
+            try:
+                file_ops.save_workbook_with_retry(time_series_workbook, time_series_tmp_path, "8760时序数据文件")
+            finally:
+                time_series_workbook.close()
+            replace_workbook_with_retry(time_series_tmp_path, time_series_final_path)
 
     def read_scheme(self, name: str) -> dict[str, Any]:
         clean = validate_scheme_name(name)
         path = self.workbook_path(clean)
         if not path.exists():
             raise FileNotFoundError(f"方案参数文件不存在: {path}")
-        payload = read_workbook(path, clean)
+        self.ensure_split_scheme_files(clean)
+        payload = read_workbook(path, clean, include_keys=[key for key in SHEET_SPECS if key != "time_series"])
+        payload.update(read_time_series_workbook_payload(path, clean))
         payload["validation"] = payload.get("validation", []) + validate_payload(payload)
         payload["time_series_loaded"] = True
         payload["time_series_count"] = len(payload.get("time_series", []))
@@ -618,9 +640,10 @@ class PlanningStore:
         path = self.workbook_path(clean)
         if not path.exists():
             raise FileNotFoundError(f"方案参数文件不存在: {path}")
+        self.ensure_split_scheme_files(clean)
         payload = read_workbook(path, clean, include_keys=[key for key in SHEET_SPECS if key != "time_series"])
         payload["time_series_loaded"] = False
-        payload["time_series_count"] = count_sheet_rows(path, SHEET_SPECS["time_series"][0])
+        payload["time_series_count"] = count_time_series_rows(path)
         payload["validation"] = payload.get("validation", []) + validate_payload(payload, require_time_series=False)
         return payload
 
@@ -629,17 +652,30 @@ class PlanningStore:
         path = self.workbook_path(clean)
         if not path.exists():
             raise FileNotFoundError(f"方案参数文件不存在: {path}")
-        payload = read_workbook(path, clean, include_keys=["time_series"])
+        self.ensure_split_scheme_files(clean)
+        payload = read_time_series_workbook_payload(path, clean)
         payload["time_series_loaded"] = True
         payload["time_series_count"] = len(payload.get("time_series", []))
         payload["validation"] = payload.get("validation", []) + validate_payload(payload)
         return payload
 
+    def ensure_split_scheme_files(self, name: str) -> None:
+        clean = validate_scheme_name(name)
+        parameter_path = self.workbook_path(clean)
+        time_series_path = self.time_series_workbook_path(clean)
+        if time_series_path.exists() or not workbook_has_sheet(parameter_path, SHEET_SPECS["time_series"][0]):
+            return
+        payload = read_workbook(parameter_path, clean)
+        self.write_scheme(clean, payload)
 
-def build_workbook(payload: dict[str, Any]) -> Workbook:
+
+def build_workbook(payload: dict[str, Any], include_keys: list[str] | None = None) -> Workbook:
     workbook = Workbook()
     workbook.remove(workbook.active)
+    selected_keys = set(include_keys) if include_keys is not None else set(SHEET_SPECS)
     for key, (sheet_name, headers) in SHEET_SPECS.items():
+        if key not in selected_keys:
+            continue
         sheet = workbook.create_sheet(sheet_name)
         sheet.append(headers)
         rows = payload.get(key, default_rows_for_key(key))
@@ -648,6 +684,43 @@ def build_workbook(payload: dict[str, Any]) -> Workbook:
         for row in rows:
             sheet.append([row.get(header, field_default_for_key(key, header, "")) for header in headers])
     return workbook
+
+
+def build_time_series_workbook(payload: dict[str, Any]) -> Workbook:
+    return build_workbook(payload, include_keys=["time_series"])
+
+
+def time_series_workbook_path_from_parameter_path(path: Path) -> Path:
+    return path.with_name(TIME_SERIES_WORKBOOK_NAME)
+
+
+def time_series_source_path(parameter_path: Path) -> Path:
+    time_series_path = time_series_workbook_path_from_parameter_path(parameter_path)
+    return time_series_path if time_series_path.exists() else parameter_path
+
+
+def time_series_changed(time_series_path: Path, fallback_parameter_path: Path, rows: Any) -> bool:
+    if not time_series_path.exists():
+        return True
+    try:
+        existing_payload = read_time_series_workbook_payload(fallback_parameter_path, "")
+    except Exception:
+        return True
+    existing_rows = existing_payload.get("time_series", [])
+    return normalize_time_series_rows_for_compare(existing_rows) != normalize_time_series_rows_for_compare(rows)
+
+
+def normalize_time_series_rows_for_compare(rows: Any) -> list[tuple[Any, ...]]:
+    headers = SHEET_SPECS["time_series"][1]
+    if not isinstance(rows, list):
+        return []
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict):
+            normalized.append(tuple("" for _ in headers))
+            continue
+        normalized.append(tuple(row.get(header, field_default_for_key("time_series", header, "")) for header in headers))
+    return normalized
 
 
 class TimeSeriesSheetReadError(Exception):
@@ -662,6 +735,11 @@ def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None
         lambda resolved: read_workbook_uncached(resolved, scheme, selected_keys),
         variant=variant,
     )
+
+
+def read_time_series_workbook_payload(parameter_path: Path, scheme: str) -> dict[str, Any]:
+    source_path = time_series_source_path(parameter_path)
+    return read_workbook(source_path, scheme, include_keys=["time_series"])
 
 
 def read_workbook_uncached(path: Path, scheme: str, selected_keys: set[str]) -> dict[str, Any]:
@@ -969,6 +1047,18 @@ def count_sheet_rows(path: Path, sheet_name: str) -> int:
         lambda resolved: count_sheet_rows_uncached(resolved, sheet_name),
         variant=("sheet_rows", sheet_name),
     )
+
+
+def count_time_series_rows(parameter_path: Path) -> int:
+    return count_sheet_rows(time_series_source_path(parameter_path), SHEET_SPECS["time_series"][0])
+
+
+def workbook_has_sheet(path: Path, sheet_name: str) -> bool:
+    workbook = load_workbook(path, data_only=True, read_only=True)
+    try:
+        return sheet_name in workbook.sheetnames
+    finally:
+        workbook.close()
 
 
 def count_sheet_rows_uncached(path: Path, sheet_name: str) -> int:

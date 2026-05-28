@@ -1329,13 +1329,8 @@ def export_optimization_results_workbook(payload: dict) -> Path:
     scheme = str(payload.get("scheme") or "未选择方案")
     result_path = optimization_result_workbook_path(scheme)
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = build_optimization_results_workbook(payload)
-    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    try:
-        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
-    finally:
-        workbook.close()
-    replace_result_workbook_with_retry(tmp_path, result_path)
+    save_result_workbook(build_optimization_results_workbook(payload, include_curves=False), result_path, "结果文件")
+    save_result_workbook(build_result_curves_workbook(payload), result_curves_workbook_path(result_path), "曲线结果文件")
     return result_path
 
 
@@ -1350,13 +1345,8 @@ def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict])
     if result_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
         raise ValueError("默认结果文件不允许修改")
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = build_optimization_results_workbook(payload)
-    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    try:
-        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
-    finally:
-        workbook.close()
-    replace_result_workbook_with_retry(tmp_path, result_path)
+    save_result_workbook(build_optimization_results_workbook(payload, include_curves=False), result_path, "结果文件")
+    save_result_workbook(build_result_curves_workbook(payload), result_curves_workbook_path(result_path), "曲线结果文件")
     return result_path
 
 
@@ -1371,13 +1361,28 @@ def replace_result_workbook_with_retry(source: Path, target: Path, attempts: int
     file_cache.invalidate_path(target)
 
 
-def build_optimization_results_workbook(payload: dict) -> Workbook:
+def save_result_workbook(workbook: Workbook, result_path: Path, label: str) -> None:
+    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+    try:
+        file_ops.save_workbook_with_retry(workbook, tmp_path, label)
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, result_path)
+
+
+def result_curves_workbook_path(result_path: Path) -> Path:
+    stem = result_path.stem
+    if stem.endswith("_results"):
+        stem = stem[: -len("_results")]
+    return result_path.with_name(f"{stem}_curves.xlsx")
+
+
+def build_optimization_results_workbook(payload: dict, include_curves: bool = False) -> Workbook:
     workbook = Workbook()
     workbook.remove(workbook.active)
     results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
     logs = payload.get("logs") if isinstance(payload.get("logs"), list) else []
-    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
 
     append_rows_sheet(
         workbook,
@@ -1401,13 +1406,27 @@ def build_optimization_results_workbook(payload: dict) -> Workbook:
     for table in results.get("overview_tables", []):
         append_rows_sheet(workbook, str(table.get("title", "结果表")), table.get("rows", []))
     append_rows_sheet(workbook, "供能分析", results.get("green_table", []))
-    append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
-    append_rows_sheet(workbook, "供能月曲线", curves.get("green_monthly", []))
     append_rows_sheet(workbook, "安全评估", results.get("safety_table", []))
-    append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
-    append_dispatch_rows_sheet(workbook, curves.get("green_hourly", []))
+    if include_curves:
+        append_result_curve_sheets(workbook, payload)
     append_rows_sheet(workbook, "运行日志", logs, ["time", "level", "message"], {"time": "时间", "level": "级别", "message": "消息"})
     return workbook
+
+
+def build_result_curves_workbook(payload: dict) -> Workbook:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    append_result_curve_sheets(workbook, payload)
+    return workbook
+
+
+def append_result_curve_sheets(workbook: Workbook, payload: dict) -> None:
+    results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
+    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
+    append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
+    append_rows_sheet(workbook, "供能月曲线", curves.get("green_monthly", []))
+    append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
+    append_dispatch_rows_sheet(workbook, curves.get("green_hourly", []))
 
 
 def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) -> None:
@@ -1868,10 +1887,13 @@ def build_comparison_curve_payload(items: list[dict], curve_group: str, curve_na
 
 
 def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> dict:
+    if include_hourly_curves:
+        ensure_split_result_workbook(path)
+    curve_signature = result_curve_file_signature(path)
     return COMPARISON_WORKBOOK_CACHE.get(
         path,
         lambda resolved: read_comparison_workbook_uncached(resolved, include_hourly_curves=include_hourly_curves),
-        variant=("comparison", bool(include_hourly_curves)),
+        variant=("comparison", bool(include_hourly_curves), curve_signature),
     )
 
 
@@ -1881,12 +1903,7 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
     except RESULT_WORKBOOK_READ_ERRORS as exc:
         raise ValueError(f"结果文件无法读取: {path.name}") from exc
     try:
-        curve_groups = {}
-        for key, config in COMPARISON_CURVE_GROUPS.items():
-            if key == "hourly" and not include_hourly_curves:
-                curve_groups[key] = read_curve_sheet_headers(workbook, config["sheet"])
-            else:
-                curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
+        curve_groups = read_comparison_curve_groups(path, fallback_workbook=workbook, include_hourly_curves=include_hourly_curves)
         return {
             "capacity": read_named_sheet_rows(workbook, "规划结果"),
             "energy": read_named_sheet_rows(workbook, "供能分析"),
@@ -1900,11 +1917,13 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
 
 
 def read_comparison_curve_group(path: Path, curve_group: str, curve_names: list[str]) -> dict[str, list[dict]]:
+    ensure_split_result_workbook(path)
     selected_names = tuple(name for name in curve_names if name)
+    curve_signature = result_curve_file_signature(path)
     return COMPARISON_CURVE_SLICE_CACHE.get(
         path,
         lambda resolved: read_comparison_curve_group_uncached(resolved, curve_group, selected_names),
-        variant=("comparison_curve_slice", curve_group, selected_names),
+        variant=("comparison_curve_slice", curve_group, selected_names, curve_signature),
     )
 
 
@@ -1912,14 +1931,82 @@ def read_comparison_curve_group_uncached(path: Path, curve_group: str, curve_nam
     config = COMPARISON_CURVE_GROUPS.get(curve_group)
     if not config:
         raise ValueError("曲线类型不合法")
+    source_path = result_curves_workbook_path(path) if result_curves_workbook_path(path).exists() else path
     try:
-        workbook = load_workbook(path, read_only=True, data_only=True)
+        workbook = load_workbook(source_path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
-        raise ValueError(f"结果文件无法读取: {path.name}") from exc
+        raise ValueError(f"曲线结果文件无法读取: {source_path.name}") from exc
     try:
         return read_curve_sheet(workbook, config["sheet"], config["limit"], selected_names=set(curve_names))
     finally:
         workbook.close()
+
+
+def result_curve_file_signature(path: Path):
+    curve_path = result_curves_workbook_path(path)
+    if not curve_path.exists():
+        return None
+    try:
+        return file_cache.file_signature(curve_path)
+    except OSError:
+        return None
+
+
+def ensure_split_result_workbook(path: Path) -> None:
+    curve_path = result_curves_workbook_path(path)
+    if curve_path.exists() or not path.exists():
+        return
+    curve_sheet_names = ["供能日曲线", "供能月曲线", "安全日曲线", "调度结果"]
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return
+    try:
+        if not any(sheet_name in workbook.sheetnames for sheet_name in curve_sheet_names):
+            return
+        curve_payload = {"results": {"curves": read_result_curves_from_workbook(workbook, include_hourly_curves=True)}}
+    finally:
+        workbook.close()
+    save_result_workbook(build_result_curves_workbook(curve_payload), curve_path, "曲线结果文件")
+    try:
+        workbook = load_workbook(path)
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        for sheet_name in curve_sheet_names:
+            if sheet_name in workbook.sheetnames:
+                workbook.remove(workbook[sheet_name])
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, path)
+
+
+def read_comparison_curve_groups(path: Path, fallback_workbook=None, include_hourly_curves: bool = True) -> dict:
+    curve_path = result_curves_workbook_path(path)
+    if curve_path.exists():
+        try:
+            curve_workbook = load_workbook(curve_path, read_only=True, data_only=True)
+        except RESULT_WORKBOOK_READ_ERRORS as exc:
+            raise ValueError(f"曲线结果文件无法读取: {curve_path.name}") from exc
+        try:
+            return read_comparison_curve_groups_from_workbook(curve_workbook, include_hourly_curves=include_hourly_curves)
+        finally:
+            curve_workbook.close()
+    if fallback_workbook is not None:
+        return read_comparison_curve_groups_from_workbook(fallback_workbook, include_hourly_curves=include_hourly_curves)
+    return empty_comparison_curve_groups()
+
+
+def read_comparison_curve_groups_from_workbook(workbook, include_hourly_curves: bool = True) -> dict:
+    curve_groups = {}
+    for key, config in COMPARISON_CURVE_GROUPS.items():
+        if key == "hourly" and not include_hourly_curves:
+            curve_groups[key] = read_curve_sheet_headers(workbook, config["sheet"])
+        else:
+            curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
+    return curve_groups
 
 
 def read_result_workbook_display_payload_for_response(path: Path, include_hourly_curves: bool = True) -> dict | None:
@@ -1932,10 +2019,13 @@ def read_result_workbook_display_payload_for_response(path: Path, include_hourly
 
 
 def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool = True) -> dict:
+    if include_hourly_curves:
+        ensure_split_result_workbook(path)
+    curve_signature = result_curve_file_signature(path)
     return RESULT_DISPLAY_PAYLOAD_CACHE.get(
         path,
         lambda resolved: read_result_workbook_display_payload_uncached(resolved, include_hourly_curves=include_hourly_curves),
-        variant=("display", bool(include_hourly_curves)),
+        variant=("display", bool(include_hourly_curves), curve_signature),
     )
 
 
@@ -1949,14 +2039,7 @@ def read_result_workbook_display_payload_uncached(path: Path, include_hourly_cur
         for row in planning_rows:
             normalize_planning_result_total_capacity(row)
         annual_rows = read_named_sheet_rows(workbook, "规划年指标")
-        green_daily = read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365)
-        green_monthly = read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12)
-        green_hourly = (
-            read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
-            if include_hourly_curves
-            else []
-        )
-        safety_daily = read_workbook_rows_with_field_map(workbook, "安全日曲线", limit=365)
+        curve_rows = read_result_curve_workbook_payload(path, fallback_workbook=workbook, include_hourly_curves=include_hourly_curves)
         return {
             "metrics": read_result_workbook_metrics(workbook),
             "results": {
@@ -1970,16 +2053,40 @@ def read_result_workbook_display_payload_uncached(path: Path, include_hourly_cur
                 "green_table": read_named_sheet_rows(workbook, "供能分析"),
                 "safety": [],
                 "safety_table": read_named_sheet_rows(workbook, "安全评估"),
-                "curves": {
-                    "green_daily": green_daily,
-                    "green_monthly": green_monthly,
-                    "green_hourly": green_hourly,
-                    "safety_daily": safety_daily,
-                },
+                "curves": curve_rows,
             },
         }
     finally:
         workbook.close()
+
+
+def read_result_curve_workbook_payload(path: Path, fallback_workbook=None, include_hourly_curves: bool = True) -> dict:
+    curve_path = result_curves_workbook_path(path)
+    if curve_path.exists():
+        try:
+            curve_workbook = load_workbook(curve_path, read_only=True, data_only=True)
+        except RESULT_WORKBOOK_READ_ERRORS as exc:
+            raise ValueError(f"曲线结果文件无法读取: {curve_path.name}") from exc
+        try:
+            return read_result_curves_from_workbook(curve_workbook, include_hourly_curves=include_hourly_curves)
+        finally:
+            curve_workbook.close()
+    if fallback_workbook is not None:
+        return read_result_curves_from_workbook(fallback_workbook, include_hourly_curves=include_hourly_curves)
+    return {"green_daily": [], "green_monthly": [], "green_hourly": [], "safety_daily": []}
+
+
+def read_result_curves_from_workbook(workbook, include_hourly_curves: bool = True) -> dict:
+    return {
+        "green_daily": read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365),
+        "green_monthly": read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12),
+        "green_hourly": (
+            read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
+            if include_hourly_curves
+            else []
+        ),
+        "safety_daily": read_workbook_rows_with_field_map(workbook, "安全日曲线", limit=365),
+    }
 
 
 def read_result_workbook_metrics(workbook) -> list[dict]:
@@ -2391,6 +2498,9 @@ def handle_evaluation_results_api_path(
                 raise ValueError("默认结果文件不允许删除")
             if result_path.exists():
                 file_ops.delete_file_with_retry(result_path, "结果文件")
+            curve_path = result_curves_workbook_path(result_path)
+            if curve_path.exists():
+                file_ops.delete_file_with_retry(curve_path, "曲线结果文件")
             selected = selected_evaluation_result_filename(scheme)
             return _json_response(
                 {
@@ -3261,10 +3371,13 @@ def emit_frequency_log(log_callback, level: str, message: str) -> None:
 
 
 def read_frequency_dispatch_rows(path: Path) -> list[dict]:
+    ensure_split_result_workbook(path)
+    dispatch_path = result_curves_workbook_path(path)
+    source_path = dispatch_path if dispatch_path.exists() else path
     try:
-        workbook = load_workbook(path, read_only=True, data_only=True)
+        workbook = load_workbook(source_path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
-        raise ValueError(f"结果文件无法读取: {path.name}") from exc
+        raise ValueError(f"结果文件无法读取: {source_path.name}") from exc
     try:
         rows = read_workbook_rows_with_field_map(workbook, "调度结果", limit=TIME_SERIES_IMPORT_ROW_COUNT)
     finally:
@@ -6132,8 +6245,11 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                 return _json_response(PLANNING_STORE.read_scheme(name))
             if method == "PUT":
                 payload = _read_json_body(body)
+                includes_time_series = "time_series" in payload
                 PLANNING_STORE.write_scheme(name, payload)
-                return _json_response(PLANNING_STORE.read_scheme(name))
+                if includes_time_series:
+                    return _json_response(PLANNING_STORE.read_scheme(name))
+                return _json_response(PLANNING_STORE.read_scheme_overview(name))
             if method == "DELETE":
                 return _json_response(PLANNING_STORE.delete_scheme(name))
     except WeatherHistoryError as exc:
