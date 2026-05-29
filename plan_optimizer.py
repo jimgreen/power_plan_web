@@ -464,8 +464,6 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         1.0,
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
     )
-    diesel_minimum_on_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_on_hours"), 4)))))
-    diesel_minimum_off_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_off_hours"), 4)))))
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
     load_disturbance_enabled = truthy_flag(planning_parameters.get("load_disturbance_enabled"), False)
     renewable_disturbance_enabled = truthy_flag(planning_parameters.get("renewable_disturbance_enabled"), False)
@@ -527,8 +525,6 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "preferred_solver": preferred_solver,
         "initial_storage_soc_ratio": initial_storage_soc_ratio,
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
-        "diesel_minimum_on_hours": diesel_minimum_on_hours,
-        "diesel_minimum_off_hours": diesel_minimum_off_hours,
         "storage_charge_efficiency": storage_charge_efficiency,
         "storage_discharge_efficiency": storage_discharge_efficiency,
         "storage_self_discharge_rate": storage_self_discharge_rate,
@@ -614,18 +610,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 device["quantity_upper"],
                 integer=True,
                 cost=DIESEL_ON_COUNT_PENALTY,
-            )
-            builder.add_var(
-                ("diesel_startup_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
-            )
-            builder.add_var(
-                ("diesel_shutdown_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
             )
         for device in grid_storage_pcs_devices:
             builder.add_var(("grid_storage_on_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
@@ -881,17 +865,11 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             self_discharge_rate_per_hour=hydrogen_self_discharge_per_hour,
         )
 
-    if model["diesel_minimum_on_hours"] > 0 or model["diesel_minimum_off_hours"] > 0:
-        for device in diesel_devices:
-            dispatch_milp.add_minimum_commitment_duration_constraints(
-                builder,
-                on_indices=[var(("diesel_on_count", hour, device["index"])) for hour in range(n)],
-                quantity_index=var(("qty", device["key"], device["index"])),
-                startup_indices=[var(("diesel_startup_count", hour, device["index"])) for hour in range(n)],
-                shutdown_indices=[var(("diesel_shutdown_count", hour, device["index"])) for hour in range(n)],
-                minimum_on_hours=model["diesel_minimum_on_hours"],
-                minimum_off_hours=model["diesel_minimum_off_hours"],
-            )
+    for device in diesel_devices:
+        dispatch_milp.add_daily_constant_count_constraints(
+            builder,
+            on_indices=[var(("diesel_on_count", hour, device["index"])) for hour in range(n)],
+        )
 
     for day_end_hour in range(23, n, 24):
         storage_energy_terms = qty_terms(storage_battery_devices)

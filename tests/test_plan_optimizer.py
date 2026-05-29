@@ -469,8 +469,6 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(objective_cost(("diesel_power", 0, 0)), 0.001)
         self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
         self.assertEqual(objective_cost(("diesel_on_count", 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
-        self.assertEqual(objective_cost(("diesel_startup_count", 0, 0)), 0.0)
-        self.assertEqual(objective_cost(("diesel_shutdown_count", 0, 0)), 0.0)
         self.assertEqual(objective_cost(("electrolyzer_on_count", 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
         for key in (
             ("wind_curtailed", 0),
@@ -483,15 +481,11 @@ class PlanOptimizerTest(unittest.TestCase):
         ):
             self.assertEqual(objective_cost(key), 0.0)
         self.assertIn(("diesel_on_count", 0, 0), variables)
-        self.assertIn(("diesel_startup_count", 0, 0), variables)
-        self.assertIn(("diesel_shutdown_count", 0, 0), variables)
         self.assertIn(("electrolyzer_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_up_available_count", 0, 0), variables)
         self.assertIn(("grid_storage_down_available_count", 0, 0), variables)
         self.assertEqual(captured["integrality"][variables[("diesel_on_count", 0, 0)]], 1)
-        self.assertEqual(captured["integrality"][variables[("diesel_startup_count", 0, 0)]], 1)
-        self.assertEqual(captured["integrality"][variables[("diesel_shutdown_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("electrolyzer_on_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("grid_storage_on_count", 0, 0)]], 1)
         for unit in range(2):
@@ -531,6 +525,8 @@ class PlanOptimizerTest(unittest.TestCase):
         variables = model["variables"]
         forbidden_unit_variables = {
             "diesel_on_unit",
+            "diesel_startup_count",
+            "diesel_shutdown_count",
             "electrolyzer_on_unit",
             "grid_storage_on",
             "grid_storage_up_available",
@@ -547,8 +543,6 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertFalse(any(key[0] in forbidden_unit_variables for key in variables))
         for key in (
             ("diesel_on_count", 0, 0),
-            ("diesel_startup_count", 0, 0),
-            ("diesel_shutdown_count", 0, 0),
             ("electrolyzer_on_count", 0, 0),
             ("grid_storage_on_count", 0, 0),
             ("grid_storage_up_available_count", 0, 0),
@@ -568,6 +562,38 @@ class PlanOptimizerTest(unittest.TestCase):
             ("storage_discharge", 0),
         ):
             self.assertEqual(captured["integrality"][variables[key]], 0)
+
+    def test_planning_model_keeps_diesel_on_count_constant_within_each_day(self):
+        payload = self._payload()
+        payload["diesel_generators"][0].update(
+            {"capacity": 10, "power_upper": 10, "power_lower": 2, "quantity_lower": 0, "quantity_upper": 2}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:25])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower.copy()
+            captured["constraint_upper"] = constraint_upper.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        index_to_key = {index: key for key, index in variables.items()}
+        equality_rows = []
+        matrix = captured["constraints"]
+        for row_index in range(matrix.shape[0]):
+            if abs(captured["constraint_lower"][row_index]) > 1e-9 or abs(captured["constraint_upper"][row_index]) > 1e-9:
+                continue
+            row = matrix.getrow(row_index)
+            terms = {index_to_key[int(column)]: float(value) for column, value in zip(row.indices, row.data)}
+            equality_rows.append(terms)
+
+        self.assertIn({("diesel_on_count", 1, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
+        self.assertIn({("diesel_on_count", 23, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
+        self.assertNotIn({("diesel_on_count", 24, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
 
     def test_planning_optimization_applies_storage_and_hydrogen_self_discharge(self):
         payload = self._payload()

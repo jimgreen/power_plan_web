@@ -338,56 +338,22 @@ def add_unit_commitment_constraints(
     )
 
 
-def add_minimum_commitment_duration_constraints(
+def add_daily_constant_count_constraints(
     builder: MilpModelBuilder,
     *,
     on_indices: list[int],
-    quantity_index: int,
-    startup_indices: list[int],
-    shutdown_indices: list[int],
-    minimum_on_hours: int,
-    minimum_off_hours: int,
+    hours_per_day: int = 24,
 ) -> None:
-    """Constrain aggregate unit-count startup/shutdown durations.
+    """Keep an aggregate online unit count unchanged within each day."""
 
-    The model tracks online diesel units as an integer count instead of
-    single-unit binaries.  A positive increase in the count creates the same
-    number of startup units, and a positive decrease creates shutdown units.
-    The duration constraints then require enough online/offline unit-hours in
-    the following window for each startup/shutdown count.
-    """
-
-    n = len(on_indices)
-    if not (n == len(startup_indices) == len(shutdown_indices)):
-        raise ValueError("minimum commitment duration indices must have the same length")
-    min_on = int(max(0, minimum_on_hours))
-    min_off = int(max(0, minimum_off_hours))
-    for hour, on_index in enumerate(on_indices):
-        startup_index = startup_indices[hour]
-        shutdown_index = shutdown_indices[hour]
-        previous_on_index = on_indices[hour - 1] if hour > 0 else None
-        startup_terms = {startup_index: 1.0, on_index: -1.0}
-        shutdown_terms = {shutdown_index: 1.0, on_index: 1.0}
-        if previous_on_index is not None:
-            startup_terms[previous_on_index] = 1.0
-            shutdown_terms[previous_on_index] = -1.0
-        builder.add_constraint(startup_terms, 0.0, np.inf)
-        builder.add_constraint(shutdown_terms, 0.0, np.inf)
-
-        if min_on > 0:
-            window = on_indices[hour : min(n, hour + min_on)]
-            builder.add_constraint(
-                {**{index: 1.0 for index in window}, startup_index: -float(min_on)},
-                0.0,
-                np.inf,
-            )
-        if min_off > 0:
-            window = on_indices[hour : min(n, hour + min_off)]
-            builder.add_constraint(
-                {**{index: -1.0 for index in window}, quantity_index: float(len(window)), shutdown_index: -float(min_off)},
-                0.0,
-                np.inf,
-            )
+    safe_hours_per_day = max(1, int(hours_per_day))
+    for day_start in range(0, len(on_indices), safe_hours_per_day):
+        day_indices = on_indices[day_start : day_start + safe_hours_per_day]
+        if len(day_indices) <= 1:
+            continue
+        reference_index = day_indices[0]
+        for on_index in day_indices[1:]:
+            builder.add_constraint({on_index: 1.0, reference_index: -1.0}, 0.0, 0.0)
 
 
 def add_storage_constraints(
