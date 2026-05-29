@@ -820,12 +820,6 @@ class PowerPlanServerTest(unittest.TestCase):
             payload["wind_turbines"][0]["quantity_upper"] = 0
             payload["photovoltaics"][0]["quantity_upper"] = 0
             payload["time_series"][0]["load"] = 100
-            status, data = write_and_start(payload)
-            self.assertEqual(status, 400)
-            self.assertIn("第1小时", data["message"])
-            self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
-
-            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
             payload["diesel_generators"][0]["power_upper"] = 100
             payload["hydrogen_tanks"][0].update({"quantity_lower": 1, "quantity_upper": 1, "self_discharge_rate": 0.001})
             payload["hydrogen_electrolyzers"][0]["quantity_upper"] = 0
@@ -863,7 +857,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("def validate_evaluation_fast_feasibility", precheck_source)
         self.assertIn("启动前快速可行性预检查", docs)
         self.assertIn("年度风光最大可发电量不足", docs)
-        self.assertIn("单小时最大供电功率不足", docs)
+        self.assertNotIn("单小时最大供电功率不足", docs)
+        self.assertNotIn("风机最大可发功率 + 光伏最大可发功率 + 柴发最大可发功率 < 负荷功率", docs)
         self.assertIn("储氢自损耗无法补偿", docs)
         self.assertIn("电储自损耗无法补偿", docs)
 
@@ -2055,46 +2050,6 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("风机和光伏最大可发电量", data["message"])
             self.assertIn("低于绿色电量占比要求", data["message"])
 
-            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
-            payload["diesel_generators"][0]["power_upper"] = 20
-            payload["time_series"][0]["load"] = 100
-            server.PLANNING_STORE.write_scheme("方案A", payload)
-            write_result(
-                "supply_shortage_results.xlsx",
-                [
-                    ["柴发", "柴发1", 1, 100, 100, "kW"],
-                    ["风机", "风机1", 0, 100, 0, "kW"],
-                    ["光伏", "光伏1", 0, 100, 0, "kW"],
-                ],
-            )
-            status, data = start_result("supply_shortage_results.xlsx")
-            self.assertEqual(status, 400)
-            self.assertIn("第1小时", data["message"])
-            self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
-            status, headers, body = server.handle_api_path(
-                "/api/evaluation/status?scheme=方案A&filename=supply_shortage_results.xlsx&light=1"
-            )
-            failed_task = json.loads(body.decode("utf-8"))
-            self.assertEqual(status, 200)
-            self.assertEqual(failed_task["status"], "失败")
-            self.assertEqual(failed_task["task_status"], "计算失败")
-            self.assertIn("第1小时", failed_task["logs"][-1]["message"])
-
-            status, data = queue_result("supply_shortage_results.xlsx")
-            self.assertEqual(status, 200)
-            self.assertEqual(data["task"]["status"], "排队中")
-            self.assertTrue(server.TASK_SCHEDULER.is_queued("evaluation", "方案A", "supply_shortage_results.xlsx"))
-            scheduled_tasks = server.build_task_list()
-            self.assertEqual(status, 200)
-            supply_task = next(
-                item
-                for item in scheduled_tasks
-                if item["task_type_key"] == "evaluation" and item["result"] == "supply_shortage_results.xlsx"
-            )
-            self.assertEqual(supply_task["status"], "计算失败")
-            self.assertFalse(supply_task["queued"])
-            self.assertIn("第1小时", supply_task["latest_log"])
-
             write_result(
                 "battery_no_pcs_results.xlsx",
                 [
@@ -2113,6 +2068,20 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("储能电池", data["message"])
             self.assertIn("储能PCS", data["message"])
             self.assertIn("自损耗无法补偿", data["message"])
+
+            status, data = queue_result("battery_no_pcs_results.xlsx")
+            self.assertEqual(status, 200)
+            self.assertEqual(data["task"]["status"], "排队中")
+            self.assertTrue(server.TASK_SCHEDULER.is_queued("evaluation", "方案A", "battery_no_pcs_results.xlsx"))
+            scheduled_tasks = server.build_task_list()
+            battery_task = next(
+                item
+                for item in scheduled_tasks
+                if item["task_type_key"] == "evaluation" and item["result"] == "battery_no_pcs_results.xlsx"
+            )
+            self.assertEqual(battery_task["status"], "计算失败")
+            self.assertFalse(battery_task["queued"])
+            self.assertIn("自损耗无法补偿", battery_task["latest_log"])
         finally:
             for runtime in server.EVALUATION_RUNTIME.runtimes().values():
                 if runtime.status == "运行中":
