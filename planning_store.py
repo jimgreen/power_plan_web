@@ -292,8 +292,8 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
 # device family.
 DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "diesel_price": 0,
-    "diesel_minimum_on_hours": 4,
-    "diesel_minimum_off_hours": 4,
+    "diesel_minimum_on_hours": 12,
+    "diesel_minimum_off_hours": 12,
     "green_power_ratio_lower": 0,
     "optimization_time_limit_minutes": 60,
     "preferred_solver": "auto",

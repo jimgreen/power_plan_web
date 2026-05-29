@@ -98,8 +98,8 @@ const weatherPreviewSeries = timeSeriesImportSeries.filter(([key]) => key !== "l
 
 const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
-  ["diesel_minimum_on_hours", "柴发开机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 4 }],
-  ["diesel_minimum_off_hours", "柴发关机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 4 }],
+  ["diesel_minimum_on_hours", "柴发开机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 12 }],
+  ["diesel_minimum_off_hours", "柴发关机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 12 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 120, integer: true, positive: true, defaultValue: 60 }],
   ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "MOSEK"], ["scipy", "SciPy HiGHS"]] }],
