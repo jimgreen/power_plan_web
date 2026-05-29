@@ -381,18 +381,24 @@ button:disabled {
 }
 
 .evaluation-result-action-buttons {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .evaluation-result-action-buttons button {
-  min-width: 0;
-  padding: 10px 8px;
+  flex: 1 0 50px;
+  min-width: 50px;
+  padding: 10px 4px;
   border-radius: 12px;
   background: #edf4f2;
   color: #24413d;
+  font-size: 13px;
   font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
   transition: background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
 

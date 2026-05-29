@@ -2470,6 +2470,49 @@ def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
     return result_path
 
 
+def rename_evaluation_result_workbook(scheme: str, filename: str, target_name: str) -> Path:
+    source_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
+    if source_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+        raise ValueError("默认结果文件不允许重命名")
+    if not source_path.exists():
+        raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
+    ensure_split_result_workbook(source_path)
+    source_error = result_workbook_error_message(source_path)
+    if source_error:
+        raise ValueError(f"重命名失败，当前结果文件无法读取: {source_path.name}")
+
+    target_filename = evaluation_result_filename_from_name(target_name)
+    target_path = evaluation_result_path(scheme, target_filename)
+    if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+        raise ValueError("默认结果文件不允许作为重命名目标")
+    if target_path == source_path:
+        return source_path
+
+    source_curve_path = result_curves_workbook_path(source_path)
+    target_curve_path = result_curves_workbook_path(target_path)
+    if target_path.exists():
+        raise FileExistsError(f"重命名失败，结果文件已存在: {target_path.name}")
+    if target_curve_path.exists():
+        raise FileExistsError(f"重命名失败，曲线结果文件已存在: {target_curve_path.name}")
+
+    file_ops.retry_file_operation(
+        lambda: source_path.rename(target_path),
+        f"结果文件被占用，无法重命名：{source_path.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
+    )
+    file_cache.invalidate_path(source_path)
+    file_cache.invalidate_path(target_path)
+    file_cache.invalidate_path(source_path.parent)
+    if source_curve_path.exists():
+        file_ops.retry_file_operation(
+            lambda: source_curve_path.rename(target_curve_path),
+            f"曲线结果文件被占用，无法重命名：{source_curve_path.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
+        )
+        file_cache.invalidate_path(source_curve_path)
+        file_cache.invalidate_path(target_curve_path)
+    file_cache.invalidate_path(target_path.parent)
+    return target_path
+
+
 def handle_evaluation_results_api_path(
     path: str,
     method: str = "GET",
@@ -2544,6 +2587,16 @@ def handle_evaluation_results_api_path(
                 }
             )
 
+        if action == "rename":
+            target_path = rename_evaluation_result_workbook(scheme, filename, str(payload.get("target_name", "")))
+            return _json_response(
+                {
+                    "selected": target_path.name,
+                    "results": list_evaluation_result_files(scheme),
+                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, target_path.name),
+                }
+            )
+
         if action == "save":
             if (filename or OPTIMIZATION_RESULT_WORKBOOK_NAME) == OPTIMIZATION_RESULT_WORKBOOK_NAME:
                 raise ValueError("默认结果文件不允许修改")
@@ -2570,6 +2623,8 @@ def handle_evaluation_results_api_path(
         raise ValueError("未知结果文件操作")
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except FileExistsError as exc:
+        return _json_response({"error": "exists", "message": str(exc)}, HTTPStatus.CONFLICT)
     except PermissionError as exc:
         return _json_response({"error": "file_locked", "message": str(exc)}, HTTPStatus.CONFLICT)
     except ValueError as exc:

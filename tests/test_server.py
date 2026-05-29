@@ -3265,6 +3265,52 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(retried_copy["selected"], "copyretry_results.xlsx")
             self.assertGreaterEqual(copy_calls["count"], 2)
 
+            copyretry_curve_path = planning_root / "方案A" / "copyretry_curves.xlsx"
+            curve_workbook = Workbook()
+            curve_workbook.active.title = "调度结果"
+            curve_workbook.save(copyretry_curve_path)
+            curve_workbook.close()
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "rename",
+                        "filename": "copyretry_results.xlsx",
+                        "target_name": "renamed",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            renamed = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(renamed["selected"], "renamed_results.xlsx")
+            self.assertFalse((planning_root / "方案A" / "copyretry_results.xlsx").exists())
+            self.assertFalse((planning_root / "方案A" / "copyretry_curves.xlsx").exists())
+            self.assertTrue((planning_root / "方案A" / "renamed_results.xlsx").exists())
+            self.assertTrue((planning_root / "方案A" / "renamed_curves.xlsx").exists())
+            self.assertIn("renamed_results.xlsx", [item["name"] for item in renamed["results"]])
+            self.assertNotIn("copyretry_results.xlsx", [item["name"] for item in renamed["results"]])
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "rename",
+                        "filename": "opt_results.xlsx",
+                        "target_name": "opt2",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            protected_rename = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 400)
+            self.assertEqual(protected_rename["error"], "bad_request")
+            self.assertIn("默认结果文件不允许重命名", protected_rename["message"])
+
             def always_locked_copy2(source, target):
                 if Path(target).name == "copylocked_results.xlsx":
                     raise PermissionError("copy target locked")
@@ -3294,7 +3340,7 @@ class PowerPlanServerTest(unittest.TestCase):
             unlink_calls = {"count": 0}
 
             def flaky_unlink(self, *args, **kwargs):
-                if Path(self).name == "copyretry_results.xlsx":
+                if Path(self).name == "renamed_results.xlsx":
                     unlink_calls["count"] += 1
                     if unlink_calls["count"] == 1:
                         raise PermissionError("simulated delete lock")
@@ -3305,14 +3351,15 @@ class PowerPlanServerTest(unittest.TestCase):
                     "/api/evaluation/results",
                     "POST",
                     json.dumps(
-                        {"scheme": "方案A", "action": "delete", "filename": "copyretry_results.xlsx"},
+                        {"scheme": "方案A", "action": "delete", "filename": "renamed_results.xlsx"},
                         ensure_ascii=False,
                     ).encode("utf-8"),
                 )
             retried_delete = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertGreaterEqual(unlink_calls["count"], 2)
-            self.assertNotIn("copyretry_results.xlsx", [item["name"] for item in retried_delete["results"]])
+            self.assertNotIn("renamed_results.xlsx", [item["name"] for item in retried_delete["results"]])
+            self.assertFalse((planning_root / "方案A" / "renamed_curves.xlsx").exists())
 
             for invalid_count in (-1, 1.5, "2.2"):
                 status, headers, body = server.handle_evaluation_results_api_path(
@@ -4873,10 +4920,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("当前规划结果", html)
         self.assertNotIn(">结果文件<", html)
         self.assertNotIn('id="addEvaluationResult"', html)
-        for control in ("deleteEvaluationResult", "copyEvaluationResult", "saveEvaluationResult"):
+        for control in ("deleteEvaluationResult", "copyEvaluationResult", "saveEvaluationResult", "renameEvaluationResult"):
             self.assertIn(f'id="{control}"', html)
         self.assertNotIn("增加结果", html)
-        for label in ("删除结果", "复制结果", "保存结果"):
+        self.assertNotIn("删除结果", html)
+        self.assertNotIn("复制结果", html)
+        self.assertNotIn("保存结果", html)
+        for label in ("删除", "复制", "保存", "重命名"):
             self.assertIn(label, html)
         for label in ("状态", "开始", "完成", "度电成本", "绿电占比"):
             self.assertIn(label, html)
@@ -5020,6 +5070,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("prompt(", script)
         self.assertIn('`${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`', script)
         self.assertIn("复制失败", script)
+        self.assertIn("renameEvaluationResult", script)
+        self.assertIn('manageEvaluationResult("rename"', script)
+        self.assertIn("默认结果文件不允许重命名", script)
+        self.assertIn("重命名失败", script)
+        self.assertIn("结果文件已重命名", script)
         self.assertIn("const message = messages[action]", script)
         self.assertIn("alert(message)", script)
         self.assertIn("EVALUATION_SELECTION_STORAGE_KEY", script)
@@ -5030,6 +5085,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
         self.assertIn("saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
         self.assertIn("copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection", script)
+        self.assertIn("renameButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
         self.assertIn(">启动</button>", html)
         self.assertIn(">排队</button>", html)
         self.assertIn(">停止</button>", html)
@@ -5044,6 +5100,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("text-align: left", optimization_current_scheme_css)
         self.assertNotIn("margin-left: auto", optimization_current_scheme_css)
         self.assertIn("grid-template-columns: minmax(0, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr)", css)
+        action_buttons_css = css.split(".evaluation-result-action-buttons {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: flex", action_buttons_css)
+        self.assertIn("flex-wrap: nowrap", action_buttons_css)
+        self.assertIn("overflow-x: auto", action_buttons_css)
+        action_button_css = css.split(".evaluation-result-action-buttons button {", 1)[1].split("}", 1)[0]
+        self.assertIn("flex: 1 0 50px", action_button_css)
+        self.assertIn("white-space: nowrap", action_button_css)
         self.assertIn("grid-template-rows: minmax(150px, 30vh) minmax(260px, 1fr)", css)
         self.assertIn(".evaluation-result-rail {\n  grid-column: 1;\n  grid-row: 2;", css)
         self.assertIn(".evaluation-workspace > .scheme-rail {\n  grid-column: 1;\n  grid-row: 1;", css)

@@ -283,6 +283,7 @@ function bindEvaluationResultActions() {
   document.getElementById("deleteEvaluationResult").addEventListener("click", () => manageEvaluationResult("delete"));
   document.getElementById("copyEvaluationResult").addEventListener("click", copyEvaluationResult);
   document.getElementById("saveEvaluationResult").addEventListener("click", saveEvaluationResult);
+  document.getElementById("renameEvaluationResult").addEventListener("click", renameEvaluationResult);
 }
 
 function clearEvaluationDisplayForSchemeSwitch(scheme = state.currentScheme) {
@@ -526,10 +527,12 @@ function updateEvaluationResultActions() {
   const deleteButton = document.getElementById("deleteEvaluationResult");
   const copyButton = document.getElementById("copyEvaluationResult");
   const saveButton = document.getElementById("saveEvaluationResult");
+  const renameButton = document.getElementById("renameEvaluationResult");
   deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection;
   saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection;
   copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection;
-  [deleteButton, copyButton, saveButton].forEach((button) => {
+  renameButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection;
+  [deleteButton, copyButton, saveButton, renameButton].forEach((button) => {
     button.classList.toggle("is-disabled", button.disabled);
     button.setAttribute("aria-disabled", String(button.disabled));
   });
@@ -546,6 +549,20 @@ async function copyEvaluationResult() {
   const targetName = prompt("请输入新结果名称", `${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`);
   if (targetName === null) return;
   await manageEvaluationResult("copy", { target_name: targetName.trim() });
+}
+
+async function renameEvaluationResult() {
+  if (!state.selectedResultFile) {
+    alert("请先选择结果文件");
+    return;
+  }
+  if (selectedResultIsDefault()) {
+    alert("默认结果文件不允许重命名");
+    return;
+  }
+  const targetName = prompt("请输入新的结果名称", resultDisplayName(state.selectedResultFile) || "");
+  if (targetName === null) return;
+  await manageEvaluationResult("rename", { target_name: targetName.trim() });
 }
 
 async function manageEvaluationResult(action, extra = {}) {
@@ -584,6 +601,7 @@ async function manageEvaluationResult(action, extra = {}) {
     const data = error.payload || {};
     if (data.message) alert(data.message);
     else if (action === "copy") alert("复制失败");
+    else if (action === "rename") alert("重命名失败");
     else showError(error);
     await loadEvaluationResults().catch(showError);
   }
@@ -594,6 +612,7 @@ function renderEvaluationMessage(action, filename) {
     delete: "结果文件已删除",
     copy: `结果文件已复制：${filename || ""}`,
     save: `结果文件已保存：${filename || state.selectedResultFile}`,
+    rename: `结果文件已重命名：${filename || ""}`,
   };
   const message = messages[action];
   if (!message) return;
