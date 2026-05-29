@@ -543,7 +543,7 @@ async function copyEvaluationResult() {
     alert("请先选择结果文件");
     return;
   }
-  const targetName = prompt("请输入新结果名称", "");
+  const targetName = prompt("请输入新结果名称", `${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`);
   if (targetName === null) return;
   await manageEvaluationResult("copy", { target_name: targetName.trim() });
 }

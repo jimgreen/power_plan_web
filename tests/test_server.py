@@ -5018,6 +5018,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("collectPlanningResultRows", script)
         self.assertIn("设计台数", script)
         self.assertIn("prompt(", script)
+        self.assertIn('`${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`', script)
         self.assertIn("复制失败", script)
         self.assertIn("const message = messages[action]", script)
         self.assertIn("alert(message)", script)
