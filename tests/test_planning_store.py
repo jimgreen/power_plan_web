@@ -630,8 +630,6 @@ class PlanningStoreTest(unittest.TestCase):
             "frequency_nadir_evaluation_duration_s": 20.0,
             "nadir_linearization_samples_per_axis": 4,
             "nadir_linearization_interval_ratio": 0.5,
-            "frequency_lower_disturbance_kw": 0.0,
-            "frequency_upper_disturbance_kw": 0.0,
             "network_synchronization_coefficient_base": 1.0,
             "network_synchronization_coefficient_slope": 0.0,
             "network_synchronization_reference_load_kw": 0.0,
@@ -658,8 +656,6 @@ class PlanningStoreTest(unittest.TestCase):
         row["frequency_nadir_evaluation_duration_s"] = 0
         row["nadir_linearization_samples_per_axis"] = 1.5
         row["nadir_linearization_interval_ratio"] = 0.049
-        row["frequency_lower_disturbance_kw"] = -0.1
-        row["frequency_upper_disturbance_kw"] = -0.1
         row["network_synchronization_coefficient_base"] = -100.1
         row["network_synchronization_coefficient_slope"] = "bad"
         row["network_synchronization_reference_load_kw"] = -1
@@ -678,8 +674,6 @@ class PlanningStoreTest(unittest.TestCase):
             "频率Nadir评估时长(s)不能小于1",
             "Nadir线性化每轴采样点数必须为正整数",
             "Nadir线性化区间比例不能小于0.05",
-            "频率下限扰动功率(kW)不能小于0",
-            "频率上限扰动功率(kW)不能小于0",
             "网络同步系数基值不能小于-100",
             "网络同步系数斜率必须为数值",
             "网络同步系数基准负荷(kW)不能小于0",

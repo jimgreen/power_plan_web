@@ -1656,6 +1656,8 @@ class PowerPlanServerTest(unittest.TestCase):
     def test_estimate_dispatch_outputs_requested_8760_curve_columns(self):
         payload = server.planning_store.default_payload("方案A")
         payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
+        payload["planning_parameters"][0]["load_disturbance_enabled"] = 1
+        payload["planning_parameters"][0]["renewable_disturbance_enabled"] = 1
         payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
         payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.2
         payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.3
@@ -3145,6 +3147,10 @@ class PowerPlanServerTest(unittest.TestCase):
             monthly_sheet.append(["month", "load_energy", "renewable_curtailed_rate"])
             monthly_sheet.append([1, 30000, 1.1])
             monthly_sheet.append([2, 28000, 1.4])
+            safety_daily_sheet = workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_max", "frequency_min"])
+            safety_daily_sheet.append([1, 50.1, 49.9])
+            safety_daily_sheet.append([2, 50.2, 49.8])
             dispatch_sheet = workbook.create_sheet("调度结果")
             dispatch_sheet.append(["小时", "时间", "负荷", "风电出力", "光伏出力"])
             for hour in range(1, 8761):
@@ -3169,14 +3175,18 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(payload["series"]["负荷"][0]["label"], "方案A / case")
             self.assertEqual(payload["curve_groups"]["hourly"]["title"], "小时级曲线")
             self.assertEqual(payload["curve_groups"]["daily"]["title"], "日级统计")
+            self.assertEqual(payload["curve_groups"]["safety"]["title"], "安全日曲线")
             self.assertEqual(payload["curve_groups"]["monthly"]["title"], "月度统计")
             self.assertIn("负荷", payload["curve_groups"]["hourly"]["curves"])
             self.assertIn("负荷总电量", payload["curve_groups"]["daily"]["curves"])
             self.assertIn("风机总发电量", payload["curve_groups"]["daily"]["curves"])
+            self.assertIn("最高频率", payload["curve_groups"]["safety"]["curves"])
+            self.assertIn("最低频率", payload["curve_groups"]["safety"]["curves"])
             self.assertIn("新能源弃电率", payload["curve_groups"]["monthly"]["curves"])
             self.assertNotIn("load_energy", payload["curve_groups"]["daily"]["curves"])
             self.assertNotIn("renewable_curtailed_rate", payload["curve_groups"]["monthly"]["curves"])
             self.assertEqual(len(payload["curve_groups"]["daily"]["series"]["负荷总电量"][0]["points"]), 2)
+            self.assertEqual(len(payload["curve_groups"]["safety"]["series"]["最高频率"][0]["points"]), 2)
             self.assertEqual(len(payload["curve_groups"]["monthly"]["series"]["负荷总电量"][0]["points"]), 2)
             self.assertEqual(payload["annual_table"][0]["指标"], "年总成本")
             self.assertEqual(payload["annual_table"][0]["方案A / case"], 123.4)
@@ -3699,6 +3709,57 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertIn("平均值必须介于最小值和最大值之间", json.loads(body.decode("utf-8"))["message"])
+
+    def test_planning_wind_and_solar_curve_generation_matches_requested_statistics(self):
+        cases = [
+            ("wind_speed", 16, 0, 8, "wind_speed_curve"),
+            ("solar_irradiance", 800, 0, 100, "solar_irradiance_curve"),
+        ]
+        for curve, maximum, minimum, average, row_key in cases:
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/time-series-curve/generate",
+                "POST",
+                json.dumps({"curve": curve, "mode": "random", "max": maximum, "min": minimum, "average": average}).encode("utf-8"),
+            )
+
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            values = [row[curve] for row in payload[row_key]]
+            self.assertEqual(payload["curve"], curve)
+            self.assertEqual(payload["curve_count"], 8760)
+            self.assertEqual(len(values), 8760)
+            self.assertAlmostEqual(min(values), minimum, places=3)
+            self.assertAlmostEqual(max(values), maximum, places=3)
+            self.assertAlmostEqual(sum(values) / len(values), average, places=3)
+
+    def test_planning_wind_and_solar_curve_import_can_return_raw_source(self):
+        rows = ["时间,风速(m/s),太阳辐射(W/m^2)", "H0001,1,0", "H0002,2,100", "H0003,3,200"]
+        content = "\n".join(rows).encode("utf-8")
+
+        for curve, row_key, first, last in (
+            ("wind_speed", "wind_speed_curve", 1, 3),
+            ("solar_irradiance", "solar_irradiance_curve", 0, 200),
+        ):
+            status, headers, body = server.handle_planning_api_path(
+                "/api/planning/time-series-curve/import",
+                "POST",
+                json.dumps(
+                    {
+                        "curve": curve,
+                        "filename": "weather.csv",
+                        "content_base64": base64.b64encode(content).decode("ascii"),
+                        "raw": True,
+                    }
+                ).encode("utf-8"),
+            )
+
+            self.assertEqual(status, 200)
+            payload = json.loads(body.decode("utf-8"))
+            values = [row[curve] for row in payload[row_key]]
+            self.assertEqual(payload["curve_count"], 8760)
+            self.assertEqual(values[0], first)
+            self.assertEqual(values[-1], last)
+            self.assertIn("原始", payload["message"])
 
     def test_planning_load_curve_import_scales_and_pads_csv_to_8760(self):
         rows = ["时间,用电功率(kW)", "2024-01-01 00:00,10", "2024-01-01 02:00,30", "2024-01-01 05:00,50"]
@@ -4826,12 +4887,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("comparisonCurveChart", html)
         self.assertIn("小时级曲线", html)
         self.assertIn("日级统计", html)
+        self.assertIn("安全日曲线", html)
         self.assertIn("月度统计", html)
         self.assertIn("年度统计", html)
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
         self.assertIn("assets/comparison.js?v=20260518-hourly-preload", html)
-        self.assertIn("assets/result_curves.js?v=20260518-legend-toggle1", html)
+        self.assertIn("assets/result_curves.js?v=20260525-safety-frequency-group", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
@@ -5747,8 +5809,6 @@ class PowerPlanServerTest(unittest.TestCase):
             "频率Nadir评估时长(s)",
             "Nadir线性化每轴采样点数",
             "Nadir线性化区间比例",
-            "频率下限扰动功率(kW)",
-            "频率上限扰动功率(kW)",
             "网络同步系数基值",
             "网络同步系数斜率",
             "网络同步系数基准负荷(kW)",
@@ -5760,8 +5820,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"nominal_frequency_hz"'))
         self.assertLess(script.index('"nominal_frequency_hz"'), script.index('"frequency_nadir_lower_hz"'))
         self.assertLess(script.index('"frequency_governor_time_constant_s"'), script.index('"frequency_nadir_evaluation_duration_s"'))
-        self.assertLess(script.index('"nadir_linearization_interval_ratio"'), script.index('"frequency_lower_disturbance_kw"'))
+        self.assertLess(script.index('"nadir_linearization_interval_ratio"'), script.index('"network_synchronization_coefficient_base"'))
         self.assertLess(script.index('"network_synchronization_reference_load_kw"'), script.index('"storage_frequency_regulation_enabled"'))
+        self.assertNotIn("频率下限扰动功率(kW)", script)
+        self.assertNotIn("频率上限扰动功率(kW)", script)
+        self.assertNotIn('"frequency_lower_disturbance_kw"', script)
+        self.assertNotIn('"frequency_upper_disturbance_kw"', script)
         self.assertIn("Nadir线性化每轴采样点数必须为正整数", script)
         self.assertIn("频率最低点下限(Hz)不能大于额定频率(Hz)", script)
         self.assertIn("频率最高点上限(Hz)不能小于额定频率(Hz)", script)
@@ -5792,6 +5856,10 @@ class PowerPlanServerTest(unittest.TestCase):
         i18n_script = (WEB_ROOT / "assets" / "i18n.js").read_text(encoding="utf-8")
 
         self.assertIn("collectSaveWarnings", script)
+        self.assertIn("bindPlanningParameterInputs", script)
+        self.assertIn("syncPlanningParameterInputs", script)
+        self.assertIn("syncPlanningParameterInput(input)", script)
+        self.assertIn('document.addEventListener("change", onPlanningParameterInputEvent)', script)
         self.assertIn("参数校验未通过", script)
         self.assertIn("参数保存成功", script)
         self.assertIn("保存参数失败：", script)
@@ -6084,8 +6152,13 @@ class PowerPlanServerTest(unittest.TestCase):
             "timeSeriesImportSummary",
             "confirmTimeSeriesImport",
             "closeTimeSeriesImport",
+            "openWindGenerator",
+            "openSolarGenerator",
             "openLoadGenerator",
             "loadGeneratorModal",
+            "loadGeneratorMaxLabel",
+            "loadGeneratorMinLabel",
+            "loadGeneratorAverageLabel",
             "loadGeneratorMode",
             "loadGeneratorMax",
             "loadGeneratorMin",
@@ -6131,9 +6204,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn('id="fetchWeatherHistory"', weather_bar)
         self.assertNotIn('id="weatherImportStatus"', weather_bar)
         self.assertNotIn(">历史数据年<", weather_bar)
+        self.assertIn(">风速生成<", weather_bar)
+        self.assertIn(">光照生成<", weather_bar)
         self.assertIn(">负荷生成<", weather_bar)
         self.assertIn(">坐标选择<", weather_bar)
-        self.assertLess(weather_bar.index(">文件导入<"), weather_bar.index(">负荷生成<"))
+        self.assertLess(weather_bar.index(">文件导入<"), weather_bar.index(">风速生成<"))
+        self.assertLess(weather_bar.index(">风速生成<"), weather_bar.index(">光照生成<"))
+        self.assertLess(weather_bar.index(">光照生成<"), weather_bar.index(">负荷生成<"))
         self.assertLess(weather_bar.index(">负荷生成<"), weather_bar.index(">坐标选择<"))
         for label in ("打开文件", "曲线预览", "风速", "太阳辐射", "环境温度", "负荷", "确认", "取消"):
             self.assertIn(label, import_modal)
@@ -6202,6 +6279,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("/api/planning/time-series/import", script)
         self.assertIn("/api/planning/load-curve/generate", script)
         self.assertIn("/api/planning/load-curve/import", script)
+        self.assertIn("/api/planning/time-series-curve/generate", script)
+        self.assertIn("/api/planning/time-series-curve/import", script)
         self.assertIn("/api/planning/load-curve/templates", script)
         self.assertIn("selectMapProvider", script)
         self.assertNotIn("loadBaiduMapScript", script)
@@ -6233,6 +6312,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("#timeSeriesImportHint.warning", css)
         self.assertIn("#loadGeneratorHint.warning", css)
         self.assertIn("openLoadGenerator", script)
+        self.assertIn("openWindGenerator", script)
+        self.assertIn("openSolarGenerator", script)
+        self.assertIn("curveGeneratorSpecs", script)
+        self.assertIn("curveGeneratorTarget", script)
         self.assertIn("generateLoadCurve", script)
         self.assertIn("onLoadGeneratorModeChange", script)
         self.assertIn("loadLoadGeneratorModeSource", script)
@@ -6263,7 +6346,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("content_base64", script)
         self.assertIn("arrayBufferToBase64", script)
         self.assertIn("导入失败", script)
-        self.assertIn("load: curve.load", script)
+        self.assertIn("[spec.key]: curve[spec.key]", script)
         self.assertIn("负荷曲线已生成", script)
         self.assertIn("openCoordinatePicker", script)
         self.assertIn("initAmapTilePicker", script)
@@ -6520,8 +6603,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("function loadPreviewValueFromPointer", script)
         self.assertIn("interpolatedCurveEditPoints(state.loadPreviewDrag?.lastPoint, point)", script)
         self.assertIn("state.loadPreviewDrag.lastPoint = point", script)
-        self.assertIn("state.pendingLoadCurve[pointIndex].load", script)
-        self.assertIn('setLoadGeneratorHint("负荷曲线已调整，请检查预览后点击确定。", "ok")', script)
+        self.assertIn("state.pendingLoadCurve[pointIndex][spec.key]", script)
+        self.assertIn("spec.adjustedMessage", script)
         self.assertIn("loadGeneratorPreview.classList.add(\"editing\")", script)
         self.assertIn(".load-generator-preview.editing", css)
         self.assertIn("Load curve adjusted. Please review the preview and confirm.", i18n_script)

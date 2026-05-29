@@ -120,9 +120,9 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(fields["grid_up_regulation_requirement"], 19)
         self.assertEqual(fields["grid_down_regulation_requirement"], -20)
 
-    def test_frequency_delta_p_uses_disturbance_factors_unless_manually_overridden(self):
+    def test_frequency_delta_p_uses_disturbance_factors(self):
         model = {
-            "frequency": {"lower_disturbance_kw": 0.0, "upper_disturbance_kw": 0.0},
+            "frequency": {},
             "loads": np.array([100.0]),
             "load_up_disturbance_factor": 0.1,
             "load_down_disturbance_factor": 0.2,
@@ -138,18 +138,12 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "min"), 0.031)
         self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "max"), -0.02)
 
-        model["frequency"]["lower_disturbance_kw"] = 5.0
-        model["frequency"]["upper_disturbance_kw"] = 6.0
-
-        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "min"), 0.005)
-        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "max"), -0.006)
-
     def test_planning_optimization_optimizes_equipment_counts_and_cost_terms(self):
         payload = self._payload()
         payload["diesel_generators"][0].update(
             {
-                "capacity": 10,
-                "power_upper": 10,
+                "capacity": 20,
+                "power_upper": 20,
                 "power_lower": 0,
                 "fuel_rate": 0.5,
                 "quantity_lower": 1,
@@ -216,6 +210,11 @@ class PlanOptimizerTest(unittest.TestCase):
 
     def test_planning_optimization_emits_detailed_progress_logs(self):
         payload = self._payload()
+        payload["planning_parameters"][0]["load_disturbance_enabled"] = 1
+        payload["planning_parameters"][0]["renewable_disturbance_enabled"] = 1
+        payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
+        payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.5
+        payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.4
         payload["diesel_generators"][0].update(
             {
                 "capacity": 10,
@@ -239,6 +238,7 @@ class PlanOptimizerTest(unittest.TestCase):
             "求解器返回",
             "成本汇总",
             "容量结果",
+            "负荷向下扰动系数=0.5",
         ):
             self.assertIn(expected, messages)
 
@@ -255,6 +255,7 @@ class PlanOptimizerTest(unittest.TestCase):
         with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
             plan_optimizer.solve_planning_model(model)
 
+        self.assertEqual(seen_options["solver"], "mosek")
         self.assertEqual(seen_options["time_limit"], 5400)
 
     def test_planning_optimization_rejects_infeasible_non_success_solution(self):
@@ -864,6 +865,7 @@ class PlanOptimizerTest(unittest.TestCase):
     def test_post_disturbance_reserve_uses_only_grid_forming_storage_power(self):
         payload = self._payload()
         payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
+        payload["planning_parameters"][0]["load_disturbance_enabled"] = 1
         payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
         payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.2
         payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0

@@ -139,9 +139,20 @@ TASK_RESULT_FILE_LIST_CACHE = file_cache.FileCache("task_result_file_list", max_
 COMPARISON_CURVE_GROUPS = {
     "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
     "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
+    "safety": {"title": "安全日曲线", "sheet": "安全日曲线", "limit": None},
     "monthly": {"title": "月度统计", "sheet": "供能月曲线", "limit": None},
 }
-COMPARISON_CURVE_X_HEADERS = {"小时", "hour_index", "时间", "datetime", "day", "month", "日期", "月份"}
+COMPARISON_CURVE_X_HEADERS = {
+    "小时",
+    "hour_index",
+    "时间",
+    "datetime",
+    "day",
+    "month",
+    "日期",
+    "月份",
+    "nominal_frequency_hz",
+}
 RESULT_CURVE_FIELD_LABELS = {
     "load_energy": "负荷总电量",
     "diesel_energy": "柴发总发电量",
@@ -747,7 +758,7 @@ class OptimizationRuntime:
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
             self.status = "已完成"
             self.end_time = _now_text()
-            result_path = export_optimization_results_workbook(self._payload_unlocked())
+            result_path = export_optimization_results_workbook(self._runtime_payload_unlocked())
             self.result_file = str(result_path)
             self._results_exported = True
             self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
@@ -792,6 +803,21 @@ class OptimizationRuntime:
             "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
             "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
+            "logs": list(self._logs),
+        }
+
+    def _runtime_payload_unlocked(self) -> dict:
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "progress": self.progress,
+            "result_file": self.result_file,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
+            "metrics": self._metrics_unlocked(),
+            "results": self._results if self._results else self._default_results_unlocked(),
             "logs": list(self._logs),
         }
 
@@ -1213,7 +1239,7 @@ class OptimizationRuntime:
     def _export_results_once_unlocked(self) -> None:
         if self._results_exported:
             return
-        result_path = export_optimization_results_workbook(self._payload_unlocked())
+        result_path = export_optimization_results_workbook(self._runtime_payload_unlocked())
         self.result_file = str(result_path)
         self._results_exported = True
 
@@ -4724,6 +4750,299 @@ def generate_load_curve(mode: str, minimum: object, maximum: object, average: ob
     }
 
 
+CURVE_GENERATION_FIELDS = {
+    "wind_speed": {
+        "label": "风速",
+        "row_key": "wind_speed_curve",
+        "count_key": "wind_speed_curve_count",
+        "average": "风速平均值",
+        "minimum": "风速最小值",
+        "maximum": "风速最大值",
+    },
+    "solar_irradiance": {
+        "label": "太阳辐射",
+        "row_key": "solar_irradiance_curve",
+        "count_key": "solar_irradiance_curve_count",
+        "average": "太阳辐射平均值",
+        "minimum": "太阳辐射最小值",
+        "maximum": "太阳辐射最大值",
+    },
+}
+
+
+def generate_time_series_curve(
+    curve: str,
+    mode: str,
+    minimum: object,
+    maximum: object,
+    average: object,
+    source_curve: object = None,
+) -> dict:
+    curve_key, spec = curve_generation_spec(curve)
+    mode_key = str(mode or "random").strip() or "random"
+    min_value, max_value, avg_value = validate_curve_targets(curve_key, minimum, maximum, average)
+    if max_value == min_value:
+        values = [round_load_value(min_value) for _ in range(TIME_SERIES_IMPORT_ROW_COUNT)]
+    else:
+        shape = normalized_source_curve_shape(curve_key, source_curve) if mode_key == "file" else normalized_time_series_curve_shape(curve_key, mode_key)
+        adjusted_shape = adjust_shape_mean(shape, (avg_value - min_value) / (max_value - min_value))
+        values = [round_load_value(min_value + (max_value - min_value) * value) for value in adjusted_shape]
+    rows = [{"hour_index": index + 1, curve_key: value} for index, value in enumerate(values)]
+    return {
+        "curve": curve_key,
+        "mode": mode_key,
+        "curve_data": rows,
+        spec["row_key"]: rows,
+        spec["count_key"]: len(rows),
+        "curve_count": len(rows),
+        "statistics": {
+            "max": round_load_value(max(values)),
+            "min": round_load_value(min(values)),
+            "average": round_load_value(sum(values) / len(values)),
+        },
+    }
+
+
+def import_time_series_curve_file(
+    curve: str,
+    filename: str,
+    content: bytes,
+    minimum: object,
+    maximum: object,
+    average: object,
+    raw: object = False,
+) -> dict:
+    curve_key, spec = curve_generation_spec(curve)
+    suffix = Path(filename or "").suffix.lower()
+    if suffix == ".csv":
+        headers, rows = read_time_series_csv(content)
+    elif suffix == ".xlsx":
+        headers, rows = read_time_series_xlsx(content)
+    else:
+        raise ValueError("导入文件仅支持 .csv 或 .xlsx 格式")
+    if not rows:
+        raise ValueError("导入失败，文件没有可用数据行")
+    column_map = match_curve_import_columns(headers, curve_key)
+    values, repaired_numeric_count, missing_count, duplicate_count = normalized_imported_curve_values(rows, column_map, curve_key)
+    if truthy_json_value(raw):
+        scaled_values = [round_load_value(float(value)) for value in values]
+    else:
+        min_value, max_value, avg_value = validate_curve_targets(curve_key, minimum, maximum, average)
+        scaled_values = scale_curve_values_to_targets(curve_key, values, min_value, max_value, avg_value)
+    output_rows = [{"hour_index": index + 1, curve_key: value} for index, value in enumerate(scaled_values)]
+    message = f"已从{filename}导入8760点{spec['label']}{'原始' if truthy_json_value(raw) else ''}曲线"
+    if len(rows) != TIME_SERIES_IMPORT_ROW_COUNT:
+        message += f"，文件共有{len(rows)}行，已自适应扩展到8760点"
+    if missing_count:
+        message += f"，已按相邻点自动补齐{missing_count}个缺失时点"
+    if duplicate_count:
+        message += f"，已合并{duplicate_count}个重复小时数据"
+    if repaired_numeric_count:
+        message += f"，已修复{repaired_numeric_count}个无效数值"
+    return {
+        "source": "file",
+        "curve": curve_key,
+        "curve_data": output_rows,
+        spec["row_key"]: output_rows,
+        spec["count_key"]: len(output_rows),
+        "curve_count": len(output_rows),
+        "statistics": {
+            "max": round_load_value(max(scaled_values)),
+            "min": round_load_value(min(scaled_values)),
+            "average": round_load_value(sum(scaled_values) / len(scaled_values)),
+        },
+        "message": message,
+    }
+
+
+def curve_generation_spec(curve: str) -> tuple[str, dict[str, str]]:
+    curve_key = str(curve or "").strip()
+    if curve_key not in CURVE_GENERATION_FIELDS:
+        raise ValueError("曲线类型必须为风速或太阳辐射")
+    return curve_key, CURVE_GENERATION_FIELDS[curve_key]
+
+
+def validate_curve_targets(curve: str, minimum: object, maximum: object, average: object) -> tuple[float, float, float]:
+    _, spec = curve_generation_spec(curve)
+    min_value = load_curve_number(minimum, spec["minimum"])
+    max_value = load_curve_number(maximum, spec["maximum"])
+    avg_value = load_curve_number(average, spec["average"])
+    if min_value < 0 or max_value < 0 or avg_value < 0:
+        raise ValueError(f"{spec['maximum']}、{spec['minimum']}、{spec['average']}必须为非负数")
+    if max_value < min_value:
+        raise ValueError(f"{spec['maximum']}不能小于{spec['minimum']}")
+    if max_value == min_value:
+        if avg_value != min_value:
+            raise ValueError("最大值等于最小值时，平均值必须与其相等")
+        return min_value, max_value, avg_value
+    low_mean = min_value + (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
+    high_mean = max_value - (max_value - min_value) / TIME_SERIES_IMPORT_ROW_COUNT
+    if avg_value < low_mean or avg_value > high_mean:
+        raise ValueError("平均值必须介于最小值和最大值之间，并能同时满足最大/最小约束")
+    return min_value, max_value, avg_value
+
+
+def normalized_time_series_curve_shape(curve: str, mode: str) -> list[float]:
+    if mode != "random":
+        raise ValueError("风速和太阳辐射生成模式目前支持随机曲线或文件导入")
+    raw = deterministic_wind_shape() if curve == "wind_speed" else deterministic_solar_irradiance_shape()
+    minimum = min(raw)
+    maximum = max(raw)
+    span = maximum - minimum
+    if span <= 0:
+        return [0.5 for _ in raw]
+    return [(value - minimum) / span for value in raw]
+
+
+def normalized_source_curve_shape(curve: str, source_curve: object) -> list[float]:
+    values = normalize_curve_values(curve, source_curve)
+    minimum = min(float(value) for value in values)
+    maximum = max(float(value) for value in values)
+    span = maximum - minimum
+    if span <= 0:
+        raise ValueError("文件导入原始曲线没有变化，无法按指定最大值和最小值缩放")
+    return [(float(value) - minimum) / span for value in values]
+
+
+def normalize_curve_values(curve: str, rows: object) -> list[float | int]:
+    curve_key, spec = curve_generation_spec(curve)
+    if not isinstance(rows, list) or len(rows) != TIME_SERIES_IMPORT_ROW_COUNT:
+        raise ValueError(f"{spec['label']}曲线必须包含{TIME_SERIES_IMPORT_ROW_COUNT}点")
+    values = []
+    for index, row in enumerate(rows, start=1):
+        raw_value = row.get(curve_key) if isinstance(row, dict) else row
+        value = imported_numeric_value_or_none(raw_value)
+        if value is None:
+            raise ValueError(f"{spec['label']}曲线第{index}点不是有效数值")
+        values.append(round_load_value(value))
+    return values
+
+
+def match_curve_import_columns(headers: list[str], curve: str) -> dict[str, str]:
+    curve_key, spec = curve_generation_spec(curve)
+    normalized_headers = [(normalize_import_header(header), header) for header in headers if str(header or "").strip()]
+    aliases = TIME_SERIES_IMPORT_REQUIRED_COLUMNS[curve_key][1]
+    value_column = match_time_series_header(normalized_headers, aliases)
+    if not value_column:
+        raise ValueError(f"导入失败，找不到对应的列：{spec['label']}")
+    column_map = {curve_key: value_column}
+    matched_time = match_time_series_header(normalized_headers, TIME_SERIES_IMPORT_OPTIONAL_COLUMNS["datetime"])
+    if matched_time:
+        column_map["datetime"] = matched_time
+    return column_map
+
+
+def normalized_imported_curve_values(
+    raw_rows: list[dict[str, object]],
+    column_map: dict[str, str],
+    curve: str,
+) -> tuple[list[float | int], int, int, int]:
+    curve_column = column_map[curve]
+    time_column = column_map.get("datetime")
+    raw_values = [imported_numeric_value_or_none(row.get(curve_column)) for row in raw_rows]
+    grouped_by_hour: dict[int, list[float | int | None]] = {}
+    if time_column:
+        for raw_row, value in zip(raw_rows, raw_values):
+            target_hour = imported_load_curve_hour_index(raw_row, time_column)
+            if target_hour is None or target_hour < 1 or target_hour > TIME_SERIES_IMPORT_ROW_COUNT:
+                continue
+            grouped_by_hour.setdefault(target_hour, []).append(value)
+    if grouped_by_hour:
+        parsed_by_hour = {}
+        duplicate_count = 0
+        for hour, hour_values in grouped_by_hour.items():
+            duplicate_count += max(0, len(hour_values) - 1)
+            valid_values = [float(value) for value in hour_values if value is not None]
+            parsed_by_hour[hour] = {
+                "hour_index": hour,
+                "datetime": f"H{hour:04d}",
+                curve: sum(valid_values) / len(valid_values) if valid_values else None,
+            }
+        repaired_numeric_count = repair_imported_curve_values(parsed_by_hour, curve)
+        imported_rows = fill_imported_curve_hours(parsed_by_hour, curve)
+        missing_count = sum(1 for item in imported_rows if item.get("_filled"))
+        source_values = [row[curve] for row in imported_rows[: max(grouped_by_hour)]]
+        return resample_load_values(source_values, TIME_SERIES_IMPORT_ROW_COUNT), repaired_numeric_count, missing_count, duplicate_count
+    repaired_values, repaired_numeric_count = repair_curve_value_sequence(raw_values, curve)
+    return resample_load_values(repaired_values, TIME_SERIES_IMPORT_ROW_COUNT), repaired_numeric_count, 0, 0
+
+
+def repair_imported_curve_values(parsed_by_hour: dict[int, dict], curve: str) -> int:
+    curve_key, spec = curve_generation_spec(curve)
+    hours = sorted(parsed_by_hour)
+    valid_hours = [hour for hour in hours if parsed_by_hour[hour].get(curve_key) is not None]
+    if not valid_hours:
+        raise ValueError(f"导入失败，{spec['label']}没有任何有效数值，无法用相邻点修复")
+    repaired_count = 0
+    previous_valid_hour = None
+    next_valid_index = 0
+    for hour in hours:
+        if parsed_by_hour[hour].get(curve_key) is not None:
+            previous_valid_hour = hour
+            if next_valid_index < len(valid_hours) and valid_hours[next_valid_index] == hour:
+                next_valid_index += 1
+            continue
+        if previous_valid_hour is not None:
+            source_hour = previous_valid_hour
+        else:
+            while next_valid_index < len(valid_hours) and valid_hours[next_valid_index] < hour:
+                next_valid_index += 1
+            source_hour = valid_hours[next_valid_index]
+        parsed_by_hour[hour][curve_key] = parsed_by_hour[source_hour][curve_key]
+        repaired_count += 1
+    return repaired_count
+
+
+def fill_imported_curve_hours(parsed_by_hour: dict[int, dict], curve: str) -> list[dict]:
+    first_row = parsed_by_hour[min(parsed_by_hour)]
+    previous = None
+    imported_rows = []
+    for hour in range(1, TIME_SERIES_IMPORT_ROW_COUNT + 1):
+        if hour in parsed_by_hour:
+            current = dict(parsed_by_hour[hour])
+            current["hour_index"] = hour
+            previous = current
+            imported_rows.append(current)
+            continue
+        base = previous or first_row
+        filled = {"hour_index": hour, "datetime": f"H{hour:04d}", curve: base[curve], "_filled": True}
+        previous = filled
+        imported_rows.append(filled)
+    return imported_rows
+
+
+def repair_curve_value_sequence(values: list[float | int | None], curve: str) -> tuple[list[float | int], int]:
+    _, spec = curve_generation_spec(curve)
+    valid_indexes = [index for index, value in enumerate(values) if value is not None]
+    if not valid_indexes:
+        raise ValueError(f"导入失败，{spec['label']}没有任何有效数值，无法用相邻点修复")
+    repaired = list(values)
+    repaired_count = 0
+    previous_valid_index = None
+    next_valid_index = 0
+    for index, value in enumerate(repaired):
+        if value is not None:
+            previous_valid_index = index
+            if next_valid_index < len(valid_indexes) and valid_indexes[next_valid_index] == index:
+                next_valid_index += 1
+            continue
+        if previous_valid_index is not None:
+            source_index = previous_valid_index
+        else:
+            source_index = valid_indexes[next_valid_index]
+        repaired[index] = repaired[source_index]
+        repaired_count += 1
+    return [value for value in repaired if value is not None], repaired_count
+
+
+def scale_curve_values_to_targets(curve: str, values: list[float | int], min_value: float, max_value: float, avg_value: float) -> list[float | int]:
+    if max_value == min_value:
+        return [round_load_value(min_value) for _ in range(TIME_SERIES_IMPORT_ROW_COUNT)]
+    shape = normalized_source_curve_shape(curve, [{"hour_index": index + 1, curve: value} for index, value in enumerate(values)])
+    adjusted_shape = adjust_shape_mean(shape, (avg_value - min_value) / (max_value - min_value))
+    return [round_load_value(min_value + (max_value - min_value) * value) for value in adjusted_shape]
+
+
 def list_load_curve_templates() -> dict:
     templates = read_load_curve_templates()
     return {"templates": load_curve_template_summaries(templates)}
@@ -4931,6 +5250,51 @@ def deterministic_random_shape() -> list[float]:
     return values
 
 
+def deterministic_wind_shape() -> list[float]:
+    seed = 362436069
+    values = []
+    previous = 0.55
+    for hour in range(TIME_SERIES_IMPORT_ROW_COUNT):
+        seed ^= (seed << 13) & 0xFFFFFFFF
+        seed ^= seed >> 17
+        seed ^= (seed << 5) & 0xFFFFFFFF
+        random_value = (seed & 0xFFFFFFFF) / 0xFFFFFFFF
+        previous = previous * 0.86 + random_value * 0.14
+        day = hour // 24
+        hour_of_day = hour % 24
+        season = 0.5 + 0.5 * math.cos((day - 20) / 365 * 2 * math.pi)
+        diurnal = 0.5 + 0.5 * math.sin((hour_of_day - 14) / 24 * 2 * math.pi)
+        values.append(0.18 + 0.54 * previous + 0.22 * season + 0.06 * diurnal + hour * 1e-9)
+    return values
+
+
+def deterministic_solar_irradiance_shape() -> list[float]:
+    seed = 521288629
+    cloud = 0.72
+    values = []
+    for hour in range(TIME_SERIES_IMPORT_ROW_COUNT):
+        seed ^= (seed << 13) & 0xFFFFFFFF
+        seed ^= seed >> 17
+        seed ^= (seed << 5) & 0xFFFFFFFF
+        random_value = (seed & 0xFFFFFFFF) / 0xFFFFFFFF
+        cloud = min(1.0, max(0.35, cloud * 0.90 + random_value * 0.10))
+        day = hour // 24
+        hour_of_day = hour % 24
+        season = 0.5 + 0.5 * math.sin((day - 80) / 365 * 2 * math.pi)
+        daylight_hours = 4.0 + 16.0 * season
+        distance_from_noon = abs(hour_of_day + 0.5 - 12.0)
+        half_day = daylight_hours / 2.0
+        if distance_from_noon <= half_day:
+            daylight = math.cos((distance_from_noon / max(0.1, half_day)) * math.pi / 2) ** 1.35
+            value = daylight * (0.28 + 0.72 * season) * (0.62 + 0.38 * cloud)
+        else:
+            # Keep a tiny non-zero background so the mean-scaling step remains
+            # well-conditioned while still rendering night hours near zero.
+            value = 0.0002 * (0.8 + 0.2 * cloud)
+        values.append(value + hour * 1e-12)
+    return values
+
+
 def standard_load_shape(mode: str) -> list[float]:
     values = []
     for hour in range(TIME_SERIES_IMPORT_ROW_COUNT):
@@ -4954,13 +5318,20 @@ def standard_load_shape(mode: str) -> list[float]:
 
 
 def adjust_shape_mean(shape: list[float], target_mean: float) -> list[float]:
+    if not shape:
+        raise ValueError("曲线形状不能为空")
     current_mean = sum(shape) / len(shape)
     if abs(current_mean - target_mean) < 1e-10:
         return shape
     if target_mean < current_mean:
         low, high = 1.0, 2.0
+        min_reachable = sum(1 for value in shape if value >= 1.0 - 1e-12) / len(shape)
+        if target_mean <= min_reachable + 1e-10:
+            raise ValueError("平均值过低，无法在保持最大/最小值的同时生成该形状曲线")
         while mean_power(shape, high) > target_mean:
             high *= 2
+            if high > 1_000_000:
+                raise ValueError("平均值过低，无法在保持最大/最小值的同时生成该形状曲线")
         for _ in range(80):
             mid = (low + high) / 2
             if mean_power(shape, mid) > target_mean:
@@ -4970,8 +5341,13 @@ def adjust_shape_mean(shape: list[float], target_mean: float) -> list[float]:
         power = high
         return [value**power for value in shape]
     low, high = 1.0, 2.0
+    max_reachable = sum(1 for value in shape if value > 1e-12) / len(shape)
+    if target_mean >= max_reachable - 1e-10:
+        raise ValueError("平均值过高，无法在保持最大/最小值的同时生成该形状曲线")
     while mean_inverse_power(shape, high) < target_mean:
         high *= 2
+        if high > 1_000_000:
+            raise ValueError("平均值过高，无法在保持最大/最小值的同时生成该形状曲线")
     for _ in range(80):
         mid = (low + high) / 2
         if mean_inverse_power(shape, mid) < target_mean:
@@ -5028,6 +5404,37 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                 raise ValueError("导入失败，文件内容无法解析") from exc
             return _json_response(
                 import_load_curve_file(
+                    filename,
+                    content,
+                    payload.get("min"),
+                    payload.get("max"),
+                    payload.get("average"),
+                    payload.get("raw"),
+                )
+            )
+        if path == "/api/planning/time-series-curve/generate" and method == "POST":
+            payload = _read_json_body(body)
+            return _json_response(
+                generate_time_series_curve(
+                    str(payload.get("curve", "")),
+                    str(payload.get("mode", "random")),
+                    payload.get("min"),
+                    payload.get("max"),
+                    payload.get("average"),
+                    payload.get("source_curve"),
+                )
+            )
+        if path == "/api/planning/time-series-curve/import" and method == "POST":
+            payload = _read_json_body(body)
+            filename = str(payload.get("filename", ""))
+            content_base64 = str(payload.get("content_base64", ""))
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("导入失败，文件内容无法解析") from exc
+            return _json_response(
+                import_time_series_curve_file(
+                    str(payload.get("curve", "")),
                     filename,
                     content,
                     payload.get("min"),
@@ -5402,5 +5809,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-

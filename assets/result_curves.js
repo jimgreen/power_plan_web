@@ -4,6 +4,7 @@
   const GROUP_DEFINITIONS = [
     { key: "hourly", title: "小时级曲线" },
     { key: "daily", title: "日级统计" },
+    { key: "safety", title: "安全日曲线" },
     { key: "monthly", title: "月度统计" },
     { key: "annual", title: "年度统计" },
   ];
@@ -72,8 +73,8 @@
     const state = {
       groups: emptyGroups(),
       annualTable: [],
-      selectedCurvesByGroup: { hourly: [], daily: [], monthly: [] },
-      hiddenSeriesByGroup: { hourly: [], daily: [], monthly: [] },
+      selectedCurvesByGroup: { hourly: [], daily: [], safety: [], monthly: [] },
+      hiddenSeriesByGroup: { hourly: [], daily: [], safety: [], monthly: [] },
       annualHiddenSeries: [],
       curveRangeFilter: defaultCurveRangeFilter(),
       activeGroup: "hourly",
@@ -115,8 +116,8 @@
     function clear(message) {
       state.groups = emptyGroups();
       state.annualTable = [];
-      state.selectedCurvesByGroup = { hourly: [], daily: [], monthly: [] };
-      state.hiddenSeriesByGroup = { hourly: [], daily: [], monthly: [] };
+      state.selectedCurvesByGroup = { hourly: [], daily: [], safety: [], monthly: [] };
+      state.hiddenSeriesByGroup = { hourly: [], daily: [], safety: [], monthly: [] };
       state.annualHiddenSeries = [];
       state.curveRangeFilter = defaultCurveRangeFilter();
       state.activeGroup = "hourly";

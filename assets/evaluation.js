@@ -1237,12 +1237,13 @@ function renderSafetyDailyChart(points) {
   const halfSpan = Math.max(1, plotHeight / 2);
   const visibleSeries = safetyDailySeries.filter((series) => isSeriesVisible("safety", series.key));
   if (!visibleSeries.length) return `${renderSafetyChartLegend()}<div class="empty-summary">暂无可显示曲线</div>`;
+  const nominalFrequency = safetyNominalFrequency(points);
   const maxDeviation = Math.max(
-    ...points.map((point) => Math.max(...visibleSeries.map((series) => Math.abs(numericFrequency(point[series.key]) - 50)))),
-    0.05,
+    ...points.map((point) => Math.max(...visibleSeries.map((series) => Math.abs(numericFrequency(point[series.key]) - nominalFrequency)))),
+    0.001,
   );
   const xAt = (index) => margin.left + (points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth);
-  const yAt = (value) => centerY - ((numericFrequency(value) - 50) / maxDeviation) * halfSpan;
+  const yAt = (value) => centerY - ((numericFrequency(value) - nominalFrequency) / maxDeviation) * halfSpan;
   const maxPath = linePath(points, (point) => point.frequency_max, xAt, yAt);
   const minPath = linePath(points, (point) => point.frequency_min, xAt, yAt);
   const upLabel = `+${formatFrequencyDeviation(maxDeviation)}`;
@@ -1355,6 +1356,14 @@ function numericFrequency(value) {
   return Number.isFinite(number) ? number : 50;
 }
 
+function safetyNominalFrequency(points) {
+  for (const point of points || []) {
+    const number = Number(point?.nominal_frequency_hz);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return 50;
+}
+
 function renderMiniBars(points) {
   if (!points.length) return '<div class="empty-summary">暂无曲线</div>';
   const maxValue = Math.max(...points.map((point) => Number(point.value) || 0), 1);
@@ -1411,12 +1420,15 @@ function formatAxisNumber(value) {
 function formatFrequency(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
+  if (Math.abs(number - Number(number.toFixed(2))) >= 0.0005) return `${number.toFixed(4)} Hz`;
   return `${number.toFixed(2)} Hz`;
 }
 
 function formatFrequencyDeviation(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
+  if (Math.abs(number) < 0.01) return number.toFixed(4);
+  if (Math.abs(number) < 0.1) return number.toFixed(3);
   return number.toFixed(2);
 }
 
@@ -1424,7 +1436,7 @@ function formatSignedDeviation(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "-";
   const sign = number >= 0 ? "+" : "";
-  return `${sign}${number.toFixed(2)}`;
+  return `${sign}${formatFrequencyDeviation(number)}`;
 }
 
 function renderOptimizationLogs(logs) {
@@ -1653,14 +1665,15 @@ function renderGreenHoverTooltip(point, index) {
 
 function renderSafetyHoverTooltip(point, index) {
   const day = point?.day ?? index + 1;
+  const nominalFrequency = safetyNominalFrequency([point]);
   const rows = [];
   if (isSeriesVisible("safety", "frequency_max")) {
     const maxFrequency = numericFrequency(point?.frequency_max);
-    rows.push(`<div><span>向上频率最大值</span><strong>${escapeHtml(formatFrequency(maxFrequency))} (${escapeHtml(formatSignedDeviation(maxFrequency - 50))})</strong></div>`);
+    rows.push(`<div><span>向上频率最大值</span><strong>${escapeHtml(formatFrequency(maxFrequency))} (${escapeHtml(formatSignedDeviation(maxFrequency - nominalFrequency))})</strong></div>`);
   }
   if (isSeriesVisible("safety", "frequency_min")) {
     const minFrequency = numericFrequency(point?.frequency_min);
-    rows.push(`<div><span>向下频率最小值</span><strong>${escapeHtml(formatFrequency(minFrequency))} (${escapeHtml(formatSignedDeviation(minFrequency - 50))})</strong></div>`);
+    rows.push(`<div><span>向下频率最小值</span><strong>${escapeHtml(formatFrequency(minFrequency))} (${escapeHtml(formatSignedDeviation(minFrequency - nominalFrequency))})</strong></div>`);
   }
   return `<h3>第 ${escapeHtml(day)} 天</h3>${rows.join("")}`;
 }

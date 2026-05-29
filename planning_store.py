@@ -174,8 +174,6 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "frequency_nadir_evaluation_duration_s",
             "nadir_linearization_samples_per_axis",
             "nadir_linearization_interval_ratio",
-            "frequency_lower_disturbance_kw",
-            "frequency_upper_disturbance_kw",
             "network_synchronization_coefficient_base",
             "network_synchronization_coefficient_slope",
             "network_synchronization_reference_load_kw",
@@ -311,8 +309,6 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "frequency_nadir_evaluation_duration_s": 20.0,
     "nadir_linearization_samples_per_axis": 4,
     "nadir_linearization_interval_ratio": 0.5,
-    "frequency_lower_disturbance_kw": 0.0,
-    "frequency_upper_disturbance_kw": 0.0,
     "network_synchronization_coefficient_base": 1.0,
     "network_synchronization_coefficient_slope": 0.0,
     "network_synchronization_reference_load_kw": 0.0,
@@ -1111,11 +1107,26 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
     if nadir_samples is not None and not float(nadir_samples).is_integer():
         messages.append({"level": "error", "message": "Nadir线性化每轴采样点数必须为正整数"})
     number_in_range("nadir_linearization_interval_ratio", "Nadir线性化区间比例", 0.05, 1)
-    number_in_range("frequency_lower_disturbance_kw", "频率下限扰动功率(kW)", 0)
-    number_in_range("frequency_upper_disturbance_kw", "频率上限扰动功率(kW)", 0)
     number_in_range("network_synchronization_coefficient_base", "网络同步系数基值", -100, 100)
     number_in_range("network_synchronization_coefficient_slope", "网络同步系数斜率", -100, 100)
     number_in_range("network_synchronization_reference_load_kw", "网络同步系数基准负荷(kW)", 0)
+    if truthy_flag(row.get("frequency_security_constraint_enabled")):
+        load_factor_sum = 0.0
+        renewable_factor = 0.0
+        if truthy_flag(row.get("load_disturbance_enabled")):
+            load_factor_sum = max(0.0, numeric(row.get("load_up_disturbance_factor"), 0.0)) + max(
+                0.0,
+                numeric(row.get("load_down_disturbance_factor"), 0.0),
+            )
+        if truthy_flag(row.get("renewable_disturbance_enabled")):
+            renewable_factor = max(0.0, numeric(row.get("renewable_down_disturbance_factor"), 0.0))
+        if load_factor_sum <= 0 and renewable_factor <= 0:
+            messages.append(
+                {
+                    "level": "warn",
+                    "message": "频率安全约束已启用，但有效扰动系数均为0，频率波动曲线将保持在额定频率附近",
+                }
+            )
     if nominal_frequency is not None and nadir_lower is not None and nadir_lower > nominal_frequency:
         messages.append({"level": "error", "message": "频率最低点下限(Hz)不能大于额定频率(Hz)"})
     if nominal_frequency is not None and peak_upper is not None and peak_upper < nominal_frequency:

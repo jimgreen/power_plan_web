@@ -68,6 +68,8 @@
             <div class="time-chart-toolbar">
               <div class="weather-import-bar" aria-label="历史气象数据获取">
                 <button id="importTimeSeriesFile" type="button">文件导入</button>
+                <button id="openWindGenerator" type="button">风速生成</button>
+                <button id="openSolarGenerator" type="button">光照生成</button>
                 <button id="openLoadGenerator" type="button">负荷生成</button>
                 <button id="openCoordinatePicker" type="button">坐标选择</button>
               </div>
@@ -145,9 +147,9 @@
                     <option value="file">文件导入</option>
                   </select>
                 </label>
-                <label>负荷最大值<input id="loadGeneratorMax" type="number" min="0" step="any"></label>
-                <label>负荷最小值<input id="loadGeneratorMin" type="number" min="0" step="any"></label>
-                <label>负荷平均值<input id="loadGeneratorAverage" type="number" min="0" step="any"></label>
+                <label><span id="loadGeneratorMaxLabel">负荷最大值</span><input id="loadGeneratorMax" type="number" min="0" step="any"></label>
+                <label><span id="loadGeneratorMinLabel">负荷最小值</span><input id="loadGeneratorMin" type="number" min="0" step="any"></label>
+                <label><span id="loadGeneratorAverageLabel">负荷平均值</span><input id="loadGeneratorAverage" type="number" min="0" step="any"></label>
               </div>
               <svg id="loadGeneratorPreview" class="load-generator-preview" role="img" aria-label="生成负荷曲线预览"></svg>
               <div class="map-picker-foot">
@@ -268,8 +270,8 @@
       </aside>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20260518-fit-text4"></script>
+  <script src="assets/i18n.js?v=20260529-curve-generator"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/planning.js?v=20260525-frequency-params"></script>
+  <script src="assets/planning.js?v=20260529-curve-generator"></script>
 </body>
 </html>

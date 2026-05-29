@@ -18,6 +18,7 @@ LogSink = Callable[[dict[str, Any]], None]
 LOAD_SHED_PENALTY_COST = 1_000_000.0
 DIESEL_ON_COUNT_PENALTY = 0.0001
 ELECTROLYZER_ON_COUNT_PENALTY = 0.00001
+PLANNING_SOLVER = "mosek"
 FREQUENCY_EPS = 1e-9
 NOMINAL_FREQUENCY_HZ = 50.0
 
@@ -219,8 +220,6 @@ def normalized_frequency_parameters(planning_parameters: dict[str, Any], loads: 
         "linearization_interval_ratio": min(1.0, max(0.05, numeric(planning_parameters.get("nadir_linearization_interval_ratio"), 0.5))),
         "network_synchronization_coefficient_base": min(100.0, max(-100.0, numeric(planning_parameters.get("network_synchronization_coefficient_base"), 1.0))),
         "network_synchronization_coefficient_slope": min(100.0, max(-100.0, numeric(planning_parameters.get("network_synchronization_coefficient_slope"), 0.0))),
-        "lower_disturbance_kw": max(0.0, numeric(planning_parameters.get("frequency_lower_disturbance_kw"), 0.0)),
-        "upper_disturbance_kw": max(0.0, numeric(planning_parameters.get("frequency_upper_disturbance_kw"), 0.0)),
         "load_ref_kw": load_ref,
         "context_cache": {},
     }
@@ -251,18 +250,13 @@ def renewable_available_upper_kw(model: dict[str, Any], hour: int) -> float:
 
 
 def frequency_delta_p_mw(model: dict[str, Any], hour: int, seek: str) -> float:
-    freq = model["frequency"]
     if seek == "min":
-        disturbance_kw = float(freq.get("lower_disturbance_kw", 0.0))
-        if disturbance_kw <= 0:
-            disturbance_kw = (
-                float(model["loads"][hour]) * float(model.get("load_up_disturbance_factor", 0.0))
-                + renewable_available_upper_kw(model, hour) * float(model.get("renewable_down_disturbance_factor", 0.0))
-            )
+        disturbance_kw = (
+            float(model["loads"][hour]) * float(model.get("load_up_disturbance_factor", 0.0))
+            + renewable_available_upper_kw(model, hour) * float(model.get("renewable_down_disturbance_factor", 0.0))
+        )
         return max(disturbance_kw, FREQUENCY_EPS) / 1000.0
-    disturbance_kw = float(freq.get("upper_disturbance_kw", 0.0))
-    if disturbance_kw <= 0:
-        disturbance_kw = float(model["loads"][hour]) * float(model.get("load_down_disturbance_factor", 0.0))
+    disturbance_kw = float(model["loads"][hour]) * float(model.get("load_down_disturbance_factor", 0.0))
     return -max(disturbance_kw, FREQUENCY_EPS) / 1000.0
 
 
@@ -470,6 +464,23 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
     )
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
+    load_disturbance_enabled = truthy_flag(planning_parameters.get("load_disturbance_enabled"), False)
+    renewable_disturbance_enabled = truthy_flag(planning_parameters.get("renewable_disturbance_enabled"), False)
+    load_up_disturbance_factor = (
+        max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0)))
+        if load_disturbance_enabled
+        else 0.0
+    )
+    load_down_disturbance_factor = (
+        max(0.0, numeric(planning_parameters.get("load_down_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0)))
+        if load_disturbance_enabled
+        else 0.0
+    )
+    renewable_down_disturbance_factor = (
+        max(0.0, numeric(planning_parameters.get("renewable_down_disturbance_factor"), 0.0))
+        if renewable_disturbance_enabled
+        else 0.0
+    )
     device_rows = normalized_device_rows(scheme_payload)
     storage_charge_efficiency, storage_discharge_efficiency = storage_efficiencies(
         device_rows["storage_pcs"],
@@ -517,9 +528,11 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "storage_self_discharge_rate": storage_self_discharge_rate,
         "hydrogen_self_discharge_rate": hydrogen_self_discharge_rate,
         "post_disturbance_power_balance_enabled": post_disturbance_power_balance_enabled,
-        "load_up_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
-        "load_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("load_down_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0))),
-        "renewable_down_disturbance_factor": max(0.0, numeric(planning_parameters.get("renewable_down_disturbance_factor"), 0.0)),
+        "load_disturbance_enabled": load_disturbance_enabled,
+        "renewable_disturbance_enabled": renewable_disturbance_enabled,
+        "load_up_disturbance_factor": load_up_disturbance_factor,
+        "load_down_disturbance_factor": load_down_disturbance_factor,
+        "renewable_down_disturbance_factor": renewable_down_disturbance_factor,
         "frequency": frequency,
         "storage_soc_lower_ratio": storage_soc_lower_ratio,
         "storage_soc_upper_ratio": storage_soc_upper_ratio,
@@ -901,13 +914,14 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     emit(
         log,
         "info",
-        f"求解参数：time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
+        f"求解参数：solver={PLANNING_SOLVER}（MOSEK原生Task API），time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
         22,
     )
     emit(log, "info", "求解设备台数和全年运行联合混合整数线性规划", 25)
     result = dispatch_milp.solve_built_milp(
         builder,
         options={
+            "solver": PLANNING_SOLVER,
             "time_limit": model["optimization_time_limit_seconds"],
             "mip_rel_gap": 0.01,
             "disp": False,
@@ -1558,6 +1572,11 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
             f"电储自损耗={format_log_number(model['storage_self_discharge_rate'] * 100)}%/天，"
             f"氢储自损耗={format_log_number(model['hydrogen_self_discharge_rate'] * 100)}%/天，"
+            f"扰动后平衡={'开启' if model['post_disturbance_power_balance_enabled'] else '关闭'}，"
+            f"负荷向上扰动系数={format_log_number(model['load_up_disturbance_factor'])}，"
+            f"负荷向下扰动系数={format_log_number(model['load_down_disturbance_factor'])}，"
+            f"新能源向下扰动系数={format_log_number(model['renewable_down_disturbance_factor'])}，"
+            f"频率安全={'开启' if model['frequency']['enabled'] else '关闭'}，"
             f"求解上限={model['optimization_time_limit_seconds']}秒"
         ),
         8,
@@ -2036,6 +2055,7 @@ def build_safety_daily_rows(
         safety_rows.append(
             {
                 "day": daily_row.get("day", day_index + 1),
+                "nominal_frequency_hz": round(nominal_frequency_hz, 4),
                 "frequency_max": round(frequency_max, 4),
                 "frequency_min": round(frequency_min, 4),
             }
@@ -2060,6 +2080,12 @@ def min_frequency_margin(dispatch_rows: list[dict[str, Any]], field: str) -> flo
     values = [numeric(row.get(field), math.inf) for row in dispatch_rows if row.get(field) is not None]
     return round(min(values), 4) if values else 0.0
 
+
+def max_frequency_disturbance_kw(dispatch_rows: list[dict[str, Any]], field: str) -> float:
+    values = [abs(numeric(row.get(field), 0.0)) * 1000.0 for row in dispatch_rows if row.get(field) is not None]
+    return round(max(values), 4) if values else 0.0
+
+
 def build_results(
     planning_rows: list[dict[str, Any]],
     dispatch_rows: list[dict[str, Any]],
@@ -2077,6 +2103,7 @@ def build_results(
     else:
         daily = aggregate_daily_partial(dispatch_rows)
         monthly = aggregate_monthly_partial(daily)
+    frequency_risk_hours = frequency_risk_hour_count(dispatch_rows)
     annual_rows = [
         *capacity_summary_rows(planning_rows),
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
@@ -2090,15 +2117,16 @@ def build_results(
         {"指标": "总成本", "数值": costs["annual_total_cost"], "单位": "万元"},
         {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元"},
         {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%"},
-        {"指标": "频率风险点", "数值": sum(1 for row in dispatch_rows if numeric(row.get("unmet_load"), 0.0) > 0), "单位": "个"},
+        {"指标": "频率风险点", "数值": frequency_risk_hours, "单位": "个"},
     ]
     nominal_frequency_hz = float(model.get("frequency", {}).get("nominal_frequency_hz", NOMINAL_FREQUENCY_HZ))
     safety_daily = build_safety_daily_rows(dispatch_rows, daily, nominal_frequency_hz)
     highest_frequency = max((point["frequency_max"] for point in safety_daily), default=nominal_frequency_hz)
     lowest_frequency = min((point["frequency_min"] for point in safety_daily), default=nominal_frequency_hz)
-    frequency_risk_hours = frequency_risk_hour_count(dispatch_rows)
     min_lower_margin = min_frequency_margin(dispatch_rows, "frequency_lower_margin_hz")
     min_upper_margin = min_frequency_margin(dispatch_rows, "frequency_upper_margin_hz")
+    max_up_disturbance_kw = max_frequency_disturbance_kw(dispatch_rows, "frequency_delta_p_mw")
+    max_down_disturbance_kw = max_frequency_disturbance_kw(dispatch_rows, "frequency_upper_delta_p_mw")
     green_table = [
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
         {"指标": "负荷总电量", "数值": totals["load_energy"], "单位": "kWh"},
@@ -2158,8 +2186,8 @@ def build_results(
         ],
         "safety_table": [
             {"指标": "额定频率", "数值": round(nominal_frequency_hz, 4), "单位": "Hz"},
-            {"指标": "向上扰动最大量", "数值": 0, "单位": "kW"},
-            {"指标": "向下扰动最大量", "数值": 0, "单位": "kW"},
+            {"指标": "向上扰动最大量", "数值": max_up_disturbance_kw, "单位": "kW"},
+            {"指标": "向下扰动最大量", "数值": max_down_disturbance_kw, "单位": "kW"},
             {"指标": "最高频率", "数值": highest_frequency, "单位": "Hz"},
             {"指标": "最低频率", "数值": lowest_frequency, "单位": "Hz"},
             {"指标": "频率下限最小裕度", "数值": min_lower_margin, "单位": "Hz"},

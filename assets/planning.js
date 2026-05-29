@@ -36,6 +36,7 @@ const state = {
   originalLoadCurve: null,
   loadGeneratorSourceCurve: null,
   loadGeneratorSourceName: "",
+  curveGeneratorTarget: "load",
   isSwitchingScheme: false,
 };
 
@@ -95,6 +96,78 @@ const timeSeriesImportSeries = [
 
 const weatherPreviewSeries = timeSeriesImportSeries.filter(([key]) => key !== "load");
 
+const curveGeneratorSpecs = {
+  wind_speed: {
+    key: "wind_speed",
+    label: "风速",
+    title: "风速生成",
+    unit: "m/s",
+    maxLabel: "风速最大值",
+    minLabel: "风速最小值",
+    averageLabel: "风速平均值",
+    generateLabel: "生成风速曲线",
+    saveTemplateVisible: false,
+    emptyPreview: "生成后显示风速曲线预览",
+    adjustedMessage: "风速曲线已调整，请检查预览后点击确定。",
+    generatedMessage: "风速曲线已生成，请检查预览后点击确定。",
+    confirmMessage: "风速曲线已确认，请保存方案",
+    cancelMessage: "风速生成已取消",
+    sourceLoadedMessage: "原始风速曲线已载入，请点击生成风速曲线。",
+    importedMessage: "风速文件已导入为原始曲线，请点击生成风速曲线。",
+    importFailedPrefix: "风速文件导入失败：",
+    generationFailedPrefix: "风速生成失败：",
+    selectedFileMessage: "请先选择风速文件",
+    invalidLengthMessage: "风速曲线应为8760点",
+    tableInvalidMessage: "当前时序表不是8760行，未更新风速",
+  },
+  solar_irradiance: {
+    key: "solar_irradiance",
+    label: "太阳辐射",
+    title: "光照生成",
+    unit: "W/m2",
+    maxLabel: "光照最大值",
+    minLabel: "光照最小值",
+    averageLabel: "光照平均值",
+    generateLabel: "生成光照曲线",
+    saveTemplateVisible: false,
+    emptyPreview: "生成后显示光照曲线预览",
+    adjustedMessage: "光照曲线已调整，请检查预览后点击确定。",
+    generatedMessage: "光照曲线已生成，请检查预览后点击确定。",
+    confirmMessage: "光照曲线已确认，请保存方案",
+    cancelMessage: "光照生成已取消",
+    sourceLoadedMessage: "原始光照曲线已载入，请点击生成光照曲线。",
+    importedMessage: "光照文件已导入为原始曲线，请点击生成光照曲线。",
+    importFailedPrefix: "光照文件导入失败：",
+    generationFailedPrefix: "光照生成失败：",
+    selectedFileMessage: "请先选择光照文件",
+    invalidLengthMessage: "光照曲线应为8760点",
+    tableInvalidMessage: "当前时序表不是8760行，未更新光照",
+  },
+  load: {
+    key: "load",
+    label: "负荷",
+    title: "负荷生成",
+    unit: "kW",
+    maxLabel: "负荷最大值",
+    minLabel: "负荷最小值",
+    averageLabel: "负荷平均值",
+    generateLabel: "生成负荷曲线",
+    saveTemplateVisible: true,
+    emptyPreview: "生成后显示负荷曲线预览",
+    adjustedMessage: "负荷曲线已调整，请检查预览后点击确定。",
+    generatedMessage: "负荷曲线已生成，请检查预览后点击确定。",
+    confirmMessage: "负荷曲线已确认，请保存方案",
+    cancelMessage: "负荷生成已取消",
+    sourceLoadedMessage: "原始负荷曲线已载入，请点击生成负荷曲线。",
+    importedMessage: "负荷文件已导入为原始曲线，请点击生成负荷曲线。",
+    importFailedPrefix: "负荷文件导入失败：",
+    generationFailedPrefix: "负荷生成失败：",
+    selectedFileMessage: "请先选择负荷文件",
+    invalidLengthMessage: "负荷曲线应为8760点",
+    tableInvalidMessage: "当前时序表不是8760行，未更新负荷",
+  },
+};
+
 const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
@@ -122,8 +195,6 @@ const planningParameterSpecs = [
   ["frequency_nadir_evaluation_duration_s", "频率Nadir评估时长(s)", "number", { min: 1, max: 200, defaultValue: 20.0 }],
   ["nadir_linearization_samples_per_axis", "Nadir线性化每轴采样点数", "number", { min: 2, max: 7, integer: true, positive: true, integerMessage: "Nadir线性化每轴采样点数必须为正整数", defaultValue: 4 }],
   ["nadir_linearization_interval_ratio", "Nadir线性化区间比例", "number", { min: 0.05, max: 1, defaultValue: 0.5 }],
-  ["frequency_lower_disturbance_kw", "频率下限扰动功率(kW)", "number", { min: 0, defaultValue: 0.0 }],
-  ["frequency_upper_disturbance_kw", "频率上限扰动功率(kW)", "number", { min: 0, defaultValue: 0.0 }],
   ["network_synchronization_coefficient_base", "网络同步系数基值", "number", { min: -100, max: 100, defaultValue: 1.0 }],
   ["network_synchronization_coefficient_slope", "网络同步系数斜率", "number", { min: -100, max: 100, defaultValue: 0.0 }],
   ["network_synchronization_reference_load_kw", "网络同步系数基准负荷(kW)", "number", { min: 0, defaultValue: 0.0 }],
@@ -177,8 +248,6 @@ const planningParameterGroups = [
       "frequency_nadir_evaluation_duration_s",
       "nadir_linearization_samples_per_axis",
       "nadir_linearization_interval_ratio",
-      "frequency_lower_disturbance_kw",
-      "frequency_upper_disturbance_kw",
       "network_synchronization_coefficient_base",
       "network_synchronization_coefficient_slope",
       "network_synchronization_reference_load_kw",
@@ -297,6 +366,7 @@ const deviceFieldRules = {
 document.addEventListener("DOMContentLoaded", () => {
   bindTabs();
   bindSummaryTabs();
+  bindPlanningParameterInputs();
   bindTimeResizeHandle();
   bindTimeSeriesImportResizeHandle();
   bindWeatherPreviewResizeHandle();
@@ -359,6 +429,8 @@ function bindActions() {
   timeSeriesImportChart.addEventListener("pointerdown", startTimeSeriesImportValueDrag);
   document.getElementById("loadGeneratorMode").addEventListener("change", onLoadGeneratorModeChange);
   document.getElementById("openLoadGenerator").addEventListener("click", openLoadGenerator);
+  document.getElementById("openWindGenerator").addEventListener("click", openWindGenerator);
+  document.getElementById("openSolarGenerator").addEventListener("click", openSolarGenerator);
   document.getElementById("closeLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("generateLoadCurve").addEventListener("click", generateLoadCurve);
   document.getElementById("loadCurveImportFile").addEventListener("change", onLoadCurveImportFileChange);
@@ -761,13 +833,16 @@ function renderLoadGeneratorModeOptions() {
   const select = document.getElementById("loadGeneratorMode");
   if (!select) return;
   const currentValue = select.value || "random";
+  const spec = curveGeneratorSpec();
   const fixedOptions = [
     ["random", "随机曲线"],
     ["file", "文件导入"],
   ];
-  const templateOptions = state.loadCurveTemplates
-    .map((template) => `<option value="template:${escapeHtml(template.name)}">${escapeHtml(template.name)}</option>`)
-    .join("");
+  const templateOptions = spec.key === "load"
+    ? state.loadCurveTemplates
+      .map((template) => `<option value="template:${escapeHtml(template.name)}">${escapeHtml(template.name)}</option>`)
+      .join("")
+    : "";
   select.innerHTML = `${fixedOptions.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}${templateOptions}`;
   if (Array.from(select.options).some((option) => option.value === currentValue)) {
     select.value = currentValue;
@@ -892,6 +967,7 @@ async function renameScheme() {
 async function saveScheme() {
   if (!state.currentScheme || !state.payload) return alert("请先选择方案");
   try {
+    syncPlanningParameterInputs();
     if (!isTimeSeriesLoaded()) {
       await ensureTimeSeriesLoaded();
       if (!isTimeSeriesLoaded()) {
@@ -899,6 +975,7 @@ async function saveScheme() {
         return;
       }
     }
+    syncPlanningParameterInputs();
     const warnings = collectSaveWarnings();
     if (warnings.length) {
       renderSummary();
@@ -1483,21 +1560,62 @@ function openTimeSeriesImportModal() {
 }
 
 function openLoadGenerator() {
+  openCurveGenerator("load");
+}
+
+function openWindGenerator() {
+  openCurveGenerator("wind_speed");
+}
+
+function openSolarGenerator() {
+  openCurveGenerator("solar_irradiance");
+}
+
+function openCurveGenerator(target) {
   if (!state.currentScheme || !state.payload) {
     setWeatherImportStatus("请先选择方案", "error");
     return;
   }
+  state.curveGeneratorTarget = curveGeneratorSpecs[target] ? target : "load";
+  configureCurveGeneratorModal();
   prefillLoadGeneratorValues();
-  state.originalLoadCurve = currentLoadCurveRows();
+  state.originalLoadCurve = currentCurveGeneratorRows();
   state.loadGeneratorSourceCurve = null;
   state.loadGeneratorSourceName = "";
   state.pendingLoadCurve = null;
   showModalInBody(document.getElementById("loadGeneratorModal"));
-  setLoadGeneratorHint("输入最大值、最小值、平均值，并选择生成模式。");
+  setLoadGeneratorHint(`输入${curveGeneratorSpec().label}最大值、最小值、平均值，并选择生成模式。`);
   renderLoadGeneratorPreview(state.originalLoadCurve, []);
   loadLoadGeneratorModeSource(document.getElementById("loadGeneratorMode").value).catch((error) => {
     setLoadGeneratorHint(error.message || String(error), "error");
   });
+}
+
+function configureCurveGeneratorModal() {
+  const spec = curveGeneratorSpec();
+  const title = document.getElementById("loadGeneratorTitle");
+  const confirm = document.getElementById("confirmLoadGenerator");
+  const close = document.getElementById("closeLoadGenerator");
+  const generate = document.getElementById("generateLoadCurve");
+  const save = document.getElementById("saveLoadTemplate");
+  if (title) title.textContent = spec.title;
+  if (confirm) confirm.textContent = "确认";
+  if (close) close.setAttribute("aria-label", `取消${spec.title}`);
+  if (generate) generate.textContent = spec.generateLabel;
+  if (save) save.hidden = !spec.saveTemplateVisible;
+  setLabelText("loadGeneratorMaxLabel", spec.maxLabel);
+  setLabelText("loadGeneratorMinLabel", spec.minLabel);
+  setLabelText("loadGeneratorAverageLabel", spec.averageLabel);
+  renderLoadGeneratorModeOptions();
+}
+
+function setLabelText(id, text) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = text;
+}
+
+function curveGeneratorSpec() {
+  return curveGeneratorSpecs[state.curveGeneratorTarget] || curveGeneratorSpecs.load;
 }
 
 function closeLoadGenerator() {
@@ -1507,20 +1625,22 @@ function closeLoadGenerator() {
 }
 
 function cancelLoadGenerator() {
+  const spec = curveGeneratorSpec();
   state.pendingLoadCurve = null;
   state.originalLoadCurve = null;
   state.loadGeneratorSourceCurve = null;
   state.loadGeneratorSourceName = "";
   closeLoadGenerator();
-  setWeatherImportStatus("负荷生成已取消");
+  setWeatherImportStatus(spec.cancelMessage);
 }
 
 function prefillLoadGeneratorValues() {
+  const spec = curveGeneratorSpec();
   const rows = isTimeSeriesLoaded() ? state.payload.time_series || [] : [];
-  const values = rows.map((row) => Number(row.load)).filter(Number.isFinite);
+  const values = rows.map((row) => Number(row[spec.key])).filter(Number.isFinite);
   const max = values.length ? Math.max(...values) : 100;
-  const min = values.length ? Math.min(...values) : 20;
-  const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 60;
+  const min = values.length ? Math.min(...values) : 0;
+  const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : Math.max(min, max / 2);
   document.getElementById("loadGeneratorMax").value = roundUiNumber(max);
   document.getElementById("loadGeneratorMin").value = roundUiNumber(min);
   document.getElementById("loadGeneratorAverage").value = roundUiNumber(average);
@@ -1534,30 +1654,59 @@ async function generateLoadCurve() {
   const mode = document.getElementById("loadGeneratorMode").value;
   const { max, min, average } = currentLoadGeneratorTargets();
   const sourceRows = loadGeneratorPreviewSourceRows();
+  const spec = curveGeneratorSpec();
   if (mode === "file" && (!Array.isArray(state.loadGeneratorSourceCurve) || state.loadGeneratorSourceCurve.length !== 8760)) {
-    setLoadGeneratorHint("请先选择负荷文件", "error");
+    setLoadGeneratorHint(spec.selectedFileMessage, "error");
     importLoadCurveFile();
     return;
   }
-  setLoadGeneratorHint("正在生成负荷曲线...");
-  const requestBody = mode === "file"
-    ? { mode, max, min, average, source_load_curve: state.loadGeneratorSourceCurve }
-    : { mode, max, min, average };
-  const result = await api("/api/planning/load-curve/generate", {
+  setLoadGeneratorHint(`正在${spec.generateLabel}...`);
+  const requestBody = curveGeneratorRequestBody(mode, min, max, average);
+  const result = await api(curveGeneratorGenerateEndpoint(), {
     method: "POST",
     body: JSON.stringify(requestBody),
   }).catch((error) => {
     setLoadGeneratorHint(error.message || String(error), "error");
-    setWeatherImportStatus(`负荷生成失败：${error.message || String(error)}`, "error");
+    setWeatherImportStatus(`${spec.generationFailedPrefix}${error.message || String(error)}`, "error");
     return null;
   });
   if (!result) return;
-  state.pendingLoadCurve = result.load_curve || [];
+  state.pendingLoadCurve = normalizeCurveRows(curveRowsFromResponse(result), spec.key);
   renderLoadGeneratorPreview(sourceRows, state.pendingLoadCurve);
-  setLoadGeneratorHint("负荷曲线已生成，请检查预览后点击确定。", "ok");
+  setLoadGeneratorHint(spec.generatedMessage, "ok");
+}
+
+function curveGeneratorGenerateEndpoint() {
+  return curveGeneratorSpec().key === "load" ? "/api/planning/load-curve/generate" : "/api/planning/time-series-curve/generate";
+}
+
+function curveGeneratorImportEndpoint() {
+  return curveGeneratorSpec().key === "load" ? "/api/planning/load-curve/import" : "/api/planning/time-series-curve/import";
+}
+
+function curveGeneratorRequestBody(mode, min, max, average) {
+  const spec = curveGeneratorSpec();
+  if (spec.key === "load") {
+    return mode === "file"
+      ? { mode, max, min, average, source_load_curve: state.loadGeneratorSourceCurve }
+      : { mode, max, min, average };
+  }
+  return mode === "file"
+    ? { curve: spec.key, mode, max, min, average, source_curve: state.loadGeneratorSourceCurve }
+    : { curve: spec.key, mode, max, min, average };
+}
+
+function curveRowsFromResponse(result) {
+  const spec = curveGeneratorSpec();
+  if (spec.key === "load") return result.load_curve || result.curve_data || [];
+  return result[`${spec.key}_curve`] || result.curve_data || [];
 }
 
 async function saveLoadTemplate() {
+  if (curveGeneratorSpec().key !== "load") {
+    setLoadGeneratorHint("当前曲线暂不支持保存模板", "error");
+    return;
+  }
   const rows = loadCurveRowsForTemplate();
   if (!Array.isArray(rows) || rows.length !== 8760) {
     setLoadGeneratorHint("请先生成或导入负荷曲线", "error");
@@ -1627,35 +1776,36 @@ function onLoadGeneratorModeChange(event) {
 }
 
 async function loadLoadGeneratorModeSource(mode) {
+  const spec = curveGeneratorSpec();
   if (mode === "file") {
-    setLoadGeneratorHint("请选择负荷文件");
+    setLoadGeneratorHint(spec.selectedFileMessage);
     importLoadCurveFile();
     return;
   }
   const modeAtStart = mode;
-  setLoadGeneratorHint("正在载入原始负荷曲线...");
+  setLoadGeneratorHint(`正在载入原始${spec.label}曲线...`);
   let rows = [];
   let sourceName = "";
-  if (mode.startsWith("template:")) {
+  if (spec.key === "load" && mode.startsWith("template:")) {
     const templateName = mode.slice("template:".length);
     const template = state.loadCurveTemplates.find((item) => item.name === templateName);
-    rows = normalizeLoadCurveRows(template?.load_curve || []);
+    rows = normalizeCurveRows(template?.load_curve || [], spec.key);
     sourceName = templateName;
   }
   if (!rows.length) {
-    const result = await api("/api/planning/load-curve/generate", {
+    const result = await api(curveGeneratorGenerateEndpoint(), {
       method: "POST",
-      body: JSON.stringify({ mode, min: 0, max: 1, average: 0.5 }),
+      body: JSON.stringify(curveGeneratorRequestBody(mode, 0, 1, spec.key === "solar_irradiance" ? 0.25 : 0.5)),
     });
     if (document.getElementById("loadGeneratorMode").value !== modeAtStart) return;
-    rows = normalizeLoadCurveRows(result.load_curve || []);
+    rows = normalizeCurveRows(curveRowsFromResponse(result), spec.key);
     sourceName = result.mode || mode;
   }
   state.loadGeneratorSourceCurve = rows;
   state.loadGeneratorSourceName = sourceName;
   state.pendingLoadCurve = null;
   renderLoadGeneratorPreview(loadGeneratorPreviewSourceRows(), []);
-  setLoadGeneratorHint("原始负荷曲线已载入，请点击生成负荷曲线。", "ok");
+  setLoadGeneratorHint(spec.sourceLoadedMessage, "ok");
 }
 
 function importLoadCurveFile() {
@@ -1671,36 +1821,44 @@ function importLoadCurveFile() {
 async function onLoadCurveImportFileChange(event) {
   const file = event.target.files?.[0];
   if (!file) return;
-  setLoadGeneratorHint(`正在导入负荷文件：${file.name}`);
+  const spec = curveGeneratorSpec();
+  setLoadGeneratorHint(`正在导入${spec.label}文件：${file.name}`);
   try {
     const content_base64 = await arrayBufferToBase64(await file.arrayBuffer());
-    const result = await api("/api/planning/load-curve/import", {
+    const body = spec.key === "load"
+      ? { filename: file.name, content_base64, raw: true }
+      : { curve: spec.key, filename: file.name, content_base64, raw: true };
+    const result = await api(curveGeneratorImportEndpoint(), {
       method: "POST",
-      body: JSON.stringify({ filename: file.name, content_base64, raw: true }),
+      body: JSON.stringify(body),
     });
-    state.loadGeneratorSourceCurve = normalizeLoadCurveRows(result.load_curve || []);
+    state.loadGeneratorSourceCurve = normalizeCurveRows(curveRowsFromResponse(result), spec.key);
     state.loadGeneratorSourceName = file.name;
     state.pendingLoadCurve = null;
     renderLoadGeneratorPreview(loadGeneratorPreviewSourceRows(), []);
     const level = isTimeSeriesImportWarning(result) ? "warning" : "ok";
-    setLoadGeneratorHint(result.message || "负荷文件已导入为原始曲线，请点击生成负荷曲线。", level);
+    setLoadGeneratorHint(result.message || spec.importedMessage, level);
   } catch (error) {
     state.loadGeneratorSourceCurve = null;
     state.loadGeneratorSourceName = "";
     state.pendingLoadCurve = null;
     renderLoadGeneratorPreview(state.originalLoadCurve, []);
-    setLoadGeneratorHint(`负荷文件导入失败：${error.message || String(error)}`, "error");
+    setLoadGeneratorHint(`${spec.importFailedPrefix}${error.message || String(error)}`, "error");
   } finally {
     event.target.value = "";
   }
 }
 
 function normalizeLoadCurveRows(rows) {
+  return normalizeCurveRows(rows, "load");
+}
+
+function normalizeCurveRows(rows, key = curveGeneratorSpec().key) {
   if (!Array.isArray(rows)) return [];
   return rows
     .map((row, index) => {
-      const load = Number(typeof row === "object" && row !== null ? row.load : row);
-      return Number.isFinite(load) ? { hour_index: index + 1, load } : null;
+      const value = Number(typeof row === "object" && row !== null ? row[key] : row);
+      return Number.isFinite(value) ? { hour_index: index + 1, [key]: value } : null;
     })
     .filter(Boolean);
 }
@@ -1721,8 +1879,9 @@ function currentLoadGeneratorTargets() {
 }
 
 async function confirmGeneratedLoadCurve() {
+  const spec = curveGeneratorSpec();
   if (!Array.isArray(state.pendingLoadCurve) || state.pendingLoadCurve.length !== 8760) {
-    setLoadGeneratorHint("请先生成负荷曲线", "error");
+    setLoadGeneratorHint(`请先${spec.generateLabel}`, "error");
     return;
   }
   await ensureTimeSeriesLoaded().catch((error) => {
@@ -1736,24 +1895,25 @@ async function confirmGeneratedLoadCurve() {
   state.loadGeneratorSourceCurve = null;
   state.loadGeneratorSourceName = "";
   closeLoadGenerator();
-  setWeatherImportStatus("负荷曲线已确认，请保存方案", "ok");
+  setWeatherImportStatus(spec.confirmMessage, "ok");
 }
 
 function applyGeneratedLoadCurve(rows) {
+  const spec = curveGeneratorSpec();
   if (!Array.isArray(rows) || rows.length !== 8760) {
-    setLoadGeneratorHint(`负荷曲线应为8760点，当前为${Array.isArray(rows) ? rows.length : 0}`, "error");
+    setLoadGeneratorHint(`${spec.invalidLengthMessage}，当前为${Array.isArray(rows) ? rows.length : 0}`, "error");
     return;
   }
   if (!Array.isArray(state.payload.time_series) || state.payload.time_series.length !== 8760) {
-    setLoadGeneratorHint("当前时序表不是8760行，未更新负荷", "error");
+    setLoadGeneratorHint(spec.tableInvalidMessage, "error");
     return;
   }
   state.payload.time_series = state.payload.time_series.map((row, index) => {
     const curve = rows[index];
-    return { ...row, load: curve.load };
+    return { ...row, [spec.key]: curve[spec.key] };
   });
   setTimeSeriesLoaded(true);
-  selectCurve("load");
+  selectCurve(spec.key);
   renderChart();
   renderTimeTable();
   renderLimitSummary();
@@ -1770,25 +1930,30 @@ function setLoadGeneratorHint(message, level = "") {
 }
 
 function currentLoadCurveRows() {
+  return currentCurveGeneratorRows("load");
+}
+
+function currentCurveGeneratorRows(key = curveGeneratorSpec().key) {
   if (!isTimeSeriesLoaded()) return [];
   return (state.payload.time_series || []).map((row, index) => ({
     hour_index: index + 1,
-    load: Number(row.load),
-  })).filter((row) => Number.isFinite(row.load));
+    [key]: Number(row[key]),
+  })).filter((row) => Number.isFinite(row[key]));
 }
 
 function renderLoadGeneratorPreview(originalRows, generatedRows) {
   const svg = document.getElementById("loadGeneratorPreview");
   if (!svg) return;
+  const spec = curveGeneratorSpec();
   const width = svg.clientWidth || 720;
   const height = svg.clientHeight || 220;
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.innerHTML = "";
-  const original = Array.isArray(originalRows) ? originalRows.map((row) => Number(row.load)).filter(Number.isFinite) : [];
-  const generated = Array.isArray(generatedRows) ? generatedRows.map((row) => Number(row.load)).filter(Number.isFinite) : [];
+  const original = Array.isArray(originalRows) ? originalRows.map((row) => Number(row[spec.key])).filter(Number.isFinite) : [];
+  const generated = Array.isArray(generatedRows) ? generatedRows.map((row) => Number(row[spec.key])).filter(Number.isFinite) : [];
   const allValues = [...original, ...generated];
   if (!allValues.length) {
-    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">生成后显示负荷曲线预览</text>`;
+    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="15">${spec.emptyPreview}</text>`;
     state.loadPreviewMeta = null;
     return;
   }
@@ -1818,8 +1983,8 @@ function renderLoadGeneratorPreview(originalRows, generatedRows) {
       <line x1="92" y1="0" x2="120" y2="0" stroke="#21d5ff" stroke-width="1.8"/>
       <text x="128" y="4" fill="#dffbff" font-size="12">修改后</text>
     </g>
-    <text x="${padding.left}" y="${padding.top - 5}" fill="#dffbff" font-size="12">最大 ${roundUiNumber(max)}</text>
-    <text x="${padding.left}" y="${height - 8}" fill="#dffbff" font-size="12">最小 ${roundUiNumber(min)} / 平均 ${roundUiNumber(avg)}</text>
+    <text x="${padding.left}" y="${padding.top - 5}" fill="#dffbff" font-size="12">最大 ${roundUiNumber(max)} ${spec.unit}</text>
+    <text x="${padding.left}" y="${height - 8}" fill="#dffbff" font-size="12">最小 ${roundUiNumber(min)} / 平均 ${roundUiNumber(avg)} ${spec.unit}</text>
   `;
   state.loadPreviewMeta = { editable, width, height, padding, plotWidth, plotHeight, minValue: min, valueSpan: span, rows: generatedRows };
 }
@@ -1867,10 +2032,11 @@ function applyLoadPreviewValueEdit(event) {
   const point = loadPreviewValueFromPointer(event);
   if (!point) return false;
   const points = interpolatedCurveEditPoints(state.loadPreviewDrag?.lastPoint, point);
+  const spec = curveGeneratorSpec();
   let edited = false;
   points.forEach(({ index: pointIndex, value }) => {
     if (!state.pendingLoadCurve[pointIndex]) return;
-    state.pendingLoadCurve[pointIndex].load = roundEditedCurveValue(Math.max(0, value));
+    state.pendingLoadCurve[pointIndex][spec.key] = roundEditedCurveValue(Math.max(0, value));
     edited = true;
   });
   if (!edited) return false;
@@ -1879,7 +2045,7 @@ function applyLoadPreviewValueEdit(event) {
     state.loadPreviewDrag.lastPoint = point;
   }
   renderLoadGeneratorPreview(state.originalLoadCurve, state.pendingLoadCurve);
-  setLoadGeneratorHint("负荷曲线已调整，请检查预览后点击确定。", "ok");
+  setLoadGeneratorHint(spec.adjustedMessage, "ok");
   return true;
 }
 
@@ -3111,11 +3277,6 @@ function renderPlanningParameters() {
   host.querySelectorAll("[data-planning-parameter-tab]").forEach((button) => {
     button.addEventListener("click", () => selectPlanningParameterGroup(button.dataset.planningParameterTab));
   });
-  host.querySelectorAll("[data-planning-key]:not([data-planning-group-toggle])").forEach((input) => {
-    const eventName = input.tagName === "SELECT" || input.type === "checkbox" ? "change" : "input";
-    input.addEventListener(eventName, onPlanningParameterInput);
-  });
-  host.querySelectorAll("[data-planning-group-toggle]").forEach((input) => input.addEventListener("change", onPlanningGroupToggle));
 }
 
 function renderPlanningParameterTabs(activeKey) {
@@ -3187,10 +3348,35 @@ function onPlanningGroupToggle(event) {
 
 function onPlanningParameterInput(event) {
   const input = event.target;
-  const row = planningParameterRow();
-  row[input.dataset.planningKey] = input.dataset.planningType === "boolean" ? numericBooleanPlanningValue(input.value) : input.type === "checkbox" ? input.checked : coerceInput(input.value);
+  syncPlanningParameterInput(input);
   renderLimitSummary();
   renderSummary();
+}
+
+function bindPlanningParameterInputs() {
+  document.addEventListener("input", onPlanningParameterInputEvent);
+  document.addEventListener("change", onPlanningParameterInputEvent);
+}
+
+function onPlanningParameterInputEvent(event) {
+  const input = event.target;
+  if (!input?.matches?.("[data-planning-key]")) return;
+  if (input.dataset.planningGroupToggle) {
+    if (event.type === "change") onPlanningGroupToggle(event);
+    return;
+  }
+  onPlanningParameterInput(event);
+}
+
+function syncPlanningParameterInputs() {
+  if (!state.payload) return;
+  document.querySelectorAll("[data-planning-key]").forEach((input) => syncPlanningParameterInput(input));
+}
+
+function syncPlanningParameterInput(input) {
+  if (!input || !input.dataset || !input.dataset.planningKey || !state.payload) return;
+  const row = planningParameterRow();
+  row[input.dataset.planningKey] = input.dataset.planningType === "boolean" ? numericBooleanPlanningValue(input.value) : input.type === "checkbox" ? (input.checked ? 1 : 0) : coerceInput(input.value);
 }
 
 function planningParameterRow() {

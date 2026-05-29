@@ -554,7 +554,7 @@ def solve_milp_with_mosek(
 ) -> SimpleNamespace:
     import mosek
 
-    emit(log, "info", "调用MOSEK求解器求解混合整数线性规划", None)
+    emit(log, "info", "调用MOSEK原生Task API求解混合整数线性规划", None)
     objective = np.asarray(objective, dtype=float)
     integrality = np.asarray(integrality, dtype=int)
     lower_bounds = np.asarray(lower_bounds, dtype=float)
@@ -574,25 +574,17 @@ def solve_milp_with_mosek(
             )
             if mosek_log_stream:
                 task.set_Stream(mosek.streamtype.log, mosek_log_stream.write)
-            task.appendvars(len(objective))
-            for index in range(len(objective)):
-                task.putcj(index, float(objective[index]))
-                bound_key, lower, upper = mosek_bound(mosek, lower_bounds[index], upper_bounds[index])
-                task.putvarbound(index, bound_key, lower, upper)
-                if integrality[index]:
-                    task.putvartype(index, mosek.variabletype.type_int)
-
-            task.appendcons(matrix.shape[0])
-            for row_index in range(matrix.shape[0]):
-                row = matrix.getrow(row_index)
-                task.putarow(
-                    row_index,
-                    row.indices.astype(int).tolist(),
-                    row.data.astype(float).tolist(),
-                )
-                bound_key, lower, upper = mosek_bound(mosek, constraint_lower[row_index], constraint_upper[row_index])
-                task.putconbound(row_index, bound_key, lower, upper)
-
+            put_mosek_linear_problem_data(
+                mosek,
+                task,
+                objective,
+                integrality,
+                lower_bounds,
+                upper_bounds,
+                matrix,
+                constraint_lower,
+                constraint_upper,
+            )
             task.putobjsense(mosek.objsense.minimize)
             task.optimize()
             if mosek_log_stream:
@@ -613,6 +605,60 @@ def solve_milp_with_mosek(
         solver="mosek",
         status=solution_status,
     )
+
+
+def put_mosek_linear_problem_data(
+    mosek_module: Any,
+    task: Any,
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    matrix: Any,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+) -> None:
+    variable_count = len(objective)
+    constraint_count = int(matrix.shape[0])
+    variable_indices = np.arange(variable_count, dtype=np.int32).tolist()
+    constraint_indices = np.arange(constraint_count, dtype=np.int32).tolist()
+
+    task.appendvars(variable_count)
+    if variable_indices:
+        task.putclist(variable_indices, np.asarray(objective, dtype=float).tolist())
+        variable_bounds = [mosek_bound(mosek_module, lower_bounds[index], upper_bounds[index]) for index in range(variable_count)]
+        task.putvarboundlist(
+            variable_indices,
+            [item[0] for item in variable_bounds],
+            [item[1] for item in variable_bounds],
+            [item[2] for item in variable_bounds],
+        )
+        integer_indices = np.flatnonzero(np.asarray(integrality, dtype=int)).astype(np.int32).tolist()
+        if integer_indices:
+            task.putvartypelist(
+                integer_indices,
+                [mosek_module.variabletype.type_int] * len(integer_indices),
+            )
+
+    task.appendcons(constraint_count)
+    if constraint_indices:
+        constraint_bounds = [mosek_bound(mosek_module, constraint_lower[index], constraint_upper[index]) for index in range(constraint_count)]
+        task.putconboundlist(
+            constraint_indices,
+            [item[0] for item in constraint_bounds],
+            [item[1] for item in constraint_bounds],
+            [item[2] for item in constraint_bounds],
+        )
+
+    coo = matrix.tocoo()
+    coo.sum_duplicates()
+    nonzero_mask = np.asarray(coo.data, dtype=float) != 0.0
+    if np.any(nonzero_mask):
+        task.putaijlist(
+            coo.row[nonzero_mask].astype(np.int32).tolist(),
+            coo.col[nonzero_mask].astype(np.int32).tolist(),
+            coo.data[nonzero_mask].astype(float).tolist(),
+        )
 
 
 def solve_milp_with_scipy(

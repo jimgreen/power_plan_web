@@ -107,6 +107,66 @@ class MilpSolverTest(unittest.TestCase):
         self.assertEqual(result.solver, "mosek")
         mosek_mock.assert_called_once()
 
+    def test_mosek_task_data_is_loaded_through_native_bulk_api(self):
+        class FakeMosek:
+            class boundkey:
+                fx = "fx"
+                ra = "ra"
+                lo = "lo"
+                up = "up"
+                fr = "fr"
+
+            class variabletype:
+                type_int = "int"
+
+        class FakeTask:
+            def __init__(self):
+                self.calls = []
+
+            def appendvars(self, count):
+                self.calls.append(("appendvars", count))
+
+            def appendcons(self, count):
+                self.calls.append(("appendcons", count))
+
+            def putclist(self, indices, values):
+                self.calls.append(("putclist", indices, values))
+
+            def putvarboundlist(self, indices, keys, lower, upper):
+                self.calls.append(("putvarboundlist", indices, keys, lower, upper))
+
+            def putvartypelist(self, indices, types):
+                self.calls.append(("putvartypelist", indices, types))
+
+            def putconboundlist(self, indices, keys, lower, upper):
+                self.calls.append(("putconboundlist", indices, keys, lower, upper))
+
+            def putaijlist(self, rows, cols, values):
+                self.calls.append(("putaijlist", rows, cols, values))
+
+        task = FakeTask()
+        milp_solver.put_mosek_linear_problem_data(
+            FakeMosek,
+            task,
+            np.array([1.0, 2.0]),
+            np.array([0, 1]),
+            np.array([0.0, 0.0]),
+            np.array([np.inf, 1.0]),
+            sparse.csr_matrix([[1.0, 0.0], [2.0, 3.0]]),
+            np.array([5.0, -np.inf]),
+            np.array([5.0, 10.0]),
+        )
+
+        self.assertIn(("appendvars", 2), task.calls)
+        self.assertIn(("appendcons", 2), task.calls)
+        call_names = [call[0] for call in task.calls]
+        self.assertIn("putclist", call_names)
+        self.assertIn("putvarboundlist", call_names)
+        self.assertIn("putvartypelist", call_names)
+        self.assertIn("putconboundlist", call_names)
+        self.assertIn("putaijlist", call_names)
+        self.assertNotIn("putarow", call_names)
+
     def test_unknown_solver_option_raises_value_error(self):
         args = self._tiny_problem()
         with self.assertRaises(ValueError):
