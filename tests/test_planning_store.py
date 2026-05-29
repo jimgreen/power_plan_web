@@ -439,6 +439,8 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("planning_load_factor", row)
         self.assertEqual(row["green_power_ratio_lower"], 0.2)
         self.assertEqual(row["optimization_time_limit_minutes"], 60)
+        self.assertEqual(row["diesel_minimum_on_hours"], 4)
+        self.assertEqual(row["diesel_minimum_off_hours"], 4)
         self.assertEqual(row["initial_storage_soc_ratio"], 0.5)
         self.assertEqual(row["initial_hydrogen_storage_ratio"], 0.5)
         self.assertNotIn("storage_charge_efficiency", row)
@@ -645,6 +647,8 @@ class PlanningStoreTest(unittest.TestCase):
     def test_validate_planning_parameter_ranges(self):
         payload = planning_store.default_payload("方案A")
         payload["planning_parameters"][0]["green_power_ratio_lower"] = 1.2
+        payload["planning_parameters"][0]["diesel_minimum_on_hours"] = 24.5
+        payload["planning_parameters"][0]["diesel_minimum_off_hours"] = 25
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 9
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = -0.1
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 1.1
@@ -657,6 +661,8 @@ class PlanningStoreTest(unittest.TestCase):
         messages = planning_store.validate_payload(payload)
 
         self.assertTrue(any("绿色电量占比下限(0.0-1.0)不能大于1" in item["message"] for item in messages))
+        self.assertTrue(any("柴发开机持续工作小时数下限必须为整数" in item["message"] for item in messages))
+        self.assertTrue(any("柴发关机持续工作小时数下限不能大于24" in item["message"] for item in messages))
         self.assertTrue(any("规划求解时间上限(分钟)不能小于10" in item["message"] for item in messages))
         self.assertTrue(any("初始电储SOC(0.0-1.0)不能小于0" in item["message"] for item in messages))
         self.assertTrue(any("初始氢储SOC(0.0-1.0)不能大于1" in item["message"] for item in messages))

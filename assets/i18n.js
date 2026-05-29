@@ -140,6 +140,8 @@
     "扰动后安全参数": "Post-Disturbance Security Parameters",
     "频率安全参数": "Frequency Security Parameters",
     "柴油价格(万元/吨)": "Diesel Price (10k CNY/t)",
+    "柴发开机持续工作小时数下限": "Diesel Minimum On Duration (hours)",
+    "柴发关机持续工作小时数下限": "Diesel Minimum Off Duration (hours)",
     "绿色电量占比下限(0.0-1.0)": "Green Energy Ratio Lower Bound (0.0-1.0)",
     "规划求解时间上限(分钟)": "Planning Solver Time Limit (minutes)",
     "初始电储SOC(0.0-1.0)": "Initial Battery SOC (0.0-1.0)",

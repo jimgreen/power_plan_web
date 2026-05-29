@@ -6253,6 +6253,8 @@ class PowerPlanServerTest(unittest.TestCase):
             "扰动后安全参数",
             "频率安全参数",
             "柴油价格(万元/吨)",
+            "柴发开机持续工作小时数下限",
+            "柴发关机持续工作小时数下限",
             "绿色电量占比下限(0.0-1.0)",
             "规划求解时间上限(分钟)",
             "初始电储SOC(0.0-1.0)",
@@ -6287,6 +6289,9 @@ class PowerPlanServerTest(unittest.TestCase):
         ):
             self.assertIn(label, script)
         self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"nominal_frequency_hz"'))
+        self.assertLess(script.index('"diesel_price"'), script.index('"diesel_minimum_on_hours"'))
+        self.assertLess(script.index('"diesel_minimum_on_hours"'), script.index('"diesel_minimum_off_hours"'))
+        self.assertLess(script.index('"diesel_minimum_off_hours"'), script.index('"green_power_ratio_lower"'))
         self.assertLess(script.index('"nominal_frequency_hz"'), script.index('"frequency_nadir_lower_hz"'))
         self.assertLess(script.index('"frequency_governor_time_constant_s"'), script.index('"frequency_nadir_evaluation_duration_s"'))
         self.assertLess(script.index('"nadir_linearization_interval_ratio"'), script.index('"frequency_lower_disturbance_kw"'))

@@ -99,6 +99,38 @@ class DispatchMilpTest(unittest.TestCase):
         self.assertGreaterEqual(builder.constraint_count, 9)
         self.assertGreater(builder.nonzero_count, 0)
 
+    def test_minimum_commitment_duration_constraints_use_aggregate_counts(self):
+        builder = dispatch_milp.MilpModelBuilder()
+        quantity = builder.add_var(("quantity",), lower=0, upper=2, integer=True)
+        on_indices = [builder.add_var(("on", hour), lower=0, upper=2, integer=True) for hour in range(3)]
+        startup_indices = [builder.add_var(("startup", hour), lower=0, upper=2, integer=True) for hour in range(3)]
+        shutdown_indices = [builder.add_var(("shutdown", hour), lower=0, upper=2, integer=True) for hour in range(3)]
+
+        dispatch_milp.add_minimum_commitment_duration_constraints(
+            builder,
+            on_indices=on_indices,
+            quantity_index=quantity,
+            startup_indices=startup_indices,
+            shutdown_indices=shutdown_indices,
+            minimum_on_hours=2,
+            minimum_off_hours=2,
+        )
+
+        index_to_key = {index: key for key, index in builder.variables.items()}
+        matrix = builder.constraint_matrix().tocsr()
+        constraints = []
+        for row_index in range(builder.constraint_count):
+            row = matrix.getrow(row_index)
+            terms = {index_to_key[int(column)]: float(value) for column, value in zip(row.indices, row.data)}
+            constraints.append((terms, builder.constraint_lower[row_index], builder.constraint_upper[row_index]))
+
+        self.assertIn(({("startup", 1): 1.0, ("on", 1): -1.0, ("on", 0): 1.0}, 0.0, np.inf), constraints)
+        self.assertIn(({("shutdown", 1): 1.0, ("on", 1): 1.0, ("on", 0): -1.0}, 0.0, np.inf), constraints)
+        self.assertIn(({("on", 1): 1.0, ("on", 2): 1.0, ("startup", 1): -2.0}, 0.0, np.inf), constraints)
+        self.assertIn(({("on", 2): 1.0, ("startup", 2): -2.0}, 0.0, np.inf), constraints)
+        self.assertIn(({("on", 1): -1.0, ("on", 2): -1.0, ("quantity",): 2.0, ("shutdown", 1): -2.0}, 0.0, np.inf), constraints)
+        self.assertIn(({("on", 2): -1.0, ("quantity",): 1.0, ("shutdown", 2): -2.0}, 0.0, np.inf), constraints)
+
 
 if __name__ == "__main__":
     unittest.main()

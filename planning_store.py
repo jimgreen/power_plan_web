@@ -150,6 +150,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
         "规划参数",
         [
             "diesel_price",
+            "diesel_minimum_on_hours",
+            "diesel_minimum_off_hours",
             "green_power_ratio_lower",
             "optimization_time_limit_minutes",
             "preferred_solver",
@@ -290,6 +292,8 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
 # device family.
 DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "diesel_price": 0,
+    "diesel_minimum_on_hours": 4,
+    "diesel_minimum_off_hours": 4,
     "green_power_ratio_lower": 0,
     "optimization_time_limit_minutes": 60,
     "preferred_solver": "auto",
@@ -1190,6 +1194,13 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         return number
 
     number_in_range("diesel_price", "柴油价格(万元/吨)", 0)
+    for key, label in (
+        ("diesel_minimum_on_hours", "柴发开机持续工作小时数下限"),
+        ("diesel_minimum_off_hours", "柴发关机持续工作小时数下限"),
+    ):
+        hours = number_in_range(key, label, 0, 24)
+        if hours is not None and not float(hours).is_integer():
+            messages.append({"level": "error", "message": f"{label}必须为整数"})
     number_in_range("green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", 0, 1)
     time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 120)
     if time_limit is not None and not float(time_limit).is_integer():

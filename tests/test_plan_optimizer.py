@@ -468,6 +468,8 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(objective_cost(("diesel_power", 0, 0)), 0.001)
         self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
         self.assertEqual(objective_cost(("diesel_on_count", 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
+        self.assertEqual(objective_cost(("diesel_startup_count", 0, 0)), 0.0)
+        self.assertEqual(objective_cost(("diesel_shutdown_count", 0, 0)), 0.0)
         self.assertEqual(objective_cost(("electrolyzer_on_count", 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
         for key in (
             ("wind_curtailed", 0),
@@ -480,11 +482,15 @@ class PlanOptimizerTest(unittest.TestCase):
         ):
             self.assertEqual(objective_cost(key), 0.0)
         self.assertIn(("diesel_on_count", 0, 0), variables)
+        self.assertIn(("diesel_startup_count", 0, 0), variables)
+        self.assertIn(("diesel_shutdown_count", 0, 0), variables)
         self.assertIn(("electrolyzer_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_up_available_count", 0, 0), variables)
         self.assertIn(("grid_storage_down_available_count", 0, 0), variables)
         self.assertEqual(captured["integrality"][variables[("diesel_on_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("diesel_startup_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("diesel_shutdown_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("electrolyzer_on_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("grid_storage_on_count", 0, 0)]], 1)
         for unit in range(2):
@@ -540,6 +546,8 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertFalse(any(key[0] in forbidden_unit_variables for key in variables))
         for key in (
             ("diesel_on_count", 0, 0),
+            ("diesel_startup_count", 0, 0),
+            ("diesel_shutdown_count", 0, 0),
             ("electrolyzer_on_count", 0, 0),
             ("grid_storage_on_count", 0, 0),
             ("grid_storage_up_available_count", 0, 0),
