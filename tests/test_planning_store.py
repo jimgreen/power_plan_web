@@ -6,7 +6,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +40,19 @@ class PlanningStoreTest(unittest.TestCase):
         payload = self.store.create_scheme("方案A")
 
         workbook = self.tmp_dir / "方案A" / "parameters.xlsx"
+        time_series_workbook = self.tmp_dir / "方案A" / "time_series.xlsx"
         self.assertTrue(workbook.exists())
+        self.assertTrue(time_series_workbook.exists())
+        parameter_book = load_workbook(workbook, read_only=True)
+        try:
+            self.assertNotIn("8760时序数据", parameter_book.sheetnames)
+        finally:
+            parameter_book.close()
+        curve_book = load_workbook(time_series_workbook, read_only=True)
+        try:
+            self.assertEqual(curve_book.sheetnames, ["8760时序数据"])
+        finally:
+            curve_book.close()
         self.assertEqual(payload["scheme"], "方案A")
         self.assertEqual(len(payload["time_series"]), 8760)
         self.assertIn("diesel_generators", payload)
@@ -141,6 +153,16 @@ class PlanningStoreTest(unittest.TestCase):
 
         self.store.write_scheme("方案A", payload)
         saved = self.store.read_scheme("方案A")
+        parameter_book = load_workbook(self.tmp_dir / "方案A" / "parameters.xlsx", read_only=True)
+        try:
+            self.assertNotIn("8760时序数据", parameter_book.sheetnames)
+        finally:
+            parameter_book.close()
+        curve_book = load_workbook(self.tmp_dir / "方案A" / "time_series.xlsx", read_only=True)
+        try:
+            self.assertIn("8760时序数据", curve_book.sheetnames)
+        finally:
+            curve_book.close()
 
         self.assertEqual(saved["time_series"][0]["wind_speed"], 8.5)
         self.assertEqual(saved["time_series"][0]["temperature"], -12.5)
@@ -203,15 +225,47 @@ class PlanningStoreTest(unittest.TestCase):
             first = self.store.read_scheme("方案A")
             first["diesel_generators"][0]["name"] = "缓存外部修改"
             second = self.store.read_scheme("方案A")
-            self.assertEqual(load_count, 1)
+            self.assertEqual(load_count, 2)
             self.assertNotEqual(second["diesel_generators"][0]["name"], "缓存外部修改")
 
             payload["diesel_generators"][0]["name"] = "缓存失效后重新读取"
             self.store.write_scheme("方案A", payload)
             third = self.store.read_scheme("方案A")
 
-        self.assertEqual(load_count, 2)
+        self.assertEqual(load_count, 3)
         self.assertEqual(third["diesel_generators"][0]["name"], "缓存失效后重新读取")
+
+    def test_write_scheme_skips_time_series_workbook_when_curve_rows_do_not_change(self):
+        payload = self.store.create_scheme("方案A")
+        save_labels = []
+        original_save = planning_store.file_ops.save_workbook_with_retry
+
+        def tracking_save(workbook, path, label):
+            save_labels.append(label)
+            return original_save(workbook, path, label)
+
+        payload["diesel_generators"][0]["name"] = "只改设备"
+        with patch.object(planning_store.file_ops, "save_workbook_with_retry", side_effect=tracking_save):
+            self.store.write_scheme("方案A", payload)
+
+        self.assertEqual(save_labels, ["参数文件"])
+        self.assertEqual(self.store.read_scheme("方案A")["diesel_generators"][0]["name"], "只改设备")
+
+    def test_write_scheme_updates_time_series_workbook_when_curve_rows_change(self):
+        payload = self.store.create_scheme("方案A")
+        save_labels = []
+        original_save = planning_store.file_ops.save_workbook_with_retry
+
+        def tracking_save(workbook, path, label):
+            save_labels.append(label)
+            return original_save(workbook, path, label)
+
+        payload["time_series"][0]["load"] = 999
+        with patch.object(planning_store.file_ops, "save_workbook_with_retry", side_effect=tracking_save):
+            self.store.write_scheme("方案A", payload)
+
+        self.assertEqual(save_labels, ["参数文件", "8760时序数据文件"])
+        self.assertEqual(self.store.read_scheme("方案A")["time_series"][0]["load"], 999)
 
     def test_read_scheme_repairs_corrupted_time_series_sheet_and_keeps_other_parameters(self):
         self.store.create_scheme("方案A")
@@ -221,7 +275,8 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["diesel_price"] = 1.23
         self.store.write_scheme("方案A", payload)
         workbook_path = self.tmp_dir / "方案A" / "parameters.xlsx"
-        corrupt_zip_member(workbook_path, "xl/worksheets/sheet1.xml")
+        time_series_path = self.tmp_dir / "方案A" / "time_series.xlsx"
+        corrupt_zip_member(time_series_path, "xl/worksheets/sheet1.xml")
 
         repaired = self.store.read_scheme("方案A")
 
@@ -235,7 +290,7 @@ class PlanningStoreTest(unittest.TestCase):
                 for item in repaired["validation"]
             )
         )
-        self.assertTrue(any(workbook_path.parent.glob("parameters.corrupt-*.xlsx.bak")))
+        self.assertTrue(any(workbook_path.parent.glob("time_series.corrupt-*.xlsx.bak")))
         overview = self.store.read_scheme_overview("方案A")
         self.assertEqual(overview["time_series_count"], 8760)
         reread = self.store.read_scheme("方案A")
@@ -384,6 +439,8 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("planning_load_factor", row)
         self.assertEqual(row["green_power_ratio_lower"], 0.2)
         self.assertEqual(row["optimization_time_limit_minutes"], 60)
+        self.assertEqual(row["diesel_minimum_on_hours"], 12)
+        self.assertEqual(row["diesel_minimum_off_hours"], 12)
         self.assertEqual(row["initial_storage_soc_ratio"], 0.5)
         self.assertEqual(row["initial_hydrogen_storage_ratio"], 0.5)
         self.assertNotIn("storage_charge_efficiency", row)
@@ -590,6 +647,8 @@ class PlanningStoreTest(unittest.TestCase):
     def test_validate_planning_parameter_ranges(self):
         payload = planning_store.default_payload("方案A")
         payload["planning_parameters"][0]["green_power_ratio_lower"] = 1.2
+        payload["planning_parameters"][0]["diesel_minimum_on_hours"] = 24.5
+        payload["planning_parameters"][0]["diesel_minimum_off_hours"] = 25
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 9
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = -0.1
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 1.1
@@ -602,6 +661,8 @@ class PlanningStoreTest(unittest.TestCase):
         messages = planning_store.validate_payload(payload)
 
         self.assertTrue(any("绿色电量占比下限(0.0-1.0)不能大于1" in item["message"] for item in messages))
+        self.assertTrue(any("柴发开机持续工作小时数下限必须为整数" in item["message"] for item in messages))
+        self.assertTrue(any("柴发关机持续工作小时数下限不能大于24" in item["message"] for item in messages))
         self.assertTrue(any("规划求解时间上限(分钟)不能小于10" in item["message"] for item in messages))
         self.assertTrue(any("初始电储SOC(0.0-1.0)不能小于0" in item["message"] for item in messages))
         self.assertTrue(any("初始氢储SOC(0.0-1.0)不能大于1" in item["message"] for item in messages))
@@ -610,6 +671,16 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertTrue(any("负荷向上扰动系数(0.0-0.5)不能小于0" in item["message"] for item in messages))
         self.assertTrue(any("负荷向下扰动系数(0.0-0.5)不能大于0.5" in item["message"] for item in messages))
         self.assertTrue(any("新能源向下扰动系数(0.0-0.5)必须为数值" in item["message"] for item in messages))
+
+    def test_validate_planning_parameters_accepts_preferred_solver_text(self):
+        payload = planning_store.default_payload("方案A")
+        payload["planning_parameters"][0]["preferred_solver"] = "cplex"
+
+        messages = planning_store.validate_payload(payload, require_time_series=False)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        self.assertNotIn("优先求解器必须为数值", message_text)
+        self.assertNotIn("优先求解器选项无效", message_text)
 
     def test_frequency_security_planning_parameters_include_extended_defaults_and_ranges(self):
         payload = planning_store.default_payload("方案A")
@@ -714,6 +785,7 @@ def save_test_workbook_over(workbook: Workbook, workbook_path: Path) -> None:
     try:
         planning_store.file_ops.save_workbook_with_retry(workbook, tmp_path, "测试参数文件")
         planning_store.replace_workbook_with_retry(tmp_path, workbook_path)
+        (workbook_path.parent / planning_store.TIME_SERIES_WORKBOOK_NAME).unlink(missing_ok=True)
     finally:
         workbook.close()
 

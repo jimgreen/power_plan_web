@@ -3,6 +3,10 @@ __pycache__/
 .pytest_cache/
 .playwright-cli/
 server*.log
+logs/
+output/doc/encoding_test.txt
+output/doc/render_check*/
+output/doc/lo_profile*/
 vendor/
 planning_schemes/
 *.sqlite

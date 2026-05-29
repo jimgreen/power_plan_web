@@ -136,6 +136,9 @@ COMPARISON_CURVE_SLICE_CACHE = file_cache.FileCache("comparison_curve_slice", ma
 LOAD_CURVE_TEMPLATE_CACHE = file_cache.FileCache("load_curve_templates", max_entries=8)
 STATIC_FILE_BYTES_CACHE = file_cache.FileCache("static_file_bytes", max_entries=256, copy_values=False)
 TASK_RESULT_FILE_LIST_CACHE = file_cache.FileCache("task_result_file_list", max_entries=256)
+FREQUENCY_CURVE_DURATION_SECONDS = 3.0
+FREQUENCY_CURVE_STEP_SECONDS = 0.05
+FREQUENCY_CURVE_POINT_COUNT = int(round(FREQUENCY_CURVE_DURATION_SECONDS / FREQUENCY_CURVE_STEP_SECONDS)) + 1
 COMPARISON_CURVE_GROUPS = {
     "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
     "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
@@ -213,12 +216,16 @@ RESULT_WORKBOOK_HEADER_TO_FIELD.update(
         "环境温度": "temperature",
         "负荷总功率": "load",
         "柴发总功率": "diesel_power",
+        "柴发开机容量": "diesel_capacity",
         "风力最大可发": "wind_available",
         "风机总功率": "wind_power",
         "光伏最大可发": "pv_available",
         "光伏总功率": "pv_power",
+        "新能源总出力": "renewable_power",
         "新能源最大可发": "renewable_available",
         "电储能总功率": "storage_power",
+        "构网储能总容量": "grid_storage_capacity",
+        "构网储能总功率": "grid_storage_power",
         "电储电量": "storage_soc",
         "电制氢总功率": "hydrogen_production_power",
         "储氢罐氢储量": "hydrogen_storage",
@@ -756,11 +763,18 @@ class OptimizationRuntime:
             self.progress = 100
             self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
-            self.status = "已完成"
-            self.end_time = _now_text()
-            result_path = export_optimization_results_workbook(self._runtime_payload_unlocked())
+            completed_end_time = _now_text()
+            result_path = export_optimization_results_workbook(
+                self._payload_unlocked(
+                    read_workbook=False,
+                    status_override="已完成",
+                    end_time_override=completed_end_time,
+                )
+            )
             self.result_file = str(result_path)
             self._results_exported = True
+            self.status = "已完成"
+            self.end_time = completed_end_time
             self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
@@ -783,25 +797,36 @@ class OptimizationRuntime:
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
 
-    def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
+    def _payload_unlocked(
+        self,
+        include_hourly_curves: bool = True,
+        read_workbook: bool = True,
+        status_override: str | None = None,
+        end_time_override: str | None = None,
+    ) -> dict:
         result_path = optimization_result_workbook_path(self.scheme)
         workbook_payload = (
             read_result_workbook_display_payload_for_response(result_path, include_hourly_curves=include_hourly_curves)
-            if self.status != "运行中"
+            if read_workbook and self.status != "运行中"
             else None
         )
         if workbook_payload:
             self.result_file = str(result_path)
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         return {
-            "status": self.status,
+            "status": status,
             "scheme": self.scheme,
             "start_time": self.start_time,
-            "end_time": self.end_time,
+            "end_time": end_time,
             "progress": self.progress,
             "result_file": self.result_file,
             "process_id": self.process_id or "",
-            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
-            "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, end_time),
+            "metrics": merge_runtime_metrics(
+                self._metrics_unlocked(status_override=status, end_time_override=end_time),
+                workbook_payload.get("metrics", []) if workbook_payload else [],
+            ),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
         }
@@ -836,11 +861,13 @@ class OptimizationRuntime:
             "logs": list(self._logs),
         }
 
-    def _metrics_unlocked(self) -> list[dict]:
+    def _metrics_unlocked(self, status_override: str | None = None, end_time_override: str | None = None) -> list[dict]:
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         base = [
-            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "状态", "value": status, "unit": ""},
             {"label": "开始", "value": self.start_time or "-", "unit": ""},
-            {"label": "完成", "value": self.end_time or "-", "unit": ""},
+            {"label": "完成", "value": end_time or "-", "unit": ""},
         ]
         existing_labels = {item["label"] for item in base}
         for metric in self._metrics:
@@ -1239,7 +1266,7 @@ class OptimizationRuntime:
     def _export_results_once_unlocked(self) -> None:
         if self._results_exported:
             return
-        result_path = export_optimization_results_workbook(self._runtime_payload_unlocked())
+        result_path = export_optimization_results_workbook(self._payload_unlocked(read_workbook=False))
         self.result_file = str(result_path)
         self._results_exported = True
 
@@ -1328,13 +1355,8 @@ def export_optimization_results_workbook(payload: dict) -> Path:
     scheme = str(payload.get("scheme") or "未选择方案")
     result_path = optimization_result_workbook_path(scheme)
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = build_optimization_results_workbook(payload)
-    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    try:
-        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
-    finally:
-        workbook.close()
-    replace_result_workbook_with_retry(tmp_path, result_path)
+    save_result_workbook(build_optimization_results_workbook(payload, include_curves=False), result_path, "结果文件")
+    save_result_workbook(build_result_curves_workbook(payload), result_curves_workbook_path(result_path), "曲线结果文件")
     return result_path
 
 
@@ -1349,13 +1371,8 @@ def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict])
     if result_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
         raise ValueError("默认结果文件不允许修改")
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    workbook = build_optimization_results_workbook(payload)
-    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
-    try:
-        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
-    finally:
-        workbook.close()
-    replace_result_workbook_with_retry(tmp_path, result_path)
+    save_result_workbook(build_optimization_results_workbook(payload, include_curves=False), result_path, "结果文件")
+    save_result_workbook(build_result_curves_workbook(payload), result_curves_workbook_path(result_path), "曲线结果文件")
     return result_path
 
 
@@ -1370,13 +1387,28 @@ def replace_result_workbook_with_retry(source: Path, target: Path, attempts: int
     file_cache.invalidate_path(target)
 
 
-def build_optimization_results_workbook(payload: dict) -> Workbook:
+def save_result_workbook(workbook: Workbook, result_path: Path, label: str) -> None:
+    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+    try:
+        file_ops.save_workbook_with_retry(workbook, tmp_path, label)
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, result_path)
+
+
+def result_curves_workbook_path(result_path: Path) -> Path:
+    stem = result_path.stem
+    if stem.endswith("_results"):
+        stem = stem[: -len("_results")]
+    return result_path.with_name(f"{stem}_curves.xlsx")
+
+
+def build_optimization_results_workbook(payload: dict, include_curves: bool = False) -> Workbook:
     workbook = Workbook()
     workbook.remove(workbook.active)
     results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
     logs = payload.get("logs") if isinstance(payload.get("logs"), list) else []
-    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
 
     append_rows_sheet(
         workbook,
@@ -1400,13 +1432,27 @@ def build_optimization_results_workbook(payload: dict) -> Workbook:
     for table in results.get("overview_tables", []):
         append_rows_sheet(workbook, str(table.get("title", "结果表")), table.get("rows", []))
     append_rows_sheet(workbook, "供能分析", results.get("green_table", []))
-    append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
-    append_rows_sheet(workbook, "供能月曲线", curves.get("green_monthly", []))
     append_rows_sheet(workbook, "安全评估", results.get("safety_table", []))
-    append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
-    append_dispatch_rows_sheet(workbook, curves.get("green_hourly", []))
+    if include_curves:
+        append_result_curve_sheets(workbook, payload)
     append_rows_sheet(workbook, "运行日志", logs, ["time", "level", "message"], {"time": "时间", "level": "级别", "message": "消息"})
     return workbook
+
+
+def build_result_curves_workbook(payload: dict) -> Workbook:
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    append_result_curve_sheets(workbook, payload)
+    return workbook
+
+
+def append_result_curve_sheets(workbook: Workbook, payload: dict) -> None:
+    results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
+    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
+    append_rows_sheet(workbook, "供能日曲线", curves.get("green_daily", []))
+    append_rows_sheet(workbook, "供能月曲线", curves.get("green_monthly", []))
+    append_rows_sheet(workbook, "安全日曲线", curves.get("safety_daily", []))
+    append_dispatch_rows_sheet(workbook, curves.get("green_hourly", []))
 
 
 def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) -> None:
@@ -1422,14 +1468,18 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "temperature",
             "load",
             "diesel_power",
+            "diesel_capacity",
             "wind_available",
             "wind_power",
             "pv_available",
             "pv_power",
+            "renewable_power",
             "renewable_available",
             "renewable_ratio",
             "renewable_curtailed_rate",
             "storage_power",
+            "grid_storage_capacity",
+            "grid_storage_power",
             "storage_soc",
             "hydrogen_production_power",
             "hydrogen_storage",
@@ -1478,14 +1528,18 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "temperature": "环境温度",
             "load": "负荷总功率",
             "diesel_power": "柴发总功率",
+            "diesel_capacity": "柴发开机容量",
             "wind_available": "风力最大可发",
             "wind_power": "风机总功率",
             "pv_available": "光伏最大可发",
             "pv_power": "光伏总功率",
+            "renewable_power": "新能源总出力",
             "renewable_available": "新能源最大可发",
             "renewable_ratio": "新能源占比",
             "renewable_curtailed_rate": "新能源弃电率",
             "storage_power": "电储能总功率",
+            "grid_storage_capacity": "构网储能总容量",
+            "grid_storage_power": "构网储能总功率",
             "storage_soc": "电储电量",
             "hydrogen_production_power": "电制氢总功率",
             "hydrogen_storage": "储氢罐氢储量",
@@ -1859,10 +1913,13 @@ def build_comparison_curve_payload(items: list[dict], curve_group: str, curve_na
 
 
 def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> dict:
+    if include_hourly_curves:
+        ensure_split_result_workbook(path)
+    curve_signature = result_curve_file_signature(path)
     return COMPARISON_WORKBOOK_CACHE.get(
         path,
         lambda resolved: read_comparison_workbook_uncached(resolved, include_hourly_curves=include_hourly_curves),
-        variant=("comparison", bool(include_hourly_curves)),
+        variant=("comparison", bool(include_hourly_curves), curve_signature),
     )
 
 
@@ -1872,12 +1929,7 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
     except RESULT_WORKBOOK_READ_ERRORS as exc:
         raise ValueError(f"结果文件无法读取: {path.name}") from exc
     try:
-        curve_groups = {}
-        for key, config in COMPARISON_CURVE_GROUPS.items():
-            if key == "hourly" and not include_hourly_curves:
-                curve_groups[key] = read_curve_sheet_headers(workbook, config["sheet"])
-            else:
-                curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
+        curve_groups = read_comparison_curve_groups(path, fallback_workbook=workbook, include_hourly_curves=include_hourly_curves)
         return {
             "capacity": read_named_sheet_rows(workbook, "规划结果"),
             "energy": read_named_sheet_rows(workbook, "供能分析"),
@@ -1891,11 +1943,13 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
 
 
 def read_comparison_curve_group(path: Path, curve_group: str, curve_names: list[str]) -> dict[str, list[dict]]:
+    ensure_split_result_workbook(path)
     selected_names = tuple(name for name in curve_names if name)
+    curve_signature = result_curve_file_signature(path)
     return COMPARISON_CURVE_SLICE_CACHE.get(
         path,
         lambda resolved: read_comparison_curve_group_uncached(resolved, curve_group, selected_names),
-        variant=("comparison_curve_slice", curve_group, selected_names),
+        variant=("comparison_curve_slice", curve_group, selected_names, curve_signature),
     )
 
 
@@ -1903,14 +1957,87 @@ def read_comparison_curve_group_uncached(path: Path, curve_group: str, curve_nam
     config = COMPARISON_CURVE_GROUPS.get(curve_group)
     if not config:
         raise ValueError("曲线类型不合法")
+    source_path = result_curves_workbook_path(path) if result_curves_workbook_path(path).exists() else path
     try:
-        workbook = load_workbook(path, read_only=True, data_only=True)
+        workbook = load_workbook(source_path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
-        raise ValueError(f"结果文件无法读取: {path.name}") from exc
+        raise ValueError(f"曲线结果文件无法读取: {source_path.name}") from exc
     try:
         return read_curve_sheet(workbook, config["sheet"], config["limit"], selected_names=set(curve_names))
     finally:
         workbook.close()
+
+
+def result_curve_file_signature(path: Path):
+    curve_path = result_curves_workbook_path(path)
+    if not curve_path.exists():
+        return None
+    try:
+        return file_cache.file_signature(curve_path)
+    except OSError:
+        return None
+
+
+def ensure_split_result_workbook(path: Path) -> None:
+    curve_path = result_curves_workbook_path(path)
+    if not path.exists():
+        return
+    curve_sheet_names = ["供能日曲线", "供能月曲线", "安全日曲线", "调度结果"]
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return
+    try:
+        if not any(sheet_name in workbook.sheetnames for sheet_name in curve_sheet_names):
+            return
+        curve_payload = (
+            {"results": {"curves": read_result_curves_from_workbook(workbook, include_hourly_curves=True)}}
+            if not curve_path.exists()
+            else None
+        )
+    finally:
+        workbook.close()
+    if curve_payload is not None:
+        save_result_workbook(build_result_curves_workbook(curve_payload), curve_path, "曲线结果文件")
+    try:
+        workbook = load_workbook(path)
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    try:
+        for sheet_name in curve_sheet_names:
+            if sheet_name in workbook.sheetnames:
+                workbook.remove(workbook[sheet_name])
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "结果文件")
+    finally:
+        workbook.close()
+    replace_result_workbook_with_retry(tmp_path, path)
+
+
+def read_comparison_curve_groups(path: Path, fallback_workbook=None, include_hourly_curves: bool = True) -> dict:
+    curve_path = result_curves_workbook_path(path)
+    if curve_path.exists():
+        try:
+            curve_workbook = load_workbook(curve_path, read_only=True, data_only=True)
+        except RESULT_WORKBOOK_READ_ERRORS as exc:
+            raise ValueError(f"曲线结果文件无法读取: {curve_path.name}") from exc
+        try:
+            return read_comparison_curve_groups_from_workbook(curve_workbook, include_hourly_curves=include_hourly_curves)
+        finally:
+            curve_workbook.close()
+    if fallback_workbook is not None:
+        return read_comparison_curve_groups_from_workbook(fallback_workbook, include_hourly_curves=include_hourly_curves)
+    return empty_comparison_curve_groups()
+
+
+def read_comparison_curve_groups_from_workbook(workbook, include_hourly_curves: bool = True) -> dict:
+    curve_groups = {}
+    for key, config in COMPARISON_CURVE_GROUPS.items():
+        if key == "hourly" and not include_hourly_curves:
+            curve_groups[key] = read_curve_sheet_headers(workbook, config["sheet"])
+        else:
+            curve_groups[key] = read_curve_sheet(workbook, config["sheet"], config["limit"])
+    return curve_groups
 
 
 def read_result_workbook_display_payload_for_response(path: Path, include_hourly_curves: bool = True) -> dict | None:
@@ -1923,10 +2050,13 @@ def read_result_workbook_display_payload_for_response(path: Path, include_hourly
 
 
 def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool = True) -> dict:
+    if include_hourly_curves:
+        ensure_split_result_workbook(path)
+    curve_signature = result_curve_file_signature(path)
     return RESULT_DISPLAY_PAYLOAD_CACHE.get(
         path,
         lambda resolved: read_result_workbook_display_payload_uncached(resolved, include_hourly_curves=include_hourly_curves),
-        variant=("display", bool(include_hourly_curves)),
+        variant=("display", bool(include_hourly_curves), curve_signature),
     )
 
 
@@ -1940,14 +2070,7 @@ def read_result_workbook_display_payload_uncached(path: Path, include_hourly_cur
         for row in planning_rows:
             normalize_planning_result_total_capacity(row)
         annual_rows = read_named_sheet_rows(workbook, "规划年指标")
-        green_daily = read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365)
-        green_monthly = read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12)
-        green_hourly = (
-            read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
-            if include_hourly_curves
-            else []
-        )
-        safety_daily = read_workbook_rows_with_field_map(workbook, "安全日曲线", limit=365)
+        curve_rows = read_result_curve_workbook_payload(path, fallback_workbook=workbook, include_hourly_curves=include_hourly_curves)
         return {
             "metrics": read_result_workbook_metrics(workbook),
             "results": {
@@ -1961,16 +2084,40 @@ def read_result_workbook_display_payload_uncached(path: Path, include_hourly_cur
                 "green_table": read_named_sheet_rows(workbook, "供能分析"),
                 "safety": [],
                 "safety_table": read_named_sheet_rows(workbook, "安全评估"),
-                "curves": {
-                    "green_daily": green_daily,
-                    "green_monthly": green_monthly,
-                    "green_hourly": green_hourly,
-                    "safety_daily": safety_daily,
-                },
+                "curves": curve_rows,
             },
         }
     finally:
         workbook.close()
+
+
+def read_result_curve_workbook_payload(path: Path, fallback_workbook=None, include_hourly_curves: bool = True) -> dict:
+    curve_path = result_curves_workbook_path(path)
+    if curve_path.exists():
+        try:
+            curve_workbook = load_workbook(curve_path, read_only=True, data_only=True)
+        except RESULT_WORKBOOK_READ_ERRORS as exc:
+            raise ValueError(f"曲线结果文件无法读取: {curve_path.name}") from exc
+        try:
+            return read_result_curves_from_workbook(curve_workbook, include_hourly_curves=include_hourly_curves)
+        finally:
+            curve_workbook.close()
+    if fallback_workbook is not None:
+        return read_result_curves_from_workbook(fallback_workbook, include_hourly_curves=include_hourly_curves)
+    return {"green_daily": [], "green_monthly": [], "green_hourly": [], "safety_daily": []}
+
+
+def read_result_curves_from_workbook(workbook, include_hourly_curves: bool = True) -> dict:
+    return {
+        "green_daily": read_workbook_rows_with_field_map(workbook, "供能日曲线", limit=365),
+        "green_monthly": read_workbook_rows_with_field_map(workbook, "供能月曲线", limit=12),
+        "green_hourly": (
+            read_workbook_rows_with_field_map(workbook, "调度结果", limit=8760)
+            if include_hourly_curves
+            else []
+        ),
+        "safety_daily": read_workbook_rows_with_field_map(workbook, "安全日曲线", limit=365),
+    }
 
 
 def read_result_workbook_metrics(workbook) -> list[dict]:
@@ -2277,6 +2424,7 @@ def write_evaluation_planning_counts(scheme: str, filename: str, planning_rows: 
     result_path = evaluation_result_path(scheme, filename)
     if not result_path.exists():
         raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+    ensure_split_result_workbook(result_path)
 
     counts_by_device: dict[str, object] = {}
     for row in planning_rows if isinstance(planning_rows, list) else []:
@@ -2344,7 +2492,51 @@ def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
     result_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
     if not result_path.exists():
         raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+    ensure_split_result_workbook(result_path)
     return result_path
+
+
+def rename_evaluation_result_workbook(scheme: str, filename: str, target_name: str) -> Path:
+    source_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
+    if source_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+        raise ValueError("默认结果文件不允许重命名")
+    if not source_path.exists():
+        raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
+    ensure_split_result_workbook(source_path)
+    source_error = result_workbook_error_message(source_path)
+    if source_error:
+        raise ValueError(f"重命名失败，当前结果文件无法读取: {source_path.name}")
+
+    target_filename = evaluation_result_filename_from_name(target_name)
+    target_path = evaluation_result_path(scheme, target_filename)
+    if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
+        raise ValueError("默认结果文件不允许作为重命名目标")
+    if target_path == source_path:
+        return source_path
+
+    source_curve_path = result_curves_workbook_path(source_path)
+    target_curve_path = result_curves_workbook_path(target_path)
+    if target_path.exists():
+        raise FileExistsError(f"重命名失败，结果文件已存在: {target_path.name}")
+    if target_curve_path.exists():
+        raise FileExistsError(f"重命名失败，曲线结果文件已存在: {target_curve_path.name}")
+
+    file_ops.retry_file_operation(
+        lambda: source_path.rename(target_path),
+        f"结果文件被占用，无法重命名：{source_path.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
+    )
+    file_cache.invalidate_path(source_path)
+    file_cache.invalidate_path(target_path)
+    file_cache.invalidate_path(source_path.parent)
+    if source_curve_path.exists():
+        file_ops.retry_file_operation(
+            lambda: source_curve_path.rename(target_curve_path),
+            f"曲线结果文件被占用，无法重命名：{source_curve_path.name}。请关闭正在打开该文件的 Excel 或预览窗口后重试。",
+        )
+        file_cache.invalidate_path(source_curve_path)
+        file_cache.invalidate_path(target_curve_path)
+    file_cache.invalidate_path(target_path.parent)
+    return target_path
 
 
 def handle_evaluation_results_api_path(
@@ -2382,6 +2574,9 @@ def handle_evaluation_results_api_path(
                 raise ValueError("默认结果文件不允许删除")
             if result_path.exists():
                 file_ops.delete_file_with_retry(result_path, "结果文件")
+            curve_path = result_curves_workbook_path(result_path)
+            if curve_path.exists():
+                file_ops.delete_file_with_retry(curve_path, "曲线结果文件")
             selected = selected_evaluation_result_filename(scheme)
             return _json_response(
                 {
@@ -2395,6 +2590,7 @@ def handle_evaluation_results_api_path(
             source_path = evaluation_result_path(scheme, filename)
             if not source_path.exists():
                 raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
+            ensure_split_result_workbook(source_path)
             source_error = result_workbook_error_message(source_path)
             if source_error:
                 raise ValueError(f"复制失败，当前结果文件无法读取: {source_path.name}")
@@ -2409,6 +2605,16 @@ def handle_evaluation_results_api_path(
                 if target_path.name == OPTIMIZATION_RESULT_WORKBOOK_NAME:
                     raise ValueError("默认结果文件不允许覆盖")
             file_ops.copy_file_with_retry(source_path, target_path, "结果文件")
+            return _json_response(
+                {
+                    "selected": target_path.name,
+                    "results": list_evaluation_result_files(scheme),
+                    "planning_result_rows": read_evaluation_planning_result_rows(scheme, target_path.name),
+                }
+            )
+
+        if action == "rename":
+            target_path = rename_evaluation_result_workbook(scheme, filename, str(payload.get("target_name", "")))
             return _json_response(
                 {
                     "selected": target_path.name,
@@ -2443,6 +2649,8 @@ def handle_evaluation_results_api_path(
         raise ValueError("未知结果文件操作")
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except FileExistsError as exc:
+        return _json_response({"error": "exists", "message": str(exc)}, HTTPStatus.CONFLICT)
     except PermissionError as exc:
         return _json_response({"error": "file_locked", "message": str(exc)}, HTTPStatus.CONFLICT)
     except ValueError as exc:
@@ -2681,11 +2889,19 @@ class EvaluationRuntime:
             self._metrics = event.get("metrics") if isinstance(event.get("metrics"), list) else []
             self._results = event.get("results") if isinstance(event.get("results"), dict) else {}
             dispatch_rows = event.get("dispatch_rows") if isinstance(event.get("dispatch_rows"), list) else []
-            result_path = export_evaluation_results_workbook(self._payload_unlocked(), dispatch_rows)
+            completed_end_time = _now_text()
+            result_path = export_evaluation_results_workbook(
+                self._payload_unlocked(
+                    read_workbook=False,
+                    status_override="已完成",
+                    end_time_override=completed_end_time,
+                ),
+                dispatch_rows,
+            )
             self.result_file = str(result_path)
-            self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
             self.status = "已完成"
-            self.end_time = _now_text()
+            self.end_time = completed_end_time
+            self._append_log_unlocked("ok", f"评估结果已写入：{result_path.name}")
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
             return
@@ -2719,9 +2935,15 @@ class EvaluationRuntime:
         if message:
             self._append_log_unlocked(level, message)
 
-    def _payload_unlocked(self, include_hourly_curves: bool = True) -> dict:
+    def _payload_unlocked(
+        self,
+        include_hourly_curves: bool = True,
+        read_workbook: bool = True,
+        status_override: str | None = None,
+        end_time_override: str | None = None,
+    ) -> dict:
         workbook_payload = None
-        if self.status != "运行中" and self.result_filename:
+        if read_workbook and self.status != "运行中" and self.result_filename:
             try:
                 workbook_payload = read_result_workbook_display_payload_for_response(
                     evaluation_result_path(self.scheme, self.result_filename),
@@ -2729,17 +2951,22 @@ class EvaluationRuntime:
                 )
             except ValueError:
                 workbook_payload = None
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         return {
-            "status": self.status,
+            "status": status,
             "scheme": self.scheme,
             "start_time": self.start_time,
-            "end_time": self.end_time,
+            "end_time": end_time,
             "progress": self.progress,
             "result_filename": self.result_filename,
             "result_file": self.result_file,
             "process_id": self.process_id or "",
-            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
-            "metrics": merge_runtime_metrics(self._metrics_unlocked(), workbook_payload.get("metrics", []) if workbook_payload else []),
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, end_time),
+            "metrics": merge_runtime_metrics(
+                self._metrics_unlocked(status_override=status, end_time_override=end_time),
+                workbook_payload.get("metrics", []) if workbook_payload else [],
+            ),
             "results": workbook_payload.get("results", {}) if workbook_payload else (self._results if self._results else self._default_results_unlocked()),
             "logs": list(self._logs),
         }
@@ -2766,11 +2993,13 @@ class EvaluationRuntime:
             "logs": list(self._logs),
         }
 
-    def _metrics_unlocked(self) -> list[dict]:
+    def _metrics_unlocked(self, status_override: str | None = None, end_time_override: str | None = None) -> list[dict]:
+        status = self.status if status_override is None else status_override
+        end_time = self.end_time if end_time_override is None else end_time_override
         base = [
-            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "状态", "value": status, "unit": ""},
             {"label": "开始", "value": self.start_time or "-", "unit": ""},
-            {"label": "完成", "value": self.end_time or "-", "unit": ""},
+            {"label": "完成", "value": end_time or "-", "unit": ""},
         ]
         existing_labels = {item["label"] for item in base}
         for metric in self._metrics:
@@ -2910,6 +3139,921 @@ class EvaluationRuntimeManager:
         return str(scheme or "未选择方案").strip() or "未选择方案"
 
 
+class FrequencyEvaluationRuntime:
+    """Lightweight runtime for frequency-only checks against a result workbook."""
+
+    def __init__(self, scheme: str = "") -> None:
+        self.status = "待启动"
+        self.scheme = str(scheme or "").strip()
+        self.result_filename = ""
+        self.result_file = ""
+        self.frequency_result_file = ""
+        self.start_time = ""
+        self.end_time = ""
+        self.process_id: int | None = None
+        self._metrics: list[dict] = []
+        self._summary: list[dict] = []
+        self._frequency_table: list[dict] = []
+        self._frequency_8760_table: list[dict] = []
+        self._curves: dict = {"safety_daily": []}
+        self._logs: list[dict[str, str]] = []
+        self._lock = threading.Lock()
+        self._append_log_unlocked("info", "频率计算待启动")
+
+    def snapshot(self, include_hourly_curves: bool = True) -> dict:
+        with self._lock:
+            if self.status != "运行中" and self.result_filename:
+                self._load_workbook_payload_unlocked()
+            return self._payload_unlocked()
+
+    def task_snapshot(self) -> dict:
+        with self._lock:
+            return self._task_payload_unlocked()
+
+    def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
+        target_scheme = str(scheme or self.scheme or "未选择方案").strip() or "未选择方案"
+        if action == "cancel_queue":
+            target_filename = selected_evaluation_result_filename(target_scheme, filename)
+            with self._lock:
+                self.scheme = target_scheme
+                self.result_filename = target_filename
+                self.result_file = self._safe_result_file_unlocked(target_scheme, target_filename)
+                self.frequency_result_file = self._safe_frequency_result_file_unlocked(target_scheme, target_filename)
+                self.status = "退出队列"
+                self.start_time = ""
+                self.end_time = ""
+                self.process_id = None
+                self._append_log_unlocked("info", "退出等待队列")
+                return self._payload_unlocked()
+
+        if action == "start":
+            target_filename = selected_evaluation_result_filename(target_scheme, filename)
+            if not target_filename:
+                raise ValueError("请先选择结果文件")
+            target_path = evaluation_result_path(target_scheme, target_filename)
+            if not target_path.exists():
+                raise FileNotFoundError(f"结果文件不存在: {target_path.name}")
+            with self._lock:
+                if self.status == "运行中":
+                    raise OptimizationStateError("running", f"方案“{target_scheme}”正在进行频率计算，无法再次启动")
+                self.status = "运行中"
+                self.scheme = target_scheme
+                self.result_filename = target_filename
+                self.result_file = str(target_path)
+                self.frequency_result_file = ""
+                self.start_time = _now_text()
+                self.end_time = ""
+                self.process_id = None
+                self._metrics = []
+                self._summary = []
+                self._frequency_table = []
+                self._frequency_8760_table = []
+                self._curves = {"safety_daily": []}
+                self._append_log_unlocked("ok", f"启动频率计算，方案：{self.scheme}，结果：{self.result_filename}")
+            try:
+                self._append_log_threadsafe("info", "读取方案参数")
+                scheme_payload = PLANNING_STORE.read_scheme(target_scheme)
+                payload = build_frequency_evaluation_payload(
+                    target_path,
+                    scheme=target_scheme,
+                    scheme_payload=scheme_payload,
+                    generate_curves=True,
+                    log_callback=self._append_log_threadsafe,
+                )
+            except Exception as exc:
+                with self._lock:
+                    self.status = "失败"
+                    self.end_time = _now_text()
+                    self._append_log_unlocked("error", f"频率计算失败：{exc}")
+                    return self._payload_unlocked()
+                raise
+            with self._lock:
+                self._metrics = payload["metrics"]
+                self._summary = payload["summary"]
+                self._frequency_table = payload["frequency_table"]
+                self._frequency_8760_table = payload.get("frequency_8760_table", [])
+                self._curves = payload["curves"]
+                self.frequency_result_file = payload.get("frequency_result_file", "")
+                self.status = "已完成"
+                self.end_time = _now_text()
+                self._append_log_unlocked("ok", "频率计算完成")
+                return self._payload_unlocked()
+
+        if action == "stop":
+            with self._lock:
+                if self.status != "运行中":
+                    raise OptimizationStateError("not_running", f"方案“{target_scheme}”没有运行中的频率计算")
+                self.status = "计算中止"
+                self.end_time = _now_text()
+                self._append_log_unlocked("warn", "停止频率计算")
+                return self._payload_unlocked()
+
+        raise ValueError(f"unknown frequency action: {action}")
+
+    def _payload_unlocked(self) -> dict:
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "result_filename": self.result_filename,
+            "result_file": self.result_file,
+            "frequency_result_file": self.frequency_result_file,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
+            "metrics": self._metrics_unlocked(),
+            "summary": list(self._summary),
+            "frequency_table": list(self._frequency_table),
+            "frequency_8760_table": list(self._frequency_8760_table),
+            "curves": dict(self._curves),
+            "logs": list(self._logs),
+        }
+
+    def _task_payload_unlocked(self) -> dict:
+        return {
+            "status": self.status,
+            "scheme": self.scheme,
+            "result_filename": self.result_filename,
+            "result_file": self.result_file,
+            "frequency_result_file": self.frequency_result_file,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "process_id": self.process_id or "",
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
+            "logs": list(self._logs),
+        }
+
+    def _metrics_unlocked(self) -> list[dict]:
+        base = [
+            {"label": "状态", "value": self.status, "unit": ""},
+            {"label": "开始", "value": self.start_time or "-", "unit": ""},
+            {"label": "完成", "value": self.end_time or "-", "unit": ""},
+        ]
+        labels = {item["label"] for item in base}
+        for metric in self._metrics:
+            if isinstance(metric, dict) and metric.get("label") not in labels:
+                base.append(metric)
+                labels.add(metric.get("label"))
+        for label, unit in [("最低频率", "Hz"), ("最高频率", "Hz"), ("频率安全风险小时数", "h")]:
+            if label not in labels:
+                base.append({"label": label, "value": "-", "unit": unit})
+        return base
+
+    def _load_workbook_payload_unlocked(self) -> None:
+        try:
+            path = evaluation_result_path(self.scheme, self.result_filename)
+            if not path.exists():
+                return
+            payload = build_frequency_evaluation_payload(path, scheme=self.scheme)
+        except Exception:
+            return
+        self.result_file = str(path)
+        self._metrics = payload["metrics"]
+        self._summary = payload["summary"]
+        self._frequency_table = payload["frequency_table"]
+        self._frequency_8760_table = payload.get("frequency_8760_table", [])
+        self._curves = payload["curves"]
+        self.frequency_result_file = payload.get("frequency_result_file", self.frequency_result_file)
+
+    def _safe_result_file_unlocked(self, scheme: str, filename: str) -> str:
+        try:
+            return str(evaluation_result_path(scheme, filename)) if filename else ""
+        except ValueError:
+            return ""
+
+    def _safe_frequency_result_file_unlocked(self, scheme: str, filename: str) -> str:
+        try:
+            path = frequency_curve_result_path(scheme, filename)
+            return str(path) if path.exists() else ""
+        except ValueError:
+            return ""
+
+    def _append_log_unlocked(self, level: str, message: str) -> None:
+        self._logs.append({"time": _now_text(), "level": level, "message": message})
+        if len(self._logs) > 1000:
+            del self._logs[:-1000]
+
+    def _append_log_threadsafe(self, level: str, message: str) -> None:
+        with self._lock:
+            self._append_log_unlocked(level, message)
+
+
+class FrequencyEvaluationRuntimeManager:
+    def __init__(self) -> None:
+        self._runtimes: dict[str, FrequencyEvaluationRuntime] = {}
+        self._lock = threading.Lock()
+
+    def snapshot(self, scheme: str = "", filename: str = "", include_hourly_curves: bool = True) -> dict:
+        runtime = self._runtime_for_result(scheme, filename)
+        payload = runtime.snapshot(include_hourly_curves=include_hourly_curves)
+        append_task_control_state(
+            payload,
+            "frequency",
+            self._scheme_name(scheme),
+            payload.get("result_filename") or self._result_filename(self._scheme_name(scheme), filename),
+        )
+        return payload
+
+    def apply(self, action: str, scheme: str = "", filename: str = "") -> dict:
+        return self._runtime_for_result(scheme, filename).apply(action, scheme=self._scheme_name(scheme), filename=filename)
+
+    def runtimes(self) -> dict[str, FrequencyEvaluationRuntime]:
+        with self._lock:
+            return dict(self._runtimes)
+
+    def _runtime_for_result(self, scheme: str = "", filename: str = "") -> FrequencyEvaluationRuntime:
+        scheme_name = self._scheme_name(scheme)
+        result_filename = self._result_filename(scheme_name, filename)
+        key = f"{scheme_name}\0{result_filename}"
+        with self._lock:
+            if key not in self._runtimes:
+                runtime = FrequencyEvaluationRuntime(scheme=scheme_name)
+                runtime.result_filename = result_filename
+                runtime.result_file = runtime._safe_result_file_unlocked(scheme_name, result_filename)
+                self._runtimes[key] = runtime
+            return self._runtimes[key]
+
+    @staticmethod
+    def _result_filename(scheme: str, filename: str = "") -> str:
+        selected = str(filename or "").strip()
+        if selected:
+            return selected
+        try:
+            return selected_evaluation_result_filename(scheme)
+        except (FileNotFoundError, ValueError):
+            return ""
+
+    @staticmethod
+    def _scheme_name(scheme: str = "") -> str:
+        return str(scheme or "未选择方案").strip() or "未选择方案"
+
+
+def build_frequency_evaluation_payload(
+    path: Path,
+    scheme: str = "",
+    scheme_payload: dict | None = None,
+    generate_curves: bool = False,
+    log_callback=None,
+) -> dict:
+    emit_frequency_log(log_callback, "info", f"读取结果文件：{path.name}")
+    workbook_payload = read_result_workbook_display_payload(path, include_hourly_curves=False)
+    results = workbook_payload.get("results", {})
+    safety_table = [dict(row) for row in results.get("safety_table", []) if isinstance(row, dict)]
+    safety_daily = [dict(row) for row in results.get("curves", {}).get("safety_daily", []) if isinstance(row, dict)]
+    emit_frequency_log(log_callback, "info", f"已读取频率安全指标：{len(safety_table)}行，日曲线：{len(safety_daily)}点")
+    frequency_result_file = ""
+    curve_row_count = 0
+    frequency_8760_table: list[dict] = []
+    if scheme_payload is None and scheme and generate_curves:
+        try:
+            scheme_payload = PLANNING_STORE.read_scheme(scheme)
+        except Exception:
+            scheme_payload = None
+    if scheme and scheme_payload is not None and generate_curves:
+        emit_frequency_log(log_callback, "info", "读取调度结果8760点")
+        dispatch_rows = read_frequency_dispatch_rows(path)
+        if dispatch_rows:
+            emit_frequency_log(log_callback, "info", f"开始生成{len(dispatch_rows)}个时刻的频率仿真曲线")
+            frequency_results = []
+            for index, result in enumerate(iter_frequency_result_rows(scheme_payload, dispatch_rows), start=1):
+                frequency_results.append(result)
+                if index == 1 or index % 1000 == 0 or index == len(dispatch_rows):
+                    emit_frequency_log(log_callback, "info", f"频率曲线生成进度：{index}/{len(dispatch_rows)}")
+            emit_frequency_log(log_callback, "info", "整理频率8760点指标")
+            frequency_8760_table = frequency_8760_display_rows_from_results(frequency_results, scheme_payload)
+            emit_frequency_log(log_callback, "info", "写入频率计算结果文件")
+            frequency_result_path = export_frequency_curve_workbook(
+                scheme,
+                path.name,
+                scheme_payload,
+                dispatch_rows,
+                frequency_results=frequency_results,
+                log_callback=log_callback,
+            )
+            frequency_result_file = str(frequency_result_path)
+            curve_row_count = len(dispatch_rows) * 2
+            emit_frequency_log(log_callback, "ok", f"频率计算结果文件已生成：{frequency_result_path.name}，曲线{curve_row_count}条")
+    elif scheme:
+        existing_curve_path = frequency_curve_result_path(scheme, path.name)
+        if existing_curve_path.exists():
+            emit_frequency_log(log_callback, "info", f"读取已有频率曲线文件：{existing_curve_path.name}")
+            frequency_result_file = str(existing_curve_path)
+            frequency_8760_table = read_frequency_8760_display_rows(existing_curve_path, scheme_payload)
+            curve_row_count = len(frequency_8760_table) * 2 if frequency_8760_table else TIME_SERIES_IMPORT_ROW_COUNT * 2
+    frequency_metrics = frequency_metrics_from_rows(safety_table, safety_daily)
+    if frequency_result_file:
+        frequency_metrics.append({"label": "频率曲线文件", "value": Path(frequency_result_file).name, "unit": ""})
+        frequency_metrics.append({"label": "频率曲线条数", "value": curve_row_count, "unit": "条"})
+    return {
+        "metrics": frequency_metrics,
+        "summary": frequency_summary_rows(frequency_metrics),
+        "frequency_table": frequency_detail_rows(safety_table, frequency_metrics),
+        "frequency_8760_table": frequency_8760_table,
+        "curves": {"safety_daily": safety_daily},
+        "frequency_result_file": frequency_result_file,
+    }
+
+
+def emit_frequency_log(log_callback, level: str, message: str) -> None:
+    if callable(log_callback):
+        log_callback(level, message)
+
+
+def read_frequency_dispatch_rows(path: Path) -> list[dict]:
+    ensure_split_result_workbook(path)
+    dispatch_path = result_curves_workbook_path(path)
+    source_path = dispatch_path if dispatch_path.exists() else path
+    try:
+        workbook = load_workbook(source_path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"结果文件无法读取: {source_path.name}") from exc
+    try:
+        rows = read_workbook_rows_with_field_map(workbook, "调度结果", limit=TIME_SERIES_IMPORT_ROW_COUNT)
+    finally:
+        workbook.close()
+    if len(rows) != TIME_SERIES_IMPORT_ROW_COUNT:
+        raise ValueError(f"频率计算需要调度结果包含{TIME_SERIES_IMPORT_ROW_COUNT}点，当前为{len(rows)}点")
+    return rows
+
+
+def frequency_curve_result_path(scheme: str, filename: str) -> Path:
+    source_name = evaluation_result_filename_from_name(Path(str(filename or "")).stem.replace("_results", "") or "frequency")
+    source_stem = Path(source_name).stem.replace("_results", "")
+    return PLANNING_STORE.scheme_dir(str(scheme or "未选择方案")) / f"{source_stem}_frequency_curves.xlsx"
+
+
+def export_frequency_curve_workbook(
+    scheme: str,
+    filename: str,
+    scheme_payload: dict,
+    dispatch_rows: list[dict],
+    frequency_results: list[dict] | None = None,
+    log_callback=None,
+) -> Path:
+    result_path = frequency_curve_result_path(scheme, filename)
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    workbook = Workbook(write_only=True)
+    summary_sheet = workbook.create_sheet("频率8760结果")
+    curve_sheet = workbook.create_sheet("频率曲线")
+    summary_headers = frequency_8760_result_headers()
+    curve_headers = frequency_curve_headers()
+    summary_sheet.append(summary_headers)
+    curve_sheet.append(curve_headers)
+    results = frequency_results if frequency_results is not None else iter_frequency_result_rows(scheme_payload, dispatch_rows)
+    total_results = len(frequency_results) if isinstance(frequency_results, list) else len(dispatch_rows)
+    for index, result in enumerate(results, start=1):
+        summary_sheet.append([result["summary"].get(header, "") for header in summary_headers])
+        for row in result["curves"]:
+            curve_sheet.append([row.get(header, "") for header in curve_headers])
+        if index == 1 or index % 1000 == 0 or index == total_results:
+            emit_frequency_log(log_callback, "info", f"频率结果写入进度：{index}/{total_results}")
+    tmp_path = result_path.with_name(f".{result_path.name}.tmp")
+    try:
+        emit_frequency_log(log_callback, "info", "保存频率曲线Excel文件")
+        file_ops.save_workbook_with_retry(workbook, tmp_path, "频率曲线文件")
+    finally:
+        workbook.close()
+    emit_frequency_log(log_callback, "info", "替换频率曲线结果文件")
+    replace_result_workbook_with_retry(tmp_path, result_path)
+    return result_path
+
+
+def frequency_8760_result_headers() -> list[str]:
+    return [
+        "hour_index",
+        "datetime",
+        "grid_model",
+        "diesel_capacity",
+        "diesel_on",
+        "diesel_power",
+        "load",
+        "renewable_power",
+        "grid_storage_capacity",
+        "storage_power",
+        "storage_charge",
+        "storage_discharge",
+        "equivalent_inertia_m",
+        "load_response_d",
+        "equivalent_primary_frequency_k",
+        "max_up_disturbance_mw",
+        "max_down_disturbance_mw",
+        "source_frequency_max_hz",
+        "source_frequency_min_hz",
+        "calculated_max_frequency_hz",
+        "calculated_min_frequency_hz",
+    ]
+
+
+def frequency_curve_headers() -> list[str]:
+    time_headers = [frequency_curve_point_header(index) for index in range(FREQUENCY_CURVE_POINT_COUNT)]
+    return [
+        "hour_index",
+        "datetime",
+        "curve_type",
+        "grid_model",
+        "diesel_capacity",
+        "diesel_on",
+        "diesel_power",
+        "load",
+        "renewable_power",
+        "grid_storage_capacity",
+        "storage_power",
+        "storage_charge",
+        "storage_discharge",
+        "equivalent_inertia_m",
+        "load_response_d",
+        "equivalent_primary_frequency_k",
+        "max_up_disturbance_mw",
+        "max_down_disturbance_mw",
+        "source_frequency_max_hz",
+        "source_frequency_min_hz",
+        "calculated_max_frequency_hz",
+        "calculated_min_frequency_hz",
+        "disturbance_mw",
+        *time_headers,
+    ]
+
+
+def frequency_curve_point_header(index: int) -> str:
+    return f"f_{index * FREQUENCY_CURVE_STEP_SECONDS:.2f}s"
+
+
+def iter_frequency_curve_rows(scheme_payload: dict, dispatch_rows: list[dict]):
+    for result in iter_frequency_result_rows(scheme_payload, dispatch_rows):
+        yield from result["curves"]
+
+
+def frequency_diesel_unit_capacity(scheme_payload: dict) -> float | None:
+    try:
+        diesel_devices = plan_optimizer.normalized_device_rows(scheme_payload).get("diesel_generators", [])
+    except Exception:
+        return None
+    capacities = [float(device.get("power_upper") or device.get("capacity") or 0.0) for device in diesel_devices]
+    capacities = [capacity for capacity in capacities if capacity > 0]
+    return capacities[0] if len(capacities) == 1 else None
+
+
+def frequency_grid_storage_capacity(scheme_payload: dict) -> float | None:
+    try:
+        storage_devices = plan_optimizer.normalized_device_rows(scheme_payload).get("storage_pcs", [])
+    except Exception:
+        return None
+    capacity = sum(
+        float(device.get("capacity") or 0.0) * float(device.get("quantity_upper") or 0.0)
+        for device in storage_devices
+        if device.get("is_grid_forming")
+    )
+    return capacity if capacity > 0 else None
+
+
+def frequency_8760_display_rows_from_results(results: list[dict], scheme_payload: dict | None = None) -> list[dict]:
+    summaries = [dict(result.get("summary", {})) for result in results if isinstance(result, dict)]
+    return frequency_8760_display_rows_from_summaries(summaries, scheme_payload)
+
+
+def frequency_8760_display_rows_from_summaries(summaries: list[dict], scheme_payload: dict | None = None) -> list[dict]:
+    diesel_unit_capacity = frequency_diesel_unit_capacity(scheme_payload or {})
+    rows: list[dict] = []
+    for summary in summaries:
+        diesel_capacity = frequency_number(summary.get("diesel_capacity"))
+        if diesel_capacity is None and diesel_unit_capacity is not None:
+            diesel_capacity = (frequency_number(summary.get("diesel_on")) or 0.0) * diesel_unit_capacity
+        rows.append(
+            {
+                "小时": summary.get("hour_index", ""),
+                "时间": summary.get("datetime", ""),
+                "柴发开机容量": round(diesel_capacity, 4) if diesel_capacity is not None else "",
+                "向上最大扰动": summary.get("max_up_disturbance_mw", ""),
+                "向下最大扰动": summary.get("max_down_disturbance_mw", ""),
+                "优化频率最大值": summary.get("source_frequency_max_hz", ""),
+                "优化频率最小值": summary.get("source_frequency_min_hz", ""),
+                "仿真频率最大值": summary.get("calculated_max_frequency_hz", ""),
+                "仿真频率最小值": summary.get("calculated_min_frequency_hz", ""),
+            }
+        )
+    return rows
+
+
+def read_frequency_8760_display_rows(path: Path, scheme_payload: dict | None = None) -> list[dict]:
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS:
+        return []
+    try:
+        if "频率8760结果" not in workbook.sheetnames:
+            return []
+        sheet = workbook["频率8760结果"]
+        raw_rows = list(sheet.iter_rows(values_only=True))
+    finally:
+        workbook.close()
+    if not raw_rows:
+        return []
+    headers = [str(value or "").strip() for value in raw_rows[0]]
+    summaries = [
+        {headers[index]: value for index, value in enumerate(row) if index < len(headers) and headers[index]}
+        for row in raw_rows[1:]
+    ]
+    return frequency_8760_display_rows_from_summaries(summaries, scheme_payload)
+
+
+def read_frequency_time_curve_payload(
+    path: Path,
+    *,
+    hour_index: str = "",
+    month: str = "",
+    day: str = "",
+    hour: str = "",
+) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(f"频率曲线文件不存在: {path.name}")
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except RESULT_WORKBOOK_READ_ERRORS as exc:
+        raise ValueError(f"频率曲线文件无法读取: {path.name}") from exc
+    try:
+        if "频率8760结果" not in workbook.sheetnames or "频率曲线" not in workbook.sheetnames:
+            raise ValueError("频率曲线文件缺少频率8760结果或频率曲线工作表")
+        summaries = worksheet_dict_rows(workbook["频率8760结果"])
+        target_summary = select_frequency_time_summary(summaries, hour_index=hour_index, month=month, day=day, hour=hour)
+        target_hour = int(frequency_number(target_summary.get("hour_index")) or 0)
+        if target_hour <= 0:
+            raise ValueError("频率曲线文件中的小时序号无效")
+        curve_rows = [
+            row
+            for row in worksheet_dict_rows(workbook["频率曲线"])
+            if int(frequency_number(row.get("hour_index")) or 0) == target_hour
+        ]
+    finally:
+        workbook.close()
+    if not curve_rows:
+        raise ValueError(f"未找到第{target_hour}小时的频率曲线")
+    high_curve = next((row for row in curve_rows if str(row.get("curve_type", "")).strip() == "最高频率曲线"), None)
+    low_curve = next((row for row in curve_rows if str(row.get("curve_type", "")).strip() == "最低频率曲线"), None)
+    if high_curve is None or low_curve is None:
+        raise ValueError(f"第{target_hour}小时的高频曲线或低频曲线缺失")
+    selection = frequency_time_selection_payload(target_summary)
+    return {
+        "selection": selection,
+        "summary_table": frequency_time_summary_table(target_summary),
+        "curves": {
+            "high": frequency_curve_points_from_row(high_curve),
+            "low": frequency_curve_points_from_row(low_curve),
+        },
+    }
+
+
+def worksheet_dict_rows(sheet) -> list[dict]:
+    raw_rows = list(sheet.iter_rows(values_only=True))
+    if not raw_rows:
+        return []
+    headers = [str(value or "").strip() for value in raw_rows[0]]
+    return [
+        {headers[index]: value for index, value in enumerate(row) if index < len(headers) and headers[index]}
+        for row in raw_rows[1:]
+    ]
+
+
+def select_frequency_time_summary(
+    summaries: list[dict],
+    *,
+    hour_index: str = "",
+    month: str = "",
+    day: str = "",
+    hour: str = "",
+) -> dict:
+    if not summaries:
+        raise ValueError("频率8760结果为空")
+    requested_hour = frequency_int_or_none(hour_index)
+    if requested_hour is not None:
+        for summary in summaries:
+            if int(frequency_number(summary.get("hour_index")) or 0) == requested_hour:
+                return summary
+        raise ValueError(f"未找到第{requested_hour}小时的频率结果")
+    requested_parts = {
+        "month": frequency_int_or_none(month),
+        "day": frequency_int_or_none(day),
+        "hour": frequency_int_or_none(hour),
+    }
+    if all(value is not None for value in requested_parts.values()):
+        for summary in summaries:
+            parts = frequency_datetime_parts(summary.get("datetime"))
+            if parts and all(parts[key] == requested_parts[key] for key in requested_parts):
+                return summary
+        raise ValueError(f"未找到{month}月{day}日{hour}时的频率结果")
+    return summaries[0]
+
+
+def frequency_int_or_none(value) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
+def frequency_datetime_parts(value) -> dict[str, int] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return {"year": dt.year, "month": dt.month, "day": dt.day, "hour": dt.hour}
+        except ValueError:
+            continue
+    match = re.search(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})\s+(\d{1,2})", text)
+    if not match:
+        return None
+    return {
+        "year": int(match.group(1)),
+        "month": int(match.group(2)),
+        "day": int(match.group(3)),
+        "hour": int(match.group(4)),
+    }
+
+
+def frequency_time_selection_payload(summary: dict) -> dict:
+    parts = frequency_datetime_parts(summary.get("datetime")) or {}
+    return {
+        "hour_index": summary.get("hour_index", ""),
+        "datetime": summary.get("datetime", ""),
+        "year": parts.get("year", ""),
+        "month": parts.get("month", ""),
+        "day": parts.get("day", ""),
+        "hour": parts.get("hour", ""),
+    }
+
+
+def frequency_time_summary_table(summary: dict) -> list[dict]:
+    rows = [
+        ("柴发开机总容量", "diesel_capacity", "kW"),
+        ("柴发总功率", "diesel_power", "kW"),
+        ("负荷总功率", "load", "kW"),
+        ("新能源总出力", "renewable_power", "kW"),
+        ("向上最大扰动", "max_up_disturbance_mw", "MW"),
+        ("向下最大扰动", "max_down_disturbance_mw", "MW"),
+        ("优化频率最大值", "source_frequency_max_hz", "Hz"),
+        ("优化频率最小值", "source_frequency_min_hz", "Hz"),
+        ("仿真频率最大值", "calculated_max_frequency_hz", "Hz"),
+        ("仿真频率最小值", "calculated_min_frequency_hz", "Hz"),
+    ]
+    return [
+        {"指标": label, "数值": frequency_summary_value(summary, key), "单位": unit}
+        for label, key, unit in rows
+    ]
+
+
+def frequency_summary_value(summary: dict, key: str):
+    value = summary.get(key, "")
+    numeric = frequency_number(value)
+    return round(numeric, 5) if numeric is not None else value
+
+
+def frequency_curve_points_from_row(row: dict) -> list[dict]:
+    points: list[dict] = []
+    for index in range(FREQUENCY_CURVE_POINT_COUNT):
+        header = frequency_curve_point_header(index)
+        value = frequency_number(row.get(header))
+        if value is not None:
+            points.append({"time": round(index * FREQUENCY_CURVE_STEP_SECONDS, 2), "frequency": round(value, 5)})
+    return points
+
+
+def iter_frequency_result_rows(scheme_payload: dict, dispatch_rows: list[dict]):
+    planning_parameters = frequency_planning_parameters(scheme_payload)
+    diesel_unit_capacity = frequency_diesel_unit_capacity(scheme_payload)
+    default_grid_storage_capacity = frequency_grid_storage_capacity(scheme_payload)
+    loads = [frequency_number(row.get("load")) or 0.0 for row in dispatch_rows]
+    nominal_frequency = min(65.0, max(45.0, plan_optimizer.numeric(planning_parameters.get("nominal_frequency_hz"), plan_optimizer.NOMINAL_FREQUENCY_HZ)))
+    governor_t = max(0.0, plan_optimizer.numeric(planning_parameters.get("frequency_governor_time_constant_s"), 0.6))
+    if governor_t <= plan_optimizer.FREQUENCY_EPS:
+        governor_t = 0.6
+    load_ref = max(loads) if loads else 0.0
+    configured_ref = plan_optimizer.numeric(planning_parameters.get("network_synchronization_reference_load_kw"), 0.0)
+    if configured_ref > 0:
+        load_ref = configured_ref
+    load_ref = max(load_ref, plan_optimizer.FREQUENCY_EPS)
+    k_base = plan_optimizer.numeric(planning_parameters.get("network_synchronization_coefficient_base"), 1.0)
+    k_slope = plan_optimizer.numeric(planning_parameters.get("network_synchronization_coefficient_slope"), 0.0)
+    for row_index, row in enumerate(dispatch_rows, start=1):
+        hour_index = int(frequency_number(row.get("hour_index")) or row_index)
+        load = frequency_number(row.get("load")) or 0.0
+        wind_power = frequency_number(row.get("wind_power")) or 0.0
+        pv_power = frequency_number(row.get("pv_power")) or 0.0
+        net_ratio = (wind_power + pv_power - load) / load_ref
+        grid_model = k_base + k_slope * net_ratio
+        m_eq = frequency_number(row.get("equivalent_inertia_m")) or 0.0
+        k_eq = frequency_number(row.get("equivalent_primary_frequency_k")) or 0.0
+        d_eq = frequency_number(row.get("equivalent_damping_d")) or 0.0
+        diesel_on = row.get("diesel_on", "")
+        diesel_capacity = frequency_number(row.get("diesel_capacity"))
+        if diesel_capacity is None and diesel_unit_capacity is not None:
+            diesel_capacity = (frequency_number(diesel_on) or 0.0) * diesel_unit_capacity
+        renewable_power = frequency_number(row.get("renewable_power"))
+        if renewable_power is None:
+            renewable_power = (frequency_number(row.get("wind_power")) or 0.0) + (frequency_number(row.get("pv_power")) or 0.0)
+        grid_storage_capacity = frequency_number(row.get("grid_storage_capacity"))
+        if grid_storage_capacity is None:
+            grid_storage_capacity = default_grid_storage_capacity
+        base = {
+            "hour_index": hour_index,
+            "datetime": row.get("datetime", ""),
+            "grid_model": round(grid_model, 4),
+            "diesel_capacity": round(diesel_capacity, 4) if diesel_capacity is not None else "",
+            "diesel_on": diesel_on,
+            "diesel_power": round(frequency_number(row.get("diesel_power")) or 0.0, 4),
+            "load": round(load, 4),
+            "renewable_power": round(renewable_power, 4) if renewable_power is not None else "",
+            "grid_storage_capacity": round(grid_storage_capacity, 4) if grid_storage_capacity is not None else "",
+            "storage_power": round(frequency_number(row.get("storage_power")) or 0.0, 4),
+            "storage_charge": round(frequency_number(row.get("storage_charge")) or 0.0, 4),
+            "storage_discharge": round(frequency_number(row.get("storage_discharge")) or 0.0, 4),
+            "equivalent_inertia_m": round(m_eq, 4),
+            "load_response_d": round(d_eq, 4),
+            "equivalent_primary_frequency_k": round(k_eq, 4),
+        }
+        lower_disturbance = frequency_number(row.get("frequency_delta_p_mw")) or 0.0
+        upper_disturbance = frequency_number(row.get("frequency_upper_delta_p_mw")) or 0.0
+        lower_points = frequency_response_curve_points(m_eq, k_eq, d_eq, governor_t, lower_disturbance, nominal_frequency)
+        upper_points = frequency_response_curve_points(m_eq, k_eq, d_eq, governor_t, upper_disturbance, nominal_frequency)
+        calculated_min_frequency = round(min(lower_points), 5) if lower_points else ""
+        calculated_max_frequency = round(max(upper_points), 5) if upper_points else ""
+        source_frequency_max = frequency_number(row.get("frequency_max"))
+        source_frequency_min = frequency_number(row.get("frequency_min"))
+        summary = dict(base)
+        summary.update(
+            {
+                "max_up_disturbance_mw": round(lower_disturbance, 4),
+                "max_down_disturbance_mw": round(upper_disturbance, 4),
+                "source_frequency_max_hz": round(source_frequency_max, 5) if source_frequency_max is not None else "",
+                "source_frequency_min_hz": round(source_frequency_min, 5) if source_frequency_min is not None else "",
+                "calculated_max_frequency_hz": calculated_max_frequency,
+                "calculated_min_frequency_hz": calculated_min_frequency,
+            }
+        )
+        yield {
+            "summary": summary,
+            "curves": [
+                frequency_curve_output_row(
+                    summary,
+                    "最低频率曲线",
+                    lower_disturbance,
+                    lower_points,
+                ),
+                frequency_curve_output_row(
+                    summary,
+                    "最高频率曲线",
+                    upper_disturbance,
+                    upper_points,
+                ),
+            ],
+        }
+
+
+def frequency_planning_parameters(scheme_payload: dict) -> dict:
+    rows = scheme_payload.get("planning_parameters") if isinstance(scheme_payload, dict) else {}
+    if isinstance(rows, dict):
+        return rows
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    return {}
+
+
+def frequency_curve_output_row(base: dict, curve_type: str, disturbance_mw: float, points: list[float]) -> dict:
+    row = dict(base)
+    row["curve_type"] = curve_type
+    row["disturbance_mw"] = round(disturbance_mw, 4)
+    for index, value in enumerate(points):
+        row[frequency_curve_point_header(index)] = round(value, 5)
+    return row
+
+
+def frequency_response_curve_points(
+    m_eq: float,
+    k_eq: float,
+    d_eq: float,
+    t_d: float,
+    delta_p_mw: float,
+    nominal_frequency_hz: float,
+) -> list[float]:
+    times = [index * FREQUENCY_CURVE_STEP_SECONDS for index in range(FREQUENCY_CURVE_POINT_COUNT)]
+    if m_eq <= plan_optimizer.FREQUENCY_EPS or t_d <= plan_optimizer.FREQUENCY_EPS:
+        return [round(float(nominal_frequency_hz), 5) for _ in times]
+    denom = d_eq + k_eq / (2.0 * math.pi)
+    if denom <= plan_optimizer.FREQUENCY_EPS:
+        return [round(float(nominal_frequency_hz), 5) for _ in times]
+    omega_ss = -delta_p_mw / denom
+    alpha, beta = plan_optimizer.second_order_coefficients(m_eq, k_eq, d_eq, t_d)
+    if beta <= plan_optimizer.FREQUENCY_EPS:
+        return [round(float(nominal_frequency_hz), 5) for _ in times]
+    disc = alpha**2 - 4.0 * beta
+    omega_values: list[float] = []
+    if disc < -plan_optimizer.FREQUENCY_EPS:
+        omega_n = math.sqrt(beta)
+        zeta = alpha / (2.0 * omega_n)
+        omega_d_sq = beta * (1.0 - zeta**2)
+        if omega_d_sq <= plan_optimizer.FREQUENCY_EPS:
+            return [round(float(nominal_frequency_hz), 5) for _ in times]
+        omega_d = math.sqrt(omega_d_sq)
+        a = -omega_ss
+        b = (-delta_p_mw / m_eq + zeta * omega_n * a) / omega_d
+        omega_values = [
+            omega_ss
+            + math.exp(-zeta * omega_n * t) * (a * math.cos(omega_d * t) + b * math.sin(omega_d * t))
+            for t in times
+        ]
+    elif disc > plan_optimizer.FREQUENCY_EPS:
+        sqrt_disc = math.sqrt(disc)
+        lam1 = -0.5 * alpha + 0.5 * sqrt_disc
+        lam2 = -0.5 * alpha - 0.5 * sqrt_disc
+        denom_lam = lam1 - lam2
+        if abs(denom_lam) <= plan_optimizer.FREQUENCY_EPS:
+            return [round(float(nominal_frequency_hz), 5) for _ in times]
+        c1 = (-delta_p_mw / m_eq + omega_ss * lam2) / denom_lam
+        c2 = -omega_ss - c1
+        omega_values = [omega_ss + c1 * math.exp(lam1 * t) + c2 * math.exp(lam2 * t) for t in times]
+    else:
+        lam = -0.5 * alpha
+        c1 = -omega_ss
+        c2 = -delta_p_mw / m_eq + lam * omega_ss
+        omega_values = [omega_ss + (c1 + c2 * t) * math.exp(lam * t) for t in times]
+    return [
+        round(float(nominal_frequency_hz) + (value if math.isfinite(value) else 0.0) / (2.0 * math.pi), 5)
+        for value in omega_values
+    ]
+
+
+def frequency_metrics_from_rows(safety_table: list[dict], safety_daily: list[dict]) -> list[dict]:
+    values_by_label = {str(row.get("指标", "")).strip(): row for row in safety_table}
+    highest = frequency_number(values_by_label.get("最高频率", {}).get("数值"))
+    lowest = frequency_number(values_by_label.get("最低频率", {}).get("数值"))
+    risk_hours = frequency_number(values_by_label.get("频率安全风险小时数", {}).get("数值"))
+    if highest is None:
+        highest_values = [frequency_number(row.get("frequency_max")) for row in safety_daily]
+        highest_values = [value for value in highest_values if value is not None]
+        highest = max(highest_values) if highest_values else None
+    if lowest is None:
+        lowest_values = [frequency_number(row.get("frequency_min")) for row in safety_daily]
+        lowest_values = [value for value in lowest_values if value is not None]
+        lowest = min(lowest_values) if lowest_values else None
+    if risk_hours is None and highest is not None and lowest is not None:
+        risk_hours = sum(
+            1
+            for row in safety_daily
+            if (frequency_number(row.get("frequency_max")) or 50.0) > 50.5
+            or (frequency_number(row.get("frequency_min")) or 50.0) < 49.5
+        )
+    return [
+        {"label": "最低频率", "value": round(lowest, 3) if lowest is not None else "-", "unit": "Hz"},
+        {"label": "最高频率", "value": round(highest, 3) if highest is not None else "-", "unit": "Hz"},
+        {"label": "频率安全风险小时数", "value": int(risk_hours) if risk_hours is not None else "-", "unit": "h"},
+    ]
+
+
+def frequency_summary_rows(metrics: list[dict]) -> list[dict]:
+    return [
+        {"指标": metric.get("label", ""), "数值": metric.get("value", ""), "单位": metric.get("unit", "")}
+        for metric in metrics
+    ]
+
+
+def frequency_detail_rows(safety_table: list[dict], metrics: list[dict]) -> list[dict]:
+    selected_labels = {
+        "最高频率",
+        "最低频率",
+        "频率安全风险小时数",
+        "向上扰动最大量",
+        "向下扰动最大量",
+        "频率下限裕度",
+        "频率上限裕度",
+        "初始频率变化率",
+        "上限场景初始频率变化率",
+        "等效惯量M",
+        "等效调频系数K",
+    }
+    rows = [row for row in safety_table if str(row.get("指标", "")).strip() in selected_labels]
+    existing = {str(row.get("指标", "")).strip() for row in rows}
+    for metric in metrics:
+        label = str(metric.get("label", "")).strip()
+        if label and label not in existing:
+            rows.append({"指标": label, "数值": metric.get("value", ""), "单位": metric.get("unit", "")})
+    return rows
+
+
+def frequency_number(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(str(value).strip().replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
 class TaskScheduler:
     """Serial queue for calculation tasks that should wait for existing jobs."""
 
@@ -2996,12 +4140,16 @@ def runtime_for_task_item(item: dict):
         return OPTIMIZATION_RUNTIME.runtimes().get(scheme)
     if task_type_key == "evaluation":
         return EVALUATION_RUNTIME.runtimes().get(f"{scheme}\0{result}")
+    if task_type_key == "frequency":
+        return FREQUENCY_EVALUATION_RUNTIME.runtimes().get(f"{scheme}\0{result}")
     return None
 
 
 def any_calculation_running_unlocked() -> bool:
     return any(runtime.status == "运行中" for runtime in OPTIMIZATION_RUNTIME.runtimes().values()) or any(
         runtime.status == "运行中" for runtime in EVALUATION_RUNTIME.runtimes().values()
+    ) or any(
+        runtime.status == "运行中" for runtime in FREQUENCY_EVALUATION_RUNTIME.runtimes().values()
     )
 
 
@@ -3011,7 +4159,9 @@ def start_task_item_unlocked(item: dict) -> dict:
         return OPTIMIZATION_RUNTIME.apply("start", scheme=item.get("scheme", ""))
     if task_type_key == "evaluation":
         return EVALUATION_RUNTIME.apply("start", scheme=item.get("scheme", ""), filename=item.get("result", ""))
-    raise ValueError("任务类型必须为规划计算或方案评估")
+    if task_type_key == "frequency":
+        return FREQUENCY_EVALUATION_RUNTIME.apply("start", scheme=item.get("scheme", ""), filename=item.get("result", ""))
+    raise ValueError("任务类型必须为规划计算、方案评估或频率计算")
 
 
 def build_task_list(schedule: bool = True) -> list[dict]:
@@ -3038,24 +4188,39 @@ def build_task_list(schedule: bool = True) -> list[dict]:
             result_name = str(result_item.get("name") or "").strip()
             if not result_name:
                 continue
-            if not task_list_evaluation_result_is_eligible(result_item):
-                continue
             key = f"{scheme}\0{result_name}"
-            eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
-            eval_state = (
-                eval_runtime.task_snapshot()
-                if eval_runtime
-                else default_task_runtime_state(scheme, result_filename=result_name)
-            )
-            eval_task = task_from_runtime_state(
-                "evaluation",
-                eval_state,
-                scheme=scheme,
-                result=result_name,
-                queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
-                queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
-            )
-            tasks[eval_task["id"]] = eval_task
+            if task_list_evaluation_result_is_eligible(result_item):
+                eval_runtime = EVALUATION_RUNTIME.runtimes().get(key)
+                eval_state = (
+                    eval_runtime.task_snapshot()
+                    if eval_runtime
+                    else default_task_runtime_state(scheme, result_filename=result_name)
+                )
+                eval_task = task_from_runtime_state(
+                    "evaluation",
+                    eval_state,
+                    scheme=scheme,
+                    result=result_name,
+                    queued=TASK_SCHEDULER.is_queued("evaluation", scheme, result_name),
+                    queue_position=TASK_SCHEDULER.queue_position("evaluation", scheme, result_name),
+                )
+                tasks[eval_task["id"]] = eval_task
+            if task_list_frequency_result_is_eligible(result_item):
+                freq_runtime = FREQUENCY_EVALUATION_RUNTIME.runtimes().get(key)
+                freq_state = (
+                    freq_runtime.task_snapshot()
+                    if freq_runtime
+                    else default_task_runtime_state(scheme, result_filename=result_name)
+                )
+                freq_task = task_from_runtime_state(
+                    "frequency",
+                    freq_state,
+                    scheme=scheme,
+                    result=result_name,
+                    queued=TASK_SCHEDULER.is_queued("frequency", scheme, result_name),
+                    queue_position=TASK_SCHEDULER.queue_position("frequency", scheme, result_name),
+                )
+                tasks[freq_task["id"]] = freq_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
         state = runtime.task_snapshot()
@@ -3085,6 +4250,20 @@ def build_task_list(schedule: bool = True) -> list[dict]:
         )
         tasks[task["id"]] = task
 
+    for key, runtime in FREQUENCY_EVALUATION_RUNTIME.runtimes().items():
+        scheme, result = split_evaluation_runtime_key(key)
+        queued = TASK_SCHEDULER.is_queued("frequency", scheme, result)
+        state = runtime.task_snapshot()
+        task = task_from_runtime_state(
+            "frequency",
+            state,
+            scheme=scheme,
+            result=result,
+            queued=queued,
+            queue_position=TASK_SCHEDULER.queue_position("frequency", scheme, result),
+        )
+        tasks[task["id"]] = task
+
     return sorted((task for task in tasks.values() if task_list_item_is_visible(task)), key=task_sort_key)
 
 
@@ -3093,13 +4272,19 @@ def task_list_evaluation_result_is_eligible(result_item: dict) -> bool:
     return bool(result_name) and result_name != OPTIMIZATION_RESULT_WORKBOOK_NAME and bool(result_item.get("readable", True))
 
 
+def task_list_frequency_result_is_eligible(result_item: dict) -> bool:
+    result_name = str(result_item.get("name") or "").strip()
+    return bool(result_name) and bool(result_item.get("readable", True))
+
+
 def task_list_item_is_visible(task: dict) -> bool:
     """Hide rows that business rules made completely non-operable."""
     return bool(task.get("queued") or task.get("can_start") or task.get("can_queue") or task.get("can_stop"))
 
 
 def task_sort_key(item: dict) -> tuple[int, str, str]:
-    type_rank = 0 if item.get("task_type_key") == "optimization" else 1
+    type_ranks = {"optimization": 0, "evaluation": 1, "frequency": 2}
+    type_rank = type_ranks.get(item.get("task_type_key"), 9)
     return type_rank, str(item.get("scheme") or ""), str(item.get("result") or "")
 
 
@@ -3152,7 +4337,8 @@ def task_from_runtime_state(
     process_id = state.get("process_id") or ""
     if isinstance(process_id, str) and process_id.isdigit():
         process_id = int(process_id)
-    task_type = "规划计算" if task_type_key == "optimization" else "方案评估"
+    task_type_labels = {"optimization": "规划计算", "evaluation": "方案评估", "frequency": "频率计算"}
+    task_type = task_type_labels.get(task_type_key, "未知任务")
     task_id = f"{task_type_key}::{scheme}::{normalized_result}"
     return {
         "id": task_id,
@@ -3213,6 +4399,8 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
             state = OPTIMIZATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"])
         elif task_type_key == "evaluation":
             state = EVALUATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"], filename=item["result"])
+        elif task_type_key == "frequency":
+            state = FREQUENCY_EVALUATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"], filename=item["result"])
         else:
             state = default_task_runtime_state(item["scheme"], item["result"])
         tasks = build_task_list()
@@ -3241,7 +4429,18 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
         )
         tasks = build_task_list()
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
-    raise ValueError("任务类型必须为规划计算或方案评估")
+    if task_type_key == "frequency":
+        TASK_SCHEDULER.remove(task_type_key, scheme, result)
+        state = FREQUENCY_EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
+        task = task_from_runtime_state(
+            "frequency",
+            state,
+            scheme=state.get("scheme") or scheme,
+            result=state.get("result_filename") or result,
+        )
+        tasks = build_task_list()
+        return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
+    raise ValueError("任务类型必须为规划计算、方案评估或频率计算")
 
 
 def normalize_task_action(action: str) -> str:
@@ -3301,6 +4500,9 @@ def task_control_state_for_item(task_type_key: str, scheme: str, result: str = "
     if item["task_type_key"] == "evaluation":
         task["can_start"] = task["can_start"] and bool(item["result"]) and item["result"] != OPTIMIZATION_RESULT_WORKBOOK_NAME
         task["can_queue"] = task["can_queue"] and bool(item["result"]) and item["result"] != OPTIMIZATION_RESULT_WORKBOOK_NAME
+    if item["task_type_key"] == "frequency":
+        task["can_start"] = task["can_start"] and bool(item["result"])
+        task["can_queue"] = task["can_queue"] and bool(item["result"])
     return task
 
 
@@ -3343,6 +4545,8 @@ def normalize_task_type_key(value: str) -> str:
         return "optimization"
     if text in {"evaluation", "eval", "方案评估"}:
         return "evaluation"
+    if text in {"frequency", "freq", "频率计算"}:
+        return "frequency"
     return ""
 
 
@@ -3671,6 +4875,7 @@ def _load_initial_simu_runtime() -> SimuRuntime:
 SIMU_RUNTIME = _load_initial_simu_runtime()
 OPTIMIZATION_RUNTIME = OptimizationRuntimeManager()
 EVALUATION_RUNTIME = EvaluationRuntimeManager()
+FREQUENCY_EVALUATION_RUNTIME = FrequencyEvaluationRuntimeManager()
 TASK_SCHEDULER = TaskScheduler()
 DATA_SOURCE = CsvDataSource()
 PLANNING_STORE = planning_store.PlanningStore()
@@ -5510,8 +6715,11 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
                 return _json_response(PLANNING_STORE.read_scheme(name))
             if method == "PUT":
                 payload = _read_json_body(body)
+                includes_time_series = "time_series" in payload
                 PLANNING_STORE.write_scheme(name, payload)
-                return _json_response(PLANNING_STORE.read_scheme(name))
+                if includes_time_series:
+                    return _json_response(PLANNING_STORE.read_scheme(name))
+                return _json_response(PLANNING_STORE.read_scheme_overview(name))
             if method == "DELETE":
                 return _json_response(PLANNING_STORE.delete_scheme(name))
     except WeatherHistoryError as exc:
@@ -5545,6 +6753,33 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
+    if path == "/api/frequency/status":
+        scheme = query_params.get("scheme", [""])[0]
+        filename = query_params.get("filename", [""])[0]
+        light = truthy_json_value(query_params.get("light", ["0"])[0])
+        include_hourly_curves = not light
+        return _json_response(FREQUENCY_EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
+    if path == "/api/frequency/time-curve":
+        try:
+            scheme = query_params.get("scheme", [""])[0]
+            filename = query_params.get("filename", [""])[0]
+            selected = selected_evaluation_result_filename(scheme, filename)
+            hour_index = query_params.get("hour_index", [""])[0]
+            month = query_params.get("month", [""])[0]
+            day = query_params.get("day", [""])[0]
+            hour = query_params.get("hour", [""])[0]
+            payload = read_frequency_time_curve_payload(
+                frequency_curve_result_path(scheme, selected),
+                hour_index=hour_index,
+                month=month,
+                day=day,
+                hour=hour,
+            )
+            return _json_response(payload)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     if path.startswith("/api/evaluation/"):
         return handle_evaluation_results_api_path(path, "GET", b"", query)
     if path == "/api/optimization/status":
@@ -5581,6 +6816,20 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
             scheme = str(payload.get("scheme", ""))
             filename = str(payload.get("filename", ""))
             state = EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
+        except OptimizationStateError as exc:
+            return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        return _json_response({"ok": True, "state": state})
+    if path == "/api/frequency/control":
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            action = str(payload.get("action", ""))
+            scheme = str(payload.get("scheme", ""))
+            filename = str(payload.get("filename", ""))
+            state = FREQUENCY_EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
         except FileNotFoundError as exc:

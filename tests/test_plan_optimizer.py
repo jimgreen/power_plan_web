@@ -37,6 +37,42 @@ class PlanOptimizerTest(unittest.TestCase):
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 60
         return payload
 
+    def _zero_totals(self):
+        return {
+            "green_power_ratio": 0,
+            "renewable_curtailed_rate": 0,
+            "load_energy": 0,
+            "diesel_energy": 0,
+            "wind_energy": 0,
+            "pv_energy": 0,
+            "storage_charge_energy": 0,
+            "storage_discharge_energy": 0,
+            "hydrogen_production_energy": 0,
+            "hydrogen_storage_increase": 0,
+            "hydrogen_storage_decrease": 0,
+            "fuel_cell_energy": 0,
+            "wind_available_energy": 0,
+            "pv_available_energy": 0,
+            "renewable_available_energy": 0,
+            "renewable_energy": 0,
+            "wind_curtailed_energy": 0,
+            "pv_curtailed_energy": 0,
+            "curtailed_energy": 0,
+            "unmet_load_energy": 0,
+            "green_generation_energy": 0,
+            "total_generation_energy": 0,
+            "diesel_consumption": 0,
+            "hydrogen_production": 0,
+        }
+
+    def _zero_costs(self):
+        return {
+            "annualized_construction_cost": 0,
+            "annual_diesel_cost": 0,
+            "annual_total_cost": 0,
+            "levelized_cost": 0,
+        }
+
     def test_post_disturbance_constraints_use_combined_up_and_down_requirements(self):
         builder = dispatch_milp.MilpModelBuilder()
         variable_keys = [
@@ -119,6 +155,98 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(fields["grid_down_regulation_capacity"], -44)
         self.assertEqual(fields["grid_up_regulation_requirement"], 19)
         self.assertEqual(fields["grid_down_regulation_requirement"], -20)
+
+    def test_build_results_safety_table_summarizes_hourly_disturbance_requirements(self):
+        base_row = {"unmet_load": 0, "storage_soc": 0, "hydrogen_storage": 0}
+        dispatch_rows = [
+            {**base_row, "hour": 1, "grid_up_regulation_requirement": 12.5, "grid_down_regulation_requirement": -18.0},
+            {**base_row, "hour": 2, "grid_up_regulation_requirement": 31.25, "grid_down_regulation_requirement": -7.5},
+            {**base_row, "hour": 3, "grid_up_regulation_requirement": 20.0, "grid_down_regulation_requirement": -44.75},
+        ]
+
+        results = plan_optimizer.build_results(
+            planning_rows=[],
+            dispatch_rows=dispatch_rows,
+            totals=self._zero_totals(),
+            costs=self._zero_costs(),
+            model={"green_ratio_lower": 0, "frequency": {"nominal_frequency_hz": 50}},
+        )
+        safety_values = {row["指标"]: row["数值"] for row in results["safety_table"]}
+
+        self.assertEqual(safety_values["向上扰动最大量"], 31.25)
+        self.assertEqual(safety_values["向下扰动最大量"], 44.75)
+
+    def test_build_results_tables_match_economic_and_safety_formulas(self):
+        totals = self._zero_totals()
+        totals.update(
+            {
+                "green_power_ratio": 40.0,
+                "renewable_curtailed_rate": 8.0,
+                "load_energy": 1000.0,
+                "diesel_energy": 300.0,
+                "wind_energy": 200.0,
+                "pv_energy": 100.0,
+                "storage_discharge_energy": 50.0,
+                "fuel_cell_energy": 25.0,
+                "diesel_consumption": 0.75,
+                "hydrogen_production": 12.5,
+            }
+        )
+        costs = {
+            "annualized_construction_cost": 10.0,
+            "annual_diesel_cost": 1.5,
+            "annual_total_cost": 11.5,
+            "levelized_cost": 115.0,
+        }
+        base_row = {
+            "unmet_load": 0,
+            "storage_soc": 10,
+            "hydrogen_storage": 5,
+            "frequency_max": 50.12,
+            "frequency_min": 49.82,
+            "frequency_lower_margin_hz": 0.02,
+            "frequency_upper_margin_hz": 0.03,
+            "grid_up_regulation_requirement": 12.0,
+            "grid_down_regulation_requirement": -8.0,
+        }
+        dispatch_rows = [
+            {**base_row, "hour": 1},
+            {
+                **base_row,
+                "hour": 2,
+                "frequency_max": 50.3,
+                "frequency_min": 49.7,
+                "frequency_lower_margin_hz": -0.01,
+                "frequency_upper_margin_hz": 0.01,
+                "grid_up_regulation_requirement": 18.0,
+                "grid_down_regulation_requirement": -16.0,
+            },
+        ]
+
+        results = plan_optimizer.build_results(
+            planning_rows=[],
+            dispatch_rows=dispatch_rows,
+            totals=totals,
+            costs=costs,
+            model={"green_ratio_lower": 0, "frequency": {"nominal_frequency_hz": 50}},
+        )
+        green_values = {row["指标"]: row["数值"] for row in results["green_table"]}
+        safety_values = {row["指标"]: row["数值"] for row in results["safety_table"]}
+        annual_values = {row["指标"]: row["数值"] for row in results["overview_tables"][1]["rows"]}
+
+        self.assertEqual(green_values["负荷总电量"], totals["load_energy"])
+        self.assertEqual(green_values["柴发总电量"], totals["diesel_energy"])
+        self.assertEqual(green_values["柴油消耗"], totals["diesel_consumption"])
+        self.assertEqual(green_values["年均建设成本"], costs["annualized_construction_cost"])
+        self.assertEqual(green_values["年柴油成本"], costs["annual_diesel_cost"])
+        self.assertEqual(green_values["年总成本"], costs["annual_total_cost"])
+        self.assertEqual(green_values["度电成本"], costs["levelized_cost"])
+        self.assertEqual(safety_values["最高频率"], 50.3)
+        self.assertEqual(safety_values["最低频率"], 49.7)
+        self.assertEqual(safety_values["频率下限最小裕度"], -0.01)
+        self.assertEqual(safety_values["频率上限最小裕度"], 0.01)
+        self.assertEqual(safety_values["频率安全风险小时数"], 1)
+        self.assertEqual(annual_values["频率风险点"], safety_values["频率安全风险小时数"])
 
     def test_frequency_delta_p_uses_disturbance_factors(self):
         model = {
@@ -258,6 +386,21 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(seen_options["solver"], "mosek")
         self.assertEqual(seen_options["time_limit"], 5400)
 
+    def test_planning_optimization_passes_preferred_solver_to_milp_adapter(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["preferred_solver"] = "cplex"
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        seen_options = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            seen_options.update(options)
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        self.assertEqual(seen_options["solver"], "cplex")
+
     def test_planning_optimization_rejects_infeasible_non_success_solution(self):
         payload = self._payload()
         model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
@@ -326,6 +469,8 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(objective_cost(("diesel_power", 0, 0)), 0.001)
         self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
         self.assertEqual(objective_cost(("diesel_on_count", 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
+        self.assertEqual(objective_cost(("diesel_startup_count", 0, 0)), 0.0)
+        self.assertEqual(objective_cost(("diesel_shutdown_count", 0, 0)), 0.0)
         self.assertEqual(objective_cost(("electrolyzer_on_count", 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
         for key in (
             ("wind_curtailed", 0),
@@ -338,11 +483,15 @@ class PlanOptimizerTest(unittest.TestCase):
         ):
             self.assertEqual(objective_cost(key), 0.0)
         self.assertIn(("diesel_on_count", 0, 0), variables)
+        self.assertIn(("diesel_startup_count", 0, 0), variables)
+        self.assertIn(("diesel_shutdown_count", 0, 0), variables)
         self.assertIn(("electrolyzer_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_up_available_count", 0, 0), variables)
         self.assertIn(("grid_storage_down_available_count", 0, 0), variables)
         self.assertEqual(captured["integrality"][variables[("diesel_on_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("diesel_startup_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("diesel_shutdown_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("electrolyzer_on_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("grid_storage_on_count", 0, 0)]], 1)
         for unit in range(2):
@@ -398,6 +547,8 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertFalse(any(key[0] in forbidden_unit_variables for key in variables))
         for key in (
             ("diesel_on_count", 0, 0),
+            ("diesel_startup_count", 0, 0),
+            ("diesel_shutdown_count", 0, 0),
             ("electrolyzer_on_count", 0, 0),
             ("grid_storage_on_count", 0, 0),
             ("grid_storage_up_available_count", 0, 0),

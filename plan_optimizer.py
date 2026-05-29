@@ -458,11 +458,14 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     )
     optimization_time_limit_minutes = int(min(120, max(10, round(numeric(raw_time_limit_minutes, 60)))))
     optimization_time_limit_seconds = optimization_time_limit_minutes * 60
+    preferred_solver = normalize_preferred_solver(planning_parameters.get("preferred_solver"))
     initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))
     initial_hydrogen_storage_ratio = min(
         1.0,
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
     )
+    diesel_minimum_on_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_on_hours"), 4)))))
+    diesel_minimum_off_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_off_hours"), 4)))))
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
     load_disturbance_enabled = truthy_flag(planning_parameters.get("load_disturbance_enabled"), False)
     renewable_disturbance_enabled = truthy_flag(planning_parameters.get("renewable_disturbance_enabled"), False)
@@ -521,8 +524,11 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "green_ratio_lower": green_ratio_lower,
         "optimization_time_limit_minutes": optimization_time_limit_minutes,
         "optimization_time_limit_seconds": optimization_time_limit_seconds,
+        "preferred_solver": preferred_solver,
         "initial_storage_soc_ratio": initial_storage_soc_ratio,
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
+        "diesel_minimum_on_hours": diesel_minimum_on_hours,
+        "diesel_minimum_off_hours": diesel_minimum_off_hours,
         "storage_charge_efficiency": storage_charge_efficiency,
         "storage_discharge_efficiency": storage_discharge_efficiency,
         "storage_self_discharge_rate": storage_self_discharge_rate,
@@ -608,6 +614,18 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 device["quantity_upper"],
                 integer=True,
                 cost=DIESEL_ON_COUNT_PENALTY,
+            )
+            builder.add_var(
+                ("diesel_startup_count", hour, device["index"]),
+                0.0,
+                device["quantity_upper"],
+                integer=True,
+            )
+            builder.add_var(
+                ("diesel_shutdown_count", hour, device["index"]),
+                0.0,
+                device["quantity_upper"],
+                integer=True,
             )
         for device in grid_storage_pcs_devices:
             builder.add_var(("grid_storage_on_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
@@ -863,6 +881,18 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             self_discharge_rate_per_hour=hydrogen_self_discharge_per_hour,
         )
 
+    if model["diesel_minimum_on_hours"] > 0 or model["diesel_minimum_off_hours"] > 0:
+        for device in diesel_devices:
+            dispatch_milp.add_minimum_commitment_duration_constraints(
+                builder,
+                on_indices=[var(("diesel_on_count", hour, device["index"])) for hour in range(n)],
+                quantity_index=var(("qty", device["key"], device["index"])),
+                startup_indices=[var(("diesel_startup_count", hour, device["index"])) for hour in range(n)],
+                shutdown_indices=[var(("diesel_shutdown_count", hour, device["index"])) for hour in range(n)],
+                minimum_on_hours=model["diesel_minimum_on_hours"],
+                minimum_off_hours=model["diesel_minimum_off_hours"],
+            )
+
     for day_end_hour in range(23, n, 24):
         storage_energy_terms = qty_terms(storage_battery_devices)
         dispatch_milp.add_storage_cycle_constraint(
@@ -911,17 +941,19 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         20,
     )
     dispatch_milp.emit_builder_diagnostics(builder, log, "规划求解MILP")
+    preferred_solver = str(model.get("preferred_solver") or "auto").strip().lower()
+    effective_solver = preferred_solver if preferred_solver != "auto" else PLANNING_SOLVER
     emit(
         log,
         "info",
-        f"求解参数：solver={PLANNING_SOLVER}（MOSEK原生Task API），time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
+        f"求解参数：solver={effective_solver}（默认MOSEK原生Task API），time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
         22,
     )
     emit(log, "info", "求解设备台数和全年运行联合混合整数线性规划", 25)
     result = dispatch_milp.solve_built_milp(
         builder,
         options={
-            "solver": PLANNING_SOLVER,
+            "solver": effective_solver,
             "time_limit": model["optimization_time_limit_seconds"],
             "mip_rel_gap": 0.01,
             "disp": False,
@@ -963,6 +995,27 @@ def raise_if_solver_timed_out(result: Any, problem_name: str = "规划求解") -
         return
     message = str(getattr(result, "message", "") or "求解器达到时间上限")
     raise CalculationTimeoutError(f"{problem_name}达到优化求解时间上限，计算超时：{message}")
+
+
+def normalize_preferred_solver(value: Any) -> str:
+    solver = str(value or "auto").strip().lower()
+    aliases = {
+        "": "auto",
+        "automatic": "auto",
+        "自动": "auto",
+        "自动选择": "auto",
+        "grb": "gurobi",
+        "gurobi": "gurobi",
+        "cplx": "cplex",
+        "cplex": "cplex",
+        "msk": "mosek",
+        "mosek": "mosek",
+        "highs": "scipy",
+        "scipy": "scipy",
+        "scipy highs": "scipy",
+        "scipy-highs": "scipy",
+    }
+    return aliases.get(solver, "auto")
 
 
 def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -1710,6 +1763,7 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
             for device in model["device_rows"]["photovoltaics"]
         )
         renewable_available = wind_available + pv_available
+        renewable_power = 0.0
         hour_index = int(numeric(source_row.get("hour_index"), hour + 1) or hour + 1)
         security_fields = dispatch_security_curve_fields(
             model,
@@ -1732,13 +1786,17 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
                 "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
                 "load": load,
                 "diesel_power": 0.0,
+                "diesel_capacity": 0.0,
                 "wind_available": round(wind_available, 4),
                 "wind_power": 0.0,
                 "pv_available": round(pv_available, 4),
                 "pv_power": 0.0,
+                "renewable_power": round(renewable_power, 4),
                 "renewable_available": round(renewable_available, 4),
                 "renewable_ratio": 0.0,
                 "storage_power": 0.0,
+                "grid_storage_capacity": 0.0,
+                "grid_storage_power": 0.0,
                 "storage_charge": 0.0,
                 "storage_discharge": 0.0,
                 "storage_soc": initial_storage,
@@ -1895,6 +1953,10 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
             optional_value(("diesel_on_count", hour, device["index"])) * device["power_upper"]
             for device in diesel_devices
         )
+        grid_storage_capacity = sum(
+            optional_value(("grid_storage_on_count", hour, device["index"])) * device["capacity"]
+            for device in grid_storage_pcs_devices
+        )
         grid_storage_up_capacity = sum(
             optional_value(("grid_storage_up_available_count", hour, device["index"])) * device["capacity"]
             for device in grid_storage_pcs_devices
@@ -1935,13 +1997,17 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
                 "load": round(load, 4),
                 "diesel_power": round(diesel_power, 4),
+                "diesel_capacity": round(diesel_capacity, 4),
                 "wind_available": round(wind_available, 4),
                 "wind_power": round(wind_power, 4),
                 "pv_available": round(pv_available, 4),
                 "pv_power": round(pv_power, 4),
+                "renewable_power": round(renewable_energy, 4),
                 "renewable_available": round(renewable_available, 4),
                 "renewable_ratio": round(estimate.percent(renewable_energy, load), 4),
                 "storage_power": round(storage_power, 4),
+                "grid_storage_capacity": round(grid_storage_capacity, 4),
+                "grid_storage_power": round(grid_storage_power, 4),
                 "storage_charge": round(storage_charge, 4),
                 "storage_discharge": round(storage_discharge, 4),
                 "storage_soc": round(value(("storage_soc", hour)), 4),
@@ -2081,8 +2147,26 @@ def min_frequency_margin(dispatch_rows: list[dict[str, Any]], field: str) -> flo
     return round(min(values), 4) if values else 0.0
 
 
-def max_frequency_disturbance_kw(dispatch_rows: list[dict[str, Any]], field: str) -> float:
-    values = [abs(numeric(row.get(field), 0.0)) * 1000.0 for row in dispatch_rows if row.get(field) is not None]
+def max_up_disturbance_requirement(dispatch_rows: list[dict[str, Any]]) -> float:
+    values = []
+    for row in dispatch_rows:
+        if row.get("grid_up_regulation_requirement") is not None:
+            values.append(max(0.0, numeric(row.get("grid_up_regulation_requirement"), 0.0)))
+        else:
+            values.append(
+                max(0.0, numeric(row.get("load_up_disturbance_power"), 0.0))
+                + max(0.0, numeric(row.get("renewable_down_disturbance_power"), 0.0))
+            )
+    return round(max(values), 4) if values else 0.0
+
+
+def max_down_disturbance_requirement(dispatch_rows: list[dict[str, Any]]) -> float:
+    values = []
+    for row in dispatch_rows:
+        value = row.get("grid_down_regulation_requirement")
+        if value is None:
+            value = row.get("load_down_disturbance_power")
+        values.append(abs(numeric(value, 0.0)))
     return round(max(values), 4) if values else 0.0
 
 
@@ -2125,8 +2209,8 @@ def build_results(
     lowest_frequency = min((point["frequency_min"] for point in safety_daily), default=nominal_frequency_hz)
     min_lower_margin = min_frequency_margin(dispatch_rows, "frequency_lower_margin_hz")
     min_upper_margin = min_frequency_margin(dispatch_rows, "frequency_upper_margin_hz")
-    max_up_disturbance_kw = max_frequency_disturbance_kw(dispatch_rows, "frequency_delta_p_mw")
-    max_down_disturbance_kw = max_frequency_disturbance_kw(dispatch_rows, "frequency_upper_delta_p_mw")
+    upward_disturbance = max_up_disturbance_requirement(dispatch_rows)
+    downward_disturbance = max_down_disturbance_requirement(dispatch_rows)
     green_table = [
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
         {"指标": "负荷总电量", "数值": totals["load_energy"], "单位": "kWh"},
@@ -2186,8 +2270,8 @@ def build_results(
         ],
         "safety_table": [
             {"指标": "额定频率", "数值": round(nominal_frequency_hz, 4), "单位": "Hz"},
-            {"指标": "向上扰动最大量", "数值": max_up_disturbance_kw, "单位": "kW"},
-            {"指标": "向下扰动最大量", "数值": max_down_disturbance_kw, "单位": "kW"},
+            {"指标": "向上扰动最大量", "数值": upward_disturbance, "单位": "kW"},
+            {"指标": "向下扰动最大量", "数值": downward_disturbance, "单位": "kW"},
             {"指标": "最高频率", "数值": highest_frequency, "单位": "Hz"},
             {"指标": "最低频率", "数值": lowest_frequency, "单位": "Hz"},
             {"指标": "频率下限最小裕度", "数值": min_lower_margin, "单位": "Hz"},

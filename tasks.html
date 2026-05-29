@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>任务并发 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260518-legend-pct6">
+  <link rel="stylesheet" href="assets/planning.css?v=20260527-task-tabs-theme1">
 </head>
 <body>
   <main class="planning-shell">
@@ -15,8 +15,8 @@
         <a href="index.html">系统首页</a>
         <a href="planning.html">参数维护</a>
         <a href="optimize.html">规划求解</a>
-        <a href="users.html" data-admin-only hidden>用户管理</a>
         <a href="evaluation.html">方案评估</a>
+        <a href="frequency.html">频率计算</a>
         <a href="comparison.html">结果对比</a>
         <a class="active" href="tasks.html">任务并发</a>
       </nav>
@@ -29,14 +29,18 @@
     <section class="workspace tasks-workspace">
       <section class="tasks-panel">
         <div id="taskError" class="status-error" hidden></div>
-        <section class="task-section task-section-optimization" aria-label="规划计算任务">
+        <div class="task-type-tabs" role="tablist" aria-label="任务类型切换">
+          <button class="task-type-tab active" type="button" data-task-page="optimization" role="tab" aria-selected="true" aria-controls="optimizationTaskSection">规划计算任务</button>
+          <button class="task-type-tab" type="button" data-task-page="evaluation" role="tab" aria-selected="false" aria-controls="evaluationTaskSection">方案评估任务</button>
+          <button class="task-type-tab" type="button" data-task-page="frequency" role="tab" aria-selected="false" aria-controls="frequencyTaskSection">频率计算任务</button>
+        </div>
+        <section id="optimizationTaskSection" class="task-section task-section-optimization active" data-task-section="optimization" aria-label="规划计算任务" role="tabpanel">
           <div class="task-section-head">
             <h2>规划计算任务</h2>
           </div>
           <div id="optimizationTaskTable" class="data-table task-table" aria-label="规划计算任务"></div>
         </section>
-        <div id="taskTableResizeHandle" class="task-table-resize-handle" role="separator" aria-orientation="horizontal" aria-label="调整规划计算和方案评估任务表高度" tabindex="0"></div>
-        <section class="task-section task-section-evaluation" aria-label="方案评估任务">
+        <section id="evaluationTaskSection" class="task-section task-section-evaluation" data-task-section="evaluation" aria-label="方案评估任务" role="tabpanel" hidden>
           <div class="task-section-head">
             <h2>方案评估任务</h2>
             <label class="task-scheme-filter" for="evaluationSchemeFilter">
@@ -48,11 +52,23 @@
           </div>
           <div id="evaluationTaskTable" class="data-table task-table" aria-label="方案评估任务"></div>
         </section>
+        <section id="frequencyTaskSection" class="task-section task-section-frequency" data-task-section="frequency" aria-label="频率计算任务" role="tabpanel" hidden>
+          <div class="task-section-head">
+            <h2>频率计算任务</h2>
+            <label class="task-scheme-filter" for="frequencySchemeFilter">
+              <span>方案名称</span>
+              <select id="frequencySchemeFilter" aria-label="按方案名称筛选频率计算任务">
+                <option value="">全部方案</option>
+              </select>
+            </label>
+          </div>
+          <div id="frequencyTaskTable" class="data-table task-table" aria-label="频率计算任务"></div>
+        </section>
       </section>
     </section>
   </main>
   <script src="assets/i18n.js?v=20260518-fit-text4"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/tasks.js?v=20260518-task-refresh-fast1"></script>
+  <script src="assets/tasks.js?v=20260527-frequency-calc1"></script>
 </body>
 </html>

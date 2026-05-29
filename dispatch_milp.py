@@ -338,6 +338,58 @@ def add_unit_commitment_constraints(
     )
 
 
+def add_minimum_commitment_duration_constraints(
+    builder: MilpModelBuilder,
+    *,
+    on_indices: list[int],
+    quantity_index: int,
+    startup_indices: list[int],
+    shutdown_indices: list[int],
+    minimum_on_hours: int,
+    minimum_off_hours: int,
+) -> None:
+    """Constrain aggregate unit-count startup/shutdown durations.
+
+    The model tracks online diesel units as an integer count instead of
+    single-unit binaries.  A positive increase in the count creates the same
+    number of startup units, and a positive decrease creates shutdown units.
+    The duration constraints then require enough online/offline unit-hours in
+    the following window for each startup/shutdown count.
+    """
+
+    n = len(on_indices)
+    if not (n == len(startup_indices) == len(shutdown_indices)):
+        raise ValueError("minimum commitment duration indices must have the same length")
+    min_on = int(max(0, minimum_on_hours))
+    min_off = int(max(0, minimum_off_hours))
+    for hour, on_index in enumerate(on_indices):
+        startup_index = startup_indices[hour]
+        shutdown_index = shutdown_indices[hour]
+        previous_on_index = on_indices[hour - 1] if hour > 0 else None
+        startup_terms = {startup_index: 1.0, on_index: -1.0}
+        shutdown_terms = {shutdown_index: 1.0, on_index: 1.0}
+        if previous_on_index is not None:
+            startup_terms[previous_on_index] = 1.0
+            shutdown_terms[previous_on_index] = -1.0
+        builder.add_constraint(startup_terms, 0.0, np.inf)
+        builder.add_constraint(shutdown_terms, 0.0, np.inf)
+
+        if min_on > 0:
+            window = on_indices[hour : min(n, hour + min_on)]
+            builder.add_constraint(
+                {**{index: 1.0 for index in window}, startup_index: -float(min_on)},
+                0.0,
+                np.inf,
+            )
+        if min_off > 0:
+            window = on_indices[hour : min(n, hour + min_off)]
+            builder.add_constraint(
+                {**{index: -1.0 for index in window}, quantity_index: float(len(window)), shutdown_index: -float(min_off)},
+                0.0,
+                np.inf,
+            )
+
+
 def add_storage_constraints(
     builder: MilpModelBuilder,
     *,

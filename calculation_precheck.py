@@ -47,7 +47,6 @@ def _validate_fast_feasibility(scheme_payload: dict, *, mode: str) -> None:
         green_ratio_lower=green_ratio_lower,
         prefix=prefix,
     )
-    _validate_fast_hourly_supply(device_rows, time_series, prefix=prefix)
 
     if (
         initial_hydrogen_storage_ratio > FAST_FEASIBILITY_EPS
@@ -100,30 +99,6 @@ def _validate_fast_renewable_energy_ratio(
             f"负荷电量为{_format_fast_number(load_energy)}kWh，占比{actual_ratio:.2%}，"
             f"低于绿色电量占比要求{green_ratio_lower:.2%}，无法满足绿电比例约束。"
         )
-
-
-def _validate_fast_hourly_supply(device_rows: dict[str, list[dict]], time_series: list, *, prefix: str) -> None:
-    if not time_series:
-        return
-    diesel_power_upper = sum(
-        max(0.0, estimate.numeric(device.get("power_upper"), device.get("capacity", 0.0)))
-        * max(0, int(device.get("quantity_upper", 0)))
-        for device in device_rows["diesel_generators"]
-    )
-    for index, row in enumerate(time_series):
-        if not isinstance(row, dict):
-            continue
-        load = max(0.0, estimate.numeric(row.get("load"), 0.0))
-        if load <= FAST_FEASIBILITY_EPS:
-            continue
-        wind_power = _fast_hourly_renewable_power(device_rows["wind_turbines"], row, "wind")
-        pv_power = _fast_hourly_renewable_power(device_rows["photovoltaics"], row, "pv")
-        max_supply = wind_power + pv_power + diesel_power_upper
-        if max_supply + FAST_FEASIBILITY_EPS < load:
-            raise ValueError(
-                f"{prefix}：第{index + 1}小时风机、光伏和柴发最大供电功率之和小于负荷功率"
-                f"（最大供电{_format_fast_number(max_supply)}kW，负荷{_format_fast_number(load)}kW），无法满足功率平衡约束。"
-            )
 
 
 def _fast_renewable_available_energy(device_rows: dict[str, list[dict]], time_series: list) -> float:

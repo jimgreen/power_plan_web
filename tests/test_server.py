@@ -561,8 +561,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("i18n-fit-text", i18n_script)
         self.assertIn("element.style.maxWidth", i18n_script)
         self.assertIn("shrinkElementFontToFit", i18n_script)
-        self.assertIn("data-admin-only", planning_html)
-        self.assertIn("data-admin-only", optimize_html)
+        self.assertNotIn('href="users.html" data-admin-only hidden>用户管理</a>', planning_html)
+        self.assertNotIn('href="users.html" data-admin-only hidden>用户管理</a>', optimize_html)
+        self.assertNotIn('href="users.html" data-admin-only hidden>用户管理</a>', tasks_html)
         self.assertIn("data-admin-only", index_html)
         self.assertIn(".user-status", css)
         self.assertIn(".language-switch", css)
@@ -819,12 +820,6 @@ class PowerPlanServerTest(unittest.TestCase):
             payload["wind_turbines"][0]["quantity_upper"] = 0
             payload["photovoltaics"][0]["quantity_upper"] = 0
             payload["time_series"][0]["load"] = 100
-            status, data = write_and_start(payload)
-            self.assertEqual(status, 400)
-            self.assertIn("第1小时", data["message"])
-            self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
-
-            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
             payload["diesel_generators"][0]["power_upper"] = 100
             payload["hydrogen_tanks"][0].update({"quantity_lower": 1, "quantity_upper": 1, "self_discharge_rate": 0.001})
             payload["hydrogen_electrolyzers"][0]["quantity_upper"] = 0
@@ -862,7 +857,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("def validate_evaluation_fast_feasibility", precheck_source)
         self.assertIn("启动前快速可行性预检查", docs)
         self.assertIn("年度风光最大可发电量不足", docs)
-        self.assertIn("单小时最大供电功率不足", docs)
+        self.assertNotIn("单小时最大供电功率不足", docs)
+        self.assertNotIn("风机最大可发功率 + 光伏最大可发功率 + 柴发最大可发功率 < 负荷功率", docs)
         self.assertIn("储氢自损耗无法补偿", docs)
         self.assertIn("电储自损耗无法补偿", docs)
 
@@ -1257,6 +1253,85 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(evaluation_payload["status"], "超时")
         self.assertEqual(server.task_display_status(evaluation_payload["status"]), "计算超时")
         self.assertIn("最大用时", evaluation_payload["logs"][-1]["message"])
+
+    def test_optimization_done_export_uses_runtime_results_not_stale_workbook(self):
+        runtime = server.OptimizationRuntime("方案A")
+        new_results = {"curves": {"green_hourly": [{"load_down_disturbance_power": -97.35}]}}
+        captured = {}
+
+        def fake_export(payload):
+            captured["runtime_status_during_export"] = runtime.status
+            captured["payload"] = payload
+            return WEB_ROOT / "tests" / "tmp_opt_results.xlsx"
+
+        with runtime._lock:
+            runtime.status = "运行中"
+            runtime.scheme = "方案A"
+            runtime.start_time = server._now_text()
+            with patch.object(
+                server,
+                "read_result_workbook_display_payload_for_response",
+                side_effect=AssertionError("导出本次规划结果时不应读取旧结果工作簿"),
+            ), patch.object(server, "export_optimization_results_workbook", side_effect=fake_export):
+                runtime._handle_process_event_unlocked(
+                    {
+                        "type": "done",
+                        "metrics": [{"label": "度电成本", "value": 1.23, "unit": "元"}],
+                        "results": new_results,
+                    }
+                )
+
+        self.assertEqual(runtime.status, "已完成")
+        self.assertEqual(captured["runtime_status_during_export"], "运行中")
+        self.assertEqual(captured["payload"]["status"], "已完成")
+        self.assertTrue(captured["payload"]["end_time"])
+        self.assertEqual(captured["payload"]["results"], new_results)
+        self.assertEqual(
+            captured["payload"]["results"]["curves"]["green_hourly"][0]["load_down_disturbance_power"],
+            -97.35,
+        )
+
+    def test_evaluation_done_export_uses_runtime_results_not_stale_workbook(self):
+        runtime = server.EvaluationRuntime("方案A")
+        new_results = {"curves": {"green_hourly": [{"load_down_disturbance_power": -97.35}]}}
+        dispatch_rows = [{"hour": 1, "load_down_disturbance_power": -97.35}]
+        captured = {}
+
+        def fake_export(payload, rows):
+            captured["runtime_status_during_export"] = runtime.status
+            captured["payload"] = payload
+            captured["dispatch_rows"] = rows
+            return WEB_ROOT / "tests" / "case_results.xlsx"
+
+        with runtime._lock:
+            runtime.status = "运行中"
+            runtime.scheme = "方案A"
+            runtime.result_filename = "case_results.xlsx"
+            runtime.start_time = server._now_text()
+            with patch.object(
+                server,
+                "read_result_workbook_display_payload_for_response",
+                side_effect=AssertionError("导出本次评估结果时不应读取旧结果工作簿"),
+            ), patch.object(server, "export_evaluation_results_workbook", side_effect=fake_export):
+                runtime._handle_process_event_unlocked(
+                    {
+                        "type": "done",
+                        "metrics": [{"label": "度电成本", "value": 1.23, "unit": "元"}],
+                        "results": new_results,
+                        "dispatch_rows": dispatch_rows,
+                    }
+                )
+
+        self.assertEqual(runtime.status, "已完成")
+        self.assertEqual(captured["runtime_status_during_export"], "运行中")
+        self.assertEqual(captured["payload"]["status"], "已完成")
+        self.assertTrue(captured["payload"]["end_time"])
+        self.assertEqual(captured["payload"]["results"], new_results)
+        self.assertEqual(captured["dispatch_rows"], dispatch_rows)
+        self.assertEqual(
+            captured["payload"]["results"]["curves"]["green_hourly"][0]["load_down_disturbance_power"],
+            -97.35,
+        )
 
     def test_tasks_api_queues_jobs_and_starts_next_after_current_finishes(self):
         original_optimization_runtime = server.OPTIMIZATION_RUNTIME
@@ -1977,46 +2052,6 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("风机和光伏最大可发电量", data["message"])
             self.assertIn("低于绿色电量占比要求", data["message"])
 
-            payload["planning_parameters"][0]["green_power_ratio_lower"] = 0
-            payload["diesel_generators"][0]["power_upper"] = 20
-            payload["time_series"][0]["load"] = 100
-            server.PLANNING_STORE.write_scheme("方案A", payload)
-            write_result(
-                "supply_shortage_results.xlsx",
-                [
-                    ["柴发", "柴发1", 1, 100, 100, "kW"],
-                    ["风机", "风机1", 0, 100, 0, "kW"],
-                    ["光伏", "光伏1", 0, 100, 0, "kW"],
-                ],
-            )
-            status, data = start_result("supply_shortage_results.xlsx")
-            self.assertEqual(status, 400)
-            self.assertIn("第1小时", data["message"])
-            self.assertIn("风机、光伏和柴发最大供电功率之和小于负荷功率", data["message"])
-            status, headers, body = server.handle_api_path(
-                "/api/evaluation/status?scheme=方案A&filename=supply_shortage_results.xlsx&light=1"
-            )
-            failed_task = json.loads(body.decode("utf-8"))
-            self.assertEqual(status, 200)
-            self.assertEqual(failed_task["status"], "失败")
-            self.assertEqual(failed_task["task_status"], "计算失败")
-            self.assertIn("第1小时", failed_task["logs"][-1]["message"])
-
-            status, data = queue_result("supply_shortage_results.xlsx")
-            self.assertEqual(status, 200)
-            self.assertEqual(data["task"]["status"], "排队中")
-            self.assertTrue(server.TASK_SCHEDULER.is_queued("evaluation", "方案A", "supply_shortage_results.xlsx"))
-            scheduled_tasks = server.build_task_list()
-            self.assertEqual(status, 200)
-            supply_task = next(
-                item
-                for item in scheduled_tasks
-                if item["task_type_key"] == "evaluation" and item["result"] == "supply_shortage_results.xlsx"
-            )
-            self.assertEqual(supply_task["status"], "计算失败")
-            self.assertFalse(supply_task["queued"])
-            self.assertIn("第1小时", supply_task["latest_log"])
-
             write_result(
                 "battery_no_pcs_results.xlsx",
                 [
@@ -2035,6 +2070,20 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("储能电池", data["message"])
             self.assertIn("储能PCS", data["message"])
             self.assertIn("自损耗无法补偿", data["message"])
+
+            status, data = queue_result("battery_no_pcs_results.xlsx")
+            self.assertEqual(status, 200)
+            self.assertEqual(data["task"]["status"], "排队中")
+            self.assertTrue(server.TASK_SCHEDULER.is_queued("evaluation", "方案A", "battery_no_pcs_results.xlsx"))
+            scheduled_tasks = server.build_task_list()
+            battery_task = next(
+                item
+                for item in scheduled_tasks
+                if item["task_type_key"] == "evaluation" and item["result"] == "battery_no_pcs_results.xlsx"
+            )
+            self.assertEqual(battery_task["status"], "计算失败")
+            self.assertFalse(battery_task["queued"])
+            self.assertIn("自损耗无法补偿", battery_task["latest_log"])
         finally:
             for runtime in server.EVALUATION_RUNTIME.runtimes().values():
                 if runtime.status == "运行中":
@@ -2377,26 +2426,37 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(payload["status"], "已完成")
             self.assertEqual(payload["result_file"], str(result_path))
             self.assertTrue(result_path.exists())
+            curve_path = server.result_curves_workbook_path(result_path)
+            self.assertTrue(curve_path.exists())
             workbook = load_workbook(result_path, data_only=True, read_only=True)
             try:
                 self.assertEqual(
                     workbook.sheetnames,
-                    ["总体指标", "规划结果", "规划年指标", "供能分析", "供能日曲线", "供能月曲线", "安全评估", "安全日曲线", "调度结果", "运行日志"],
+                    ["总体指标", "规划结果", "规划年指标", "供能分析", "安全评估", "运行日志"],
                 )
                 self.assertEqual(workbook["总体指标"]["A1"].value, "指标")
                 self.assertEqual(workbook["总体指标"]["B1"].value, "数值")
                 self.assertEqual(workbook["规划结果"]["A1"].value, "设备类型")
                 self.assertEqual(workbook["规划结果"]["A2"].value, "柴发")
-                self.assertEqual(workbook["供能日曲线"].max_row, 366)
-                self.assertIn("供能月曲线", workbook.sheetnames)
-                self.assertEqual(workbook["供能月曲线"].max_row, 13)
-                self.assertEqual(workbook["安全日曲线"].max_row, 366)
-                self.assertEqual(workbook["调度结果"].max_row, 8761)
-                self.assertEqual(workbook["调度结果"]["A1"].value, "小时")
-                self.assertEqual(workbook["调度结果"]["C1"].value, "风速")
-                self.assertEqual(workbook["调度结果"]["F1"].value, "负荷总功率")
-                self.assertEqual(workbook["调度结果"]["L1"].value, "新能源最大可发")
-                hourly_headers = [cell.value for cell in workbook["调度结果"][1]]
+                self.assertEqual(workbook["运行日志"]["A1"].value, "时间")
+                log_messages = [row[2] for row in workbook["运行日志"].iter_rows(min_row=2, values_only=True)]
+                self.assertIn("规划求解完成", log_messages)
+            finally:
+                workbook.close()
+            curve_workbook = load_workbook(curve_path, data_only=True, read_only=True)
+            try:
+                self.assertEqual(curve_workbook.sheetnames, ["供能日曲线", "供能月曲线", "安全日曲线", "调度结果"])
+                self.assertEqual(curve_workbook["供能日曲线"].max_row, 366)
+                self.assertIn("供能月曲线", curve_workbook.sheetnames)
+                self.assertEqual(curve_workbook["供能月曲线"].max_row, 13)
+                self.assertEqual(curve_workbook["安全日曲线"].max_row, 366)
+                self.assertEqual(curve_workbook["调度结果"].max_row, 8761)
+                self.assertEqual(curve_workbook["调度结果"]["A1"].value, "小时")
+                self.assertEqual(curve_workbook["调度结果"]["C1"].value, "风速")
+                self.assertEqual(curve_workbook["调度结果"]["F1"].value, "负荷总功率")
+                hourly_headers = [cell.value for cell in curve_workbook["调度结果"][1]]
+                self.assertIn("新能源最大可发", hourly_headers)
+                self.assertIn("新能源总出力", hourly_headers)
                 self.assertIn("新能源占比", hourly_headers)
                 self.assertIn("新能源弃电率", hourly_headers)
                 self.assertIn("负荷上扰动功率", hourly_headers)
@@ -2408,11 +2468,8 @@ class PowerPlanServerTest(unittest.TestCase):
                 self.assertIn("电网向下调节能力", hourly_headers)
                 self.assertIn("电网向上调节需求", hourly_headers)
                 self.assertIn("电网向下调节需求", hourly_headers)
-                self.assertEqual(workbook["运行日志"]["A1"].value, "时间")
-                log_messages = [row[2] for row in workbook["运行日志"].iter_rows(min_row=2, values_only=True)]
-                self.assertIn("规划求解完成", log_messages)
             finally:
-                workbook.close()
+                curve_workbook.close()
         finally:
             server.PLANNING_STORE = original_store
             shutil.rmtree(planning_root, ignore_errors=True)
@@ -2521,6 +2578,134 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(third["results"]["overview_tables"][0]["rows"][0]["设备类型"], "风机")
         finally:
             shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_result_workbook_display_payload_refreshes_when_split_curve_file_changes(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_result_workbook_curve_cache"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        result_path = planning_root / "case_results.xlsx"
+        curve_path = server.result_curves_workbook_path(result_path)
+
+        workbook = Workbook()
+        workbook.active.title = "总体指标"
+        workbook.active.append(["指标", "数值", "单位"])
+        workbook.active.append(["度电成本", 1.23, "元/kWh"])
+        planning_sheet = workbook.create_sheet("规划结果")
+        planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+        planning_sheet.append(["柴发", 1, 100, 100, "kW"])
+        annual_sheet = workbook.create_sheet("规划年指标")
+        annual_sheet.append(["指标", "数值", "单位"])
+        green_sheet = workbook.create_sheet("供能分析")
+        green_sheet.append(["指标", "数值", "单位"])
+        safety_sheet = workbook.create_sheet("安全评估")
+        safety_sheet.append(["指标", "数值", "单位"])
+        workbook.save(result_path)
+        workbook.close()
+
+        curve_workbook = Workbook()
+        curve_workbook.active.title = "供能日曲线"
+        curve_workbook.active.append(["day", "load_energy"])
+        curve_workbook.active.append([1, 56])
+        monthly_sheet = curve_workbook.create_sheet("供能月曲线")
+        monthly_sheet.append(["month", "load_energy"])
+        monthly_sheet.append([1, 310])
+        safety_daily_sheet = curve_workbook.create_sheet("安全日曲线")
+        safety_daily_sheet.append(["day", "frequency_max", "frequency_min"])
+        safety_daily_sheet.append([1, 50.1, 49.9])
+        dispatch_sheet = curve_workbook.create_sheet("调度结果")
+        dispatch_sheet.append(["小时", "时间", "负荷总功率"])
+        dispatch_sheet.append([1, "2026-01-01 00:00", 100])
+        curve_workbook.save(curve_path)
+        curve_workbook.close()
+
+        server.RESULT_DISPLAY_PAYLOAD_CACHE.clear()
+        original_load_workbook = server.load_workbook
+        load_count = 0
+
+        def counting_load_workbook(*args, **kwargs):
+            nonlocal load_count
+            load_count += 1
+            return original_load_workbook(*args, **kwargs)
+
+        try:
+            with patch.object(server, "load_workbook", side_effect=counting_load_workbook):
+                first = server.read_result_workbook_display_payload(result_path)
+                second = server.read_result_workbook_display_payload(result_path)
+                self.assertEqual(load_count, 2)
+                self.assertEqual(first["results"]["curves"]["green_daily"][0]["load_energy"], 56)
+                self.assertEqual(second["results"]["curves"]["green_daily"][0]["load_energy"], 56)
+
+                time.sleep(0.02)
+                changed_curve_workbook = load_workbook(curve_path)
+                changed_curve_workbook["供能日曲线"]["B2"] = 78
+                changed_curve_workbook.save(curve_path)
+                changed_curve_workbook.close()
+                third = server.read_result_workbook_display_payload(result_path)
+
+            self.assertEqual(load_count, 4)
+            self.assertEqual(third["metrics"][0]["label"], "度电成本")
+            self.assertEqual(third["results"]["overview_tables"][0]["rows"][0]["设备类型"], "柴发")
+            self.assertEqual(third["results"]["curves"]["green_daily"][0]["load_energy"], 78)
+            self.assertEqual(third["results"]["curves"]["green_monthly"][0]["load_energy"], 310)
+            self.assertEqual(third["results"]["curves"]["safety_daily"][0]["frequency_min"], 49.9)
+            self.assertEqual(third["results"]["curves"]["green_hourly"][0]["load"], 100)
+        finally:
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_comparison_workbook_reads_curves_from_split_curve_workbook(self):
+        result_path = WEB_ROOT / "tests" / "tmp_comparison_split_results.xlsx"
+        curve_path = server.result_curves_workbook_path(result_path)
+        for path in (result_path, curve_path):
+            path.unlink(missing_ok=True)
+
+        workbook = Workbook()
+        try:
+            workbook.active.title = "总体指标"
+            planning_sheet = workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["柴发", 1, 100, 100, "kW"])
+            energy_sheet = workbook.create_sheet("供能分析")
+            energy_sheet.append(["指标", "数值", "单位"])
+            energy_sheet.append(["柴油消耗", 1, "吨"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            safety_sheet.append(["最高频率", 50.1, "Hz"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["年供电量", 1000, "kWh"])
+            workbook.save(result_path)
+        finally:
+            workbook.close()
+
+        curve_workbook = Workbook()
+        try:
+            daily_sheet = curve_workbook.active
+            daily_sheet.title = "供能日曲线"
+            daily_sheet.append(["day", "load_energy"])
+            daily_sheet.append([1, 10])
+            monthly_sheet = curve_workbook.create_sheet("供能月曲线")
+            monthly_sheet.append(["month", "load_energy"])
+            monthly_sheet.append([1, 310])
+            safety_daily_sheet = curve_workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_max", "frequency_min"])
+            safety_daily_sheet.append([1, 50.2, 49.8])
+            dispatch_sheet = curve_workbook.create_sheet("调度结果")
+            dispatch_sheet.append(["小时", "负荷总功率"])
+            dispatch_sheet.append([1, 123])
+            curve_workbook.save(curve_path)
+
+            payload = server.read_comparison_workbook(result_path)
+        finally:
+            curve_workbook.close()
+            for path in (result_path, curve_path):
+                path.unlink(missing_ok=True)
+
+        self.assertEqual(payload["capacity"][0]["设备类型"], "柴发")
+        self.assertEqual(payload["energy"][0]["指标"], "柴油消耗")
+        self.assertIn("负荷总功率", payload["curve_groups"]["hourly"])
+        self.assertEqual(payload["curve_groups"]["hourly"]["负荷总功率"][0]["y"], 123)
+        self.assertEqual(payload["curve_groups"]["daily"]["负荷总电量"][0]["y"], 10)
+        self.assertEqual(payload["curve_groups"]["monthly"]["负荷总电量"][0]["y"], 310)
 
     def test_light_optimization_status_skips_hourly_dispatch_sheet(self):
         planning_root = WEB_ROOT / "tests" / "tmp_optimization_status_light"
@@ -2745,12 +2930,24 @@ class PowerPlanServerTest(unittest.TestCase):
             planning_sheet.append(["储能", 4, 250, 1000, "kWh"])
             planning_sheet.append(["电制氢", 1, 80, 0, "kW"])
             planning_sheet.append(["燃料电池", 0, 50, 50, "kW"])
+            embedded_curve_sheet = create_workbook.create_sheet("调度结果")
+            embedded_curve_sheet.append(["小时", "负荷总功率"])
+            embedded_curve_sheet.append([1, 100])
             create_workbook.save(source_path)
+            source_curve_path = server.result_curves_workbook_path(source_path)
+            source_curve_workbook = Workbook()
+            source_curve_workbook.active.title = "调度结果"
+            source_curve_workbook.active.append(["小时", "负荷总功率"])
+            source_curve_workbook.active.append([1, 100])
+            source_curve_workbook.save(source_curve_path)
+            source_curve_workbook.close()
 
             broken_path = planning_root / "方案A" / "aaa_results.xlsx"
             broken_path.write_bytes(b"not a valid workbook")
             dead_path = planning_root / "方案A" / "dead_results.xlsx"
             dead_path.write_bytes(b"dead workbook")
+            dead_curve_path = server.result_curves_workbook_path(dead_path)
+            dead_curve_path.write_bytes(b"dead curve workbook")
 
             status, headers, body = server.handle_api_path(
                 "/api/evaluation/results?scheme=方案A"
@@ -2796,6 +2993,17 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(copied["selected"], "custom_results.xlsx")
             self.assertTrue((planning_root / "方案A" / "custom_results.xlsx").exists())
+            self.assertFalse((planning_root / "方案A" / "custom_curves.xlsx").exists())
+            source_after_copy = load_workbook(source_path, read_only=True)
+            try:
+                self.assertNotIn("调度结果", source_after_copy.sheetnames)
+            finally:
+                source_after_copy.close()
+            copied_workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
+            try:
+                self.assertNotIn("调度结果", copied_workbook.sheetnames)
+            finally:
+                copied_workbook.close()
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
@@ -2850,6 +3058,7 @@ class PowerPlanServerTest(unittest.TestCase):
             deleted_broken = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertFalse(dead_path.exists())
+            self.assertFalse(dead_curve_path.exists())
             self.assertNotIn("dead_results.xlsx", [item["name"] for item in deleted_broken["results"]])
 
             status, headers, body = server.handle_evaluation_results_api_path(
@@ -3027,6 +3236,52 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(retried_copy["selected"], "copyretry_results.xlsx")
             self.assertGreaterEqual(copy_calls["count"], 2)
 
+            copyretry_curve_path = planning_root / "方案A" / "copyretry_curves.xlsx"
+            curve_workbook = Workbook()
+            curve_workbook.active.title = "调度结果"
+            curve_workbook.save(copyretry_curve_path)
+            curve_workbook.close()
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "rename",
+                        "filename": "copyretry_results.xlsx",
+                        "target_name": "renamed",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            renamed = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(renamed["selected"], "renamed_results.xlsx")
+            self.assertFalse((planning_root / "方案A" / "copyretry_results.xlsx").exists())
+            self.assertFalse((planning_root / "方案A" / "copyretry_curves.xlsx").exists())
+            self.assertTrue((planning_root / "方案A" / "renamed_results.xlsx").exists())
+            self.assertTrue((planning_root / "方案A" / "renamed_curves.xlsx").exists())
+            self.assertIn("renamed_results.xlsx", [item["name"] for item in renamed["results"]])
+            self.assertNotIn("copyretry_results.xlsx", [item["name"] for item in renamed["results"]])
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/results",
+                "POST",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "action": "rename",
+                        "filename": "opt_results.xlsx",
+                        "target_name": "opt2",
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            protected_rename = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 400)
+            self.assertEqual(protected_rename["error"], "bad_request")
+            self.assertIn("默认结果文件不允许重命名", protected_rename["message"])
+
             def always_locked_copy2(source, target):
                 if Path(target).name == "copylocked_results.xlsx":
                     raise PermissionError("copy target locked")
@@ -3056,7 +3311,7 @@ class PowerPlanServerTest(unittest.TestCase):
             unlink_calls = {"count": 0}
 
             def flaky_unlink(self, *args, **kwargs):
-                if Path(self).name == "copyretry_results.xlsx":
+                if Path(self).name == "renamed_results.xlsx":
                     unlink_calls["count"] += 1
                     if unlink_calls["count"] == 1:
                         raise PermissionError("simulated delete lock")
@@ -3067,14 +3322,15 @@ class PowerPlanServerTest(unittest.TestCase):
                     "/api/evaluation/results",
                     "POST",
                     json.dumps(
-                        {"scheme": "方案A", "action": "delete", "filename": "copyretry_results.xlsx"},
+                        {"scheme": "方案A", "action": "delete", "filename": "renamed_results.xlsx"},
                         ensure_ascii=False,
                     ).encode("utf-8"),
                 )
             retried_delete = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
             self.assertGreaterEqual(unlink_calls["count"], 2)
-            self.assertNotIn("copyretry_results.xlsx", [item["name"] for item in retried_delete["results"]])
+            self.assertNotIn("renamed_results.xlsx", [item["name"] for item in retried_delete["results"]])
+            self.assertFalse((planning_root / "方案A" / "renamed_curves.xlsx").exists())
 
             for invalid_count in (-1, 1.5, "2.2"):
                 status, headers, body = server.handle_evaluation_results_api_path(
@@ -3442,6 +3698,27 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertIn("diesel_generators", overview)
             self.assertIn("planning_parameters", overview)
             self.assertNotIn("design_life_years", overview["planning_parameters"][0])
+
+            save_labels = []
+            original_save = server.planning_store.file_ops.save_workbook_with_retry
+
+            def tracking_save(workbook, path, label):
+                save_labels.append(label)
+                return original_save(workbook, path, label)
+
+            overview["diesel_generators"][0]["name"] = "只保存参数"
+            with patch.object(server.planning_store.file_ops, "save_workbook_with_retry", side_effect=tracking_save):
+                status, headers, body = server.handle_planning_api_path(
+                    "/api/planning/schemes/方案A",
+                    "PUT",
+                    json.dumps(overview, ensure_ascii=False).encode("utf-8"),
+                )
+            saved_overview = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 200)
+            self.assertEqual(save_labels, ["参数文件"])
+            self.assertNotIn("time_series", saved_overview)
+            self.assertFalse(saved_overview["time_series_loaded"])
+            self.assertEqual(saved_overview["diesel_generators"][0]["name"], "只保存参数")
 
             status, headers, body = server.handle_planning_api_path("/api/planning/schemes/方案A/time-series", "GET", b"")
             time_payload = json.loads(body.decode("utf-8"))
@@ -4673,10 +4950,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("当前规划结果", html)
         self.assertNotIn(">结果文件<", html)
         self.assertNotIn('id="addEvaluationResult"', html)
-        for control in ("deleteEvaluationResult", "copyEvaluationResult", "saveEvaluationResult"):
+        for control in ("deleteEvaluationResult", "copyEvaluationResult", "saveEvaluationResult", "renameEvaluationResult"):
             self.assertIn(f'id="{control}"', html)
         self.assertNotIn("增加结果", html)
-        for label in ("删除结果", "复制结果", "保存结果"):
+        self.assertNotIn("删除结果", html)
+        self.assertNotIn("复制结果", html)
+        self.assertNotIn("保存结果", html)
+        for label in ("删除", "复制", "保存", "重命名"):
             self.assertIn(label, html)
         for label in ("状态", "开始", "完成", "度电成本", "绿电占比"):
             self.assertIn(label, html)
@@ -4818,7 +5098,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("collectPlanningResultRows", script)
         self.assertIn("设计台数", script)
         self.assertIn("prompt(", script)
+        self.assertIn('`${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`', script)
         self.assertIn("复制失败", script)
+        self.assertIn("renameEvaluationResult", script)
+        self.assertIn('manageEvaluationResult("rename"', script)
+        self.assertIn("默认结果文件不允许重命名", script)
+        self.assertIn("重命名失败", script)
+        self.assertIn("结果文件已重命名", script)
         self.assertIn("const message = messages[action]", script)
         self.assertIn("alert(message)", script)
         self.assertIn("EVALUATION_SELECTION_STORAGE_KEY", script)
@@ -4829,6 +5115,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection", script)
         self.assertIn("saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
         self.assertIn("copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection", script)
+        self.assertIn("renameButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection", script)
         self.assertIn(">启动</button>", html)
         self.assertIn(">排队</button>", html)
         self.assertIn(">停止</button>", html)
@@ -4843,6 +5130,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("text-align: left", optimization_current_scheme_css)
         self.assertNotIn("margin-left: auto", optimization_current_scheme_css)
         self.assertIn("grid-template-columns: minmax(0, var(--evaluation-result-rail-width, 340px)) 10px minmax(0, 1fr)", css)
+        action_buttons_css = css.split(".evaluation-result-action-buttons {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: flex", action_buttons_css)
+        self.assertIn("flex-wrap: nowrap", action_buttons_css)
+        self.assertIn("overflow-x: auto", action_buttons_css)
+        action_button_css = css.split(".evaluation-result-action-buttons button {", 1)[1].split("}", 1)[0]
+        self.assertIn("flex: 1 0 50px", action_button_css)
+        self.assertIn("white-space: nowrap", action_button_css)
         self.assertIn("grid-template-rows: minmax(150px, 30vh) minmax(260px, 1fr)", css)
         self.assertIn(".evaluation-result-rail {\n  grid-column: 1;\n  grid-row: 2;", css)
         self.assertIn(".evaluation-workspace > .scheme-rail {\n  grid-column: 1;\n  grid-row: 1;", css)
@@ -5555,6 +5849,241 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".safety-center-line", css)
         self.assertIn(".safety-result-table", css)
 
+    def test_frequency_calculation_rows_include_source_and_calculated_extremes(self):
+        scheme_payload = {"planning_parameters": [{"nominal_frequency_hz": 50, "frequency_governor_time_constant_s": 0.6}]}
+        dispatch_rows = [
+            {
+                "hour_index": 1,
+                "datetime": "2026-01-01 00:00",
+                "load": 100,
+                "wind_power": 20,
+                "pv_power": 10,
+                "diesel_capacity": 200,
+                "diesel_power": 80,
+                "renewable_power": 30,
+                "grid_storage_capacity": 50,
+                "storage_power": 1,
+                "diesel_on": 2,
+                "storage_charge": 3,
+                "storage_discharge": 4,
+                "equivalent_inertia_m": 10,
+                "equivalent_primary_frequency_k": 1.2,
+                "equivalent_damping_d": 0.8,
+                "frequency_delta_p_mw": 0.2,
+                "frequency_upper_delta_p_mw": -0.15,
+                "frequency_max": 50.42,
+                "frequency_min": 49.58,
+            }
+        ]
+
+        outputs = list(server.iter_frequency_result_rows(scheme_payload, dispatch_rows))
+        summary = outputs[0]["summary"]
+        lower_curve, upper_curve = outputs[0]["curves"]
+        time_headers = [server.frequency_curve_point_header(index) for index in range(server.FREQUENCY_CURVE_POINT_COUNT)]
+
+        for header in (
+            "max_up_disturbance_mw",
+            "max_down_disturbance_mw",
+            "source_frequency_max_hz",
+            "source_frequency_min_hz",
+            "calculated_max_frequency_hz",
+            "calculated_min_frequency_hz",
+            "diesel_capacity",
+            "diesel_power",
+            "load",
+            "renewable_power",
+            "grid_storage_capacity",
+            "storage_power",
+        ):
+            self.assertIn(header, server.frequency_8760_result_headers())
+            self.assertIn(header, server.frequency_curve_headers())
+
+        self.assertEqual(summary["diesel_capacity"], 200)
+        self.assertEqual(summary["diesel_power"], 80)
+        self.assertEqual(summary["load"], 100)
+        self.assertEqual(summary["renewable_power"], 30)
+        self.assertEqual(summary["grid_storage_capacity"], 50)
+        self.assertEqual(summary["storage_power"], 1)
+        self.assertEqual(summary["max_up_disturbance_mw"], 0.2)
+        self.assertEqual(summary["max_down_disturbance_mw"], -0.15)
+        self.assertEqual(summary["source_frequency_max_hz"], 50.42)
+        self.assertEqual(summary["source_frequency_min_hz"], 49.58)
+        self.assertEqual(summary["calculated_min_frequency_hz"], min(lower_curve[header] for header in time_headers))
+        self.assertEqual(summary["calculated_max_frequency_hz"], max(upper_curve[header] for header in time_headers))
+        self.assertEqual(lower_curve["calculated_min_frequency_hz"], summary["calculated_min_frequency_hz"])
+        self.assertEqual(upper_curve["calculated_max_frequency_hz"], summary["calculated_max_frequency_hz"])
+
+    def test_frequency_8760_curve_board_exposes_requested_metric_series(self):
+        frequency_script = (WEB_ROOT / "assets" / "frequency.js").read_text(encoding="utf-8")
+        frequency_page = (WEB_ROOT / "frequency.html").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        results = [
+            {
+                "summary": {
+                    "hour_index": 1,
+                    "datetime": "2026-01-01 00:00",
+                    "diesel_capacity": 200,
+                    "max_up_disturbance_mw": 0.2,
+                    "max_down_disturbance_mw": -0.15,
+                    "source_frequency_max_hz": 50.42,
+                    "source_frequency_min_hz": 49.58,
+                    "calculated_max_frequency_hz": 50.35,
+                    "calculated_min_frequency_hz": 49.65,
+                }
+            }
+        ]
+
+        rows = server.frequency_8760_display_rows_from_results(results, {})
+        self.assertEqual(rows[0]["柴发开机容量"], 200)
+        for label in ("向上最大扰动", "向下最大扰动", "优化频率最大值", "优化频率最小值", "仿真频率最大值", "仿真频率最小值"):
+            self.assertIn(label, rows[0])
+            self.assertIn(label, frequency_script)
+        self.assertIn("frequency8760CurveBoard", frequency_page)
+        self.assertIn("function renderFrequency8760CurveBoard", frequency_script)
+        self.assertIn("data.frequency_8760_table", frequency_script)
+        self.assertIn("分时曲线", frequency_page)
+        self.assertNotIn("frequencyCurveYear", frequency_page)
+        self.assertIn("frequencyCurveDate", frequency_page)
+        self.assertIn("frequencyTimeResultResizeHandle", frequency_page)
+        self.assertIn("frequencyMetricsResizeHandle", frequency_page)
+        self.assertIn("function refreshFrequencyTimeCurve", frequency_script)
+        self.assertIn("function bindFrequencyMetricsResize", frequency_script)
+        self.assertIn("function bindFrequencyTimeResultResize", frequency_script)
+        self.assertIn("scheduleFrequencyPolling();", frequency_script)
+        self.assertIn("window.setTimeout(() => refreshFrequencyStatus().catch(showFrequencyError), 250)", frequency_script)
+        self.assertIn("/api/frequency/time-curve", frequency_script)
+        self.assertIn('preserveAspectRatio="none"', frequency_script)
+        self.assertIn("comparison-chart-frame frequency-8760-chart-frame", frequency_script)
+        self.assertIn("function bindFrequency8760Hover", frequency_script)
+        self.assertIn("function renderFrequency8760Stats", frequency_script)
+        self.assertIn("frequencyDownsample(series.values, 720)", frequency_script)
+        self.assertIn(".frequency-metrics-layout", css)
+        self.assertIn("--frequency-metrics-table-width", css)
+        self.assertIn(".frequency-8760-curve-board", css)
+        self.assertIn(".frequency-8760-chart-frame", css)
+        self.assertIn(".frequency-8760-line", css)
+        self.assertIn(".frequency-8760-stats", css)
+        self.assertIn(".frequency-8760-hover-capture", css)
+        self.assertIn(".frequency-time-curve-panel", css)
+        self.assertIn(".frequency-time-result-layout", css)
+        self.assertIn("--frequency-time-info-width", css)
+        frequency_time_chart_css = css.split(".frequency-time-curve-chart {", 1)[1].split("}", 1)[0]
+        self.assertIn("display: grid", frequency_time_chart_css)
+        self.assertIn("grid-template-rows: minmax(0, 1fr) auto", frequency_time_chart_css)
+
+    def test_frequency_time_curve_payload_reads_selected_hour_curves(self):
+        path = WEB_ROOT / "tests" / "tmp_frequency_time_curve.xlsx"
+        workbook = Workbook()
+        summary = workbook.active
+        summary.title = "频率8760结果"
+        summary.append(server.frequency_8760_result_headers())
+        summary.append([
+            1,
+            "2026-01-02 03:00",
+            1.0,
+            200,
+            2,
+            80,
+            100,
+            30,
+            50,
+            1,
+            0,
+            0,
+            10,
+            0.8,
+            1.2,
+            0.2,
+            -0.15,
+            50.42,
+            49.58,
+            50.35,
+            49.65,
+        ])
+        curve = workbook.create_sheet("频率曲线")
+        curve_headers = server.frequency_curve_headers()
+        curve.append(curve_headers)
+        low_row = {header: "" for header in curve_headers}
+        high_row = {header: "" for header in curve_headers}
+        low_row.update({"hour_index": 1, "datetime": "2026-01-02 03:00", "curve_type": "最低频率曲线"})
+        high_row.update({"hour_index": 1, "datetime": "2026-01-02 03:00", "curve_type": "最高频率曲线"})
+        for index in range(server.FREQUENCY_CURVE_POINT_COUNT):
+            header = server.frequency_curve_point_header(index)
+            low_row[header] = 50 - index * 0.001
+            high_row[header] = 50 + index * 0.001
+        curve.append([low_row.get(header, "") for header in curve_headers])
+        curve.append([high_row.get(header, "") for header in curve_headers])
+        try:
+            workbook.save(path)
+            payload = server.read_frequency_time_curve_payload(path, month="1", day="2", hour="3")
+        finally:
+            workbook.close()
+            if path.exists():
+                path.unlink()
+
+        self.assertEqual(payload["selection"]["hour_index"], 1)
+        metrics = {row["指标"]: row["数值"] for row in payload["summary_table"]}
+        self.assertEqual(metrics["柴发开机总容量"], 200)
+        self.assertEqual(metrics["柴发总功率"], 80)
+        self.assertEqual(metrics["负荷总功率"], 100)
+        self.assertEqual(metrics["新能源总出力"], 30)
+        self.assertEqual(metrics["向上最大扰动"], 0.2)
+        self.assertEqual(metrics["向下最大扰动"], -0.15)
+        self.assertEqual(len(payload["curves"]["high"]), server.FREQUENCY_CURVE_POINT_COUNT)
+        self.assertEqual(len(payload["curves"]["low"]), server.FREQUENCY_CURVE_POINT_COUNT)
+        self.assertEqual(payload["curves"]["high"][0], {"time": 0.0, "frequency": 50.0})
+        self.assertEqual(payload["curves"]["low"][1]["time"], 0.05)
+
+    def test_frequency_curve_export_emits_progress_logs(self):
+        scheme = "测试频率日志方案"
+        filename = "logcase_results.xlsx"
+        result_path = server.frequency_curve_result_path(scheme, filename)
+        logs: list[tuple[str, str]] = []
+        summary = {
+            "hour_index": 1,
+            "datetime": "2026-01-01 00:00",
+            "grid_model": 1,
+            "diesel_capacity": 100,
+            "diesel_on": 1,
+            "diesel_power": 50,
+            "load": 80,
+            "renewable_power": 30,
+            "grid_storage_capacity": 20,
+            "storage_power": 0,
+            "storage_charge": 0,
+            "storage_discharge": 0,
+            "equivalent_inertia_m": 10,
+            "load_response_d": 0.8,
+            "equivalent_primary_frequency_k": 1.2,
+            "max_up_disturbance_mw": 0.2,
+            "max_down_disturbance_mw": -0.15,
+            "source_frequency_max_hz": 50.2,
+            "source_frequency_min_hz": 49.8,
+            "calculated_max_frequency_hz": 50.1,
+            "calculated_min_frequency_hz": 49.9,
+        }
+        curves = [
+            {"hour_index": 1, "datetime": "2026-01-01 00:00", "curve_type": "最低频率曲线"},
+            {"hour_index": 1, "datetime": "2026-01-01 00:00", "curve_type": "最高频率曲线"},
+        ]
+        try:
+            server.export_frequency_curve_workbook(
+                scheme,
+                filename,
+                {},
+                [],
+                frequency_results=[{"summary": summary, "curves": curves}],
+                log_callback=lambda level, message: logs.append((level, message)),
+            )
+        finally:
+            if result_path.exists():
+                result_path.unlink()
+
+        messages = [message for _, message in logs]
+        self.assertTrue(any("频率结果写入进度" in message for message in messages))
+        self.assertTrue(any("保存频率曲线Excel文件" in message for message in messages))
+        self.assertTrue(any("替换频率曲线结果文件" in message for message in messages))
+
     def test_calculation_result_frontends_display_numeric_values_with_two_decimals(self):
         optimize_script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
         evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
@@ -5786,6 +6315,8 @@ class PowerPlanServerTest(unittest.TestCase):
             "扰动后安全参数",
             "频率安全参数",
             "柴油价格(万元/吨)",
+            "柴发开机持续工作小时数下限",
+            "柴发关机持续工作小时数下限",
             "绿色电量占比下限(0.0-1.0)",
             "规划求解时间上限(分钟)",
             "初始电储SOC(0.0-1.0)",
@@ -5818,6 +6349,9 @@ class PowerPlanServerTest(unittest.TestCase):
         ):
             self.assertIn(label, script)
         self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"nominal_frequency_hz"'))
+        self.assertLess(script.index('"diesel_price"'), script.index('"diesel_minimum_on_hours"'))
+        self.assertLess(script.index('"diesel_minimum_on_hours"'), script.index('"diesel_minimum_off_hours"'))
+        self.assertLess(script.index('"diesel_minimum_off_hours"'), script.index('"green_power_ratio_lower"'))
         self.assertLess(script.index('"nominal_frequency_hz"'), script.index('"frequency_nadir_lower_hz"'))
         self.assertLess(script.index('"frequency_governor_time_constant_s"'), script.index('"frequency_nadir_evaluation_duration_s"'))
         self.assertLess(script.index('"nadir_linearization_interval_ratio"'), script.index('"network_synchronization_coefficient_base"'))
@@ -5863,10 +6397,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("参数校验未通过", script)
         self.assertIn("参数保存成功", script)
         self.assertIn("保存参数失败：", script)
-        self.assertIn("时序数据未加载，无法保存", script)
+        self.assertIn("buildSchemeSavePayload", script)
+        self.assertIn("timeSeriesDirty", script)
+        self.assertIn("delete payload.time_series", script)
+        self.assertIn("时序数据未正确加载，无法保存曲线", script)
         self.assertIn('"参数保存成功": "Parameters saved successfully"', i18n_script)
         self.assertIn('"保存参数失败：": "Failed to save parameters: "', i18n_script)
-        self.assertIn('"时序数据未加载，无法保存": "Time series data is not loaded, cannot save"', i18n_script)
         self.assertIn("数量下限(台)", script)
         self.assertIn("数量上限(台)", script)
         self.assertIn("数量上限不能小于数量下限", script)

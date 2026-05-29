@@ -5,6 +5,7 @@ const state = {
   month: 0,
   timeChartRange: { scope: "year", month: 0, day: 1 },
   timeSeriesLoading: null,
+  timeSeriesDirty: false,
   loadCurveTemplates: [],
   mapConfig: null,
   mapPoint: null,
@@ -170,8 +171,11 @@ const curveGeneratorSpecs = {
 
 const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
+  ["diesel_minimum_on_hours", "柴发开机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 12 }],
+  ["diesel_minimum_off_hours", "柴发关机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 12 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 120, integer: true, positive: true, defaultValue: 60 }],
+  ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "MOSEK"], ["scipy", "SciPy HiGHS"]] }],
   ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
@@ -209,8 +213,11 @@ const planningParameterGroups = [
     title: "常规参数",
     keys: [
       "diesel_price",
+      "diesel_minimum_on_hours",
+      "diesel_minimum_off_hours",
       "green_power_ratio_lower",
       "optimization_time_limit_minutes",
+      "preferred_solver",
       "initial_storage_soc_ratio",
       "initial_hydrogen_storage_ratio",
     ],
@@ -877,6 +884,7 @@ function bindSchemeListItem(item, onSelect) {
 async function selectScheme(name) {
   state.currentScheme = name;
   state.timeSeriesLoading = null;
+  state.timeSeriesDirty = false;
   state.payload = normalizePayload(await api(`/api/planning/schemes/${encodeURIComponent(name)}/overview`));
   state.isSwitchingScheme = false;
   state.month = 0;
@@ -892,6 +900,7 @@ async function selectSchemeWithSwitchFeedback(name) {
 function clearPlanningDisplayForSchemeSwitch(name) {
   state.currentScheme = name || "";
   state.timeSeriesLoading = null;
+  state.timeSeriesDirty = false;
   state.isSwitchingScheme = true;
   state.payload = renderPlanningSwitchingState(name);
   state.month = 0;
@@ -982,11 +991,21 @@ async function saveScheme() {
       alert(`参数校验未通过：\n${warnings.map((item) => `- ${item.message}`).join("\n")}`);
       return;
     }
+    const savePayload = buildSchemeSavePayload();
+    const previousTimeSeries = state.payload.time_series;
+    const previousTimeSeriesCount = state.payload.time_series_count;
+    const previousTimeSeriesLoaded = isTimeSeriesLoaded();
     const savedPayload = await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}`, {
       method: "PUT",
-      body: JSON.stringify(state.payload),
+      body: JSON.stringify(savePayload),
     });
     state.payload = normalizePayload(savedPayload);
+    if (!savePayload.time_series && previousTimeSeriesLoaded) {
+      state.payload.time_series = previousTimeSeries;
+      state.payload.time_series_count = previousTimeSeriesCount;
+      setTimeSeriesLoaded(true);
+    }
+    state.timeSeriesDirty = false;
     if (!state.payload) {
       alert("保存参数失败：后台返回数据为空");
       return;
@@ -996,6 +1015,20 @@ async function saveScheme() {
   } catch (error) {
     alert(`保存参数失败：${error.message || String(error)}`);
   }
+}
+
+function buildSchemeSavePayload() {
+  const payload = { ...(state.payload || {}) };
+  if (!state.timeSeriesDirty) {
+    delete payload.time_series;
+    payload.time_series_loaded = false;
+    payload.timeSeriesLoaded = false;
+    return payload;
+  }
+  if (!isTimeSeriesLoaded() || !Array.isArray(payload.time_series) || payload.time_series.length !== 8760) {
+    throw new Error("时序数据未正确加载，无法保存曲线");
+  }
+  return payload;
 }
 
 async function deleteScheme() {
@@ -1125,7 +1158,7 @@ async function applyPendingWeatherHistory() {
   }
   state.payload.time_series = nextRows;
   state.payload.time_series_count = nextRows.length;
-  setTimeSeriesLoaded(true);
+  markTimeSeriesDirty();
   renderChart();
   renderTimeTable();
   renderLimitSummary();
@@ -1194,6 +1227,7 @@ async function confirmImportedTimeSeries() {
   const previousRows = state.payload.time_series;
   const previousCount = state.payload.time_series_count;
   const previousLoaded = isTimeSeriesLoaded();
+  const previousDirty = state.timeSeriesDirty;
   applyImportedTimeSeries(rows, "导入曲线已写入当前方案", false);
   setTimeSeriesImportHint("正在保存到后台...");
   try {
@@ -1201,6 +1235,7 @@ async function confirmImportedTimeSeries() {
       method: "PUT",
       body: JSON.stringify(state.payload),
     }));
+    state.timeSeriesDirty = false;
     state.pendingTimeSeriesImport = null;
     renderAll();
     closeTimeSeriesImport();
@@ -1213,6 +1248,7 @@ async function confirmImportedTimeSeries() {
     }
     state.payload.time_series_count = previousCount;
     setTimeSeriesLoaded(previousLoaded);
+    state.timeSeriesDirty = previousDirty;
     renderChart();
     renderMonthTabs();
     renderTimeTable();
@@ -1241,7 +1277,7 @@ function applyImportedTimeSeries(rows, message, updateStatus = true) {
   state.payload.time_series = rows;
   state.payload.time_series_count = rows.length;
   state.month = 0;
-  setTimeSeriesLoaded(true);
+  markTimeSeriesDirty();
   renderChart();
   renderMonthTabs();
   renderTimeTable();
@@ -1912,7 +1948,7 @@ function applyGeneratedLoadCurve(rows) {
     const curve = rows[index];
     return { ...row, [spec.key]: curve[spec.key] };
   });
-  setTimeSeriesLoaded(true);
+  markTimeSeriesDirty();
   selectCurve(spec.key);
   renderChart();
   renderTimeTable();
@@ -2723,6 +2759,7 @@ async function ensureTimeSeriesLoaded() {
       state.payload.time_series_count = data.time_series_count ?? state.payload.time_series.length;
       state.payload.validation = data.validation || state.payload.validation || [];
       setTimeSeriesLoaded(true);
+      state.timeSeriesDirty = false;
       state.month = 0;
       renderChart();
       renderTimeTable();
@@ -3027,7 +3064,7 @@ function applyChartValueEdit(event) {
     edited = true;
   });
   if (!edited) return false;
-  setTimeSeriesLoaded(true);
+  markTimeSeriesDirty();
   if (state.chartDrag) {
     state.chartDrag.edited = true;
     state.chartDrag.lastPoint = point;
@@ -3156,6 +3193,7 @@ function onTimeInput(event) {
   const input = event.target;
   const row = state.payload.time_series[Number(input.dataset.timeIndex)];
   row[input.dataset.key] = coerceInput(input.value);
+  markTimeSeriesDirty();
   scheduleRenderChart();
   renderLimitSummary();
 }
@@ -3326,6 +3364,13 @@ function planningParameterControl(key, type, options, value, group = null, group
     const checked = truthyPlanningValue(value);
     return `<select class="planning-bool-select" data-planning-key="${key}" data-planning-type="boolean" ${disabled ? "disabled" : ""}><option value="1" ${checked ? "selected" : ""}>是</option><option value="0" ${checked ? "" : "selected"}>否</option></select>`;
   }
+  if (type === "select") {
+    const selectedValue = String(value || options.defaultValue || "");
+    const optionMarkup = (options.options || [])
+      .map(([optionValue, optionLabel]) => `<option value="${escapeHtml(optionValue)}" ${String(optionValue) === selectedValue ? "selected" : ""}>${escapeHtml(optionLabel)}</option>`)
+      .join("");
+    return `<select class="planning-select" data-planning-key="${key}" data-planning-type="select" ${disabled ? "disabled" : ""}>${optionMarkup}</select>`;
+  }
   const attrs = [
     `data-planning-key="${key}"`,
     'type="number"',
@@ -3376,7 +3421,14 @@ function syncPlanningParameterInputs() {
 function syncPlanningParameterInput(input) {
   if (!input || !input.dataset || !input.dataset.planningKey || !state.payload) return;
   const row = planningParameterRow();
-  row[input.dataset.planningKey] = input.dataset.planningType === "boolean" ? numericBooleanPlanningValue(input.value) : input.type === "checkbox" ? (input.checked ? 1 : 0) : coerceInput(input.value);
+  row[input.dataset.planningKey] =
+    input.dataset.planningType === "boolean"
+      ? numericBooleanPlanningValue(input.value)
+      : input.dataset.planningType === "select"
+        ? input.value
+        : input.type === "checkbox"
+          ? (input.checked ? 1 : 0)
+          : coerceInput(input.value);
 }
 
 function planningParameterRow() {
@@ -3401,6 +3453,11 @@ function normalizePlanningParameterRow(row) {
     if (type === "boolean") {
       normalized[key] = numericBooleanPlanningValue(normalized[key]);
     }
+    if (type === "select") {
+      const spec = planningParameterSpecsByKey.get(key);
+      const validValues = new Set((spec?.[3]?.options || []).map(([value]) => String(value)));
+      normalized[key] = validValues.has(String(normalized[key])) ? String(normalized[key]) : spec?.[3]?.defaultValue || "";
+    }
   });
   return normalized;
 }
@@ -3415,11 +3472,20 @@ function renderPlanningParameterSummaryTable() {
 
 function formatPlanningParameterValue(value, type) {
   if (type === "boolean") return truthyPlanningValue(value) ? "是" : "否";
+  if (type === "select") {
+    const spec = Array.from(planningParameterSpecsByKey.values()).find(([key]) => key && false);
+  }
   return value;
+}
+
+function formatPlanningParameterSelectValue(value, options) {
+  const selected = (options.options || []).find(([optionValue]) => String(optionValue) === String(value));
+  return selected ? selected[1] : value;
 }
 
 function planningParameterRangeText(type, options) {
   if (type === "boolean") return "是/否";
+  if (type === "select") return (options.options || []).map(([, label]) => label).join(" / ");
   if (options.min !== undefined && options.max !== undefined) return `${options.min} - ${options.max}`;
   if (options.min !== undefined) return `不小于 ${options.min}`;
   if (options.max !== undefined) return `不大于 ${options.max}`;
@@ -3705,6 +3771,13 @@ function collectPlanningParameterWarnings() {
   const messages = [];
   planningParameterSpecs.forEach(([key, label, type, options]) => {
     if (type === "boolean") return;
+    if (type === "select") {
+      const allowedValues = new Set((options.options || []).map(([value]) => String(value)));
+      if (!allowedValues.has(String(row[key] ?? ""))) {
+        messages.push({ level: "error", message: `${label}选项无效` });
+      }
+      return;
+    }
     const value = Number(row[key]);
     if (!Number.isFinite(value)) {
       messages.push({ level: "error", message: `${label}必须为数值` });
@@ -3804,6 +3877,11 @@ function setTimeSeriesLoaded(value) {
   if (!state.payload) return;
   state.payload.timeSeriesLoaded = value;
   state.payload.time_series_loaded = value;
+}
+
+function markTimeSeriesDirty() {
+  setTimeSeriesLoaded(true);
+  state.timeSeriesDirty = true;
 }
 
 function escapeHtml(value) {

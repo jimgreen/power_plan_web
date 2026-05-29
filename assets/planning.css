@@ -381,18 +381,24 @@ button:disabled {
 }
 
 .evaluation-result-action-buttons {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .evaluation-result-action-buttons button {
-  min-width: 0;
-  padding: 10px 8px;
+  flex: 1 0 50px;
+  min-width: 50px;
+  padding: 10px 4px;
   border-radius: 12px;
   background: #edf4f2;
   color: #24413d;
+  font-size: 13px;
   font-weight: 800;
+  line-height: 1.1;
+  white-space: nowrap;
   transition: background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease, opacity 0.16s ease;
 }
 
@@ -472,8 +478,9 @@ button:disabled {
   position: relative;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   display: grid;
-  grid-template-rows: minmax(0, var(--optimization-task-section-height, 1fr)) 8px minmax(0, var(--evaluation-task-section-height, 1fr));
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   padding: 18px;
   overflow: hidden;
@@ -509,6 +516,49 @@ button:disabled {
   height: 100%;
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+.task-type-tabs {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 38px;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.task-type-tab {
+  flex: 0 0 auto;
+  min-width: 132px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: #e7f2ef;
+  color: #0d5c59;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.task-type-tab:hover,
+.task-type-tab:focus-visible {
+  border-color: rgba(13, 92, 89, 0.22);
+  background: #d8ebe6;
+  outline: none;
+}
+
+.task-type-tab.active,
+.task-type-tab[aria-selected="true"] {
+  border-color: #0d5c59;
+  background: #0d5c59;
+  color: #fff;
 }
 
 .tasks-panel .status-error {
@@ -548,44 +598,20 @@ button:disabled {
 
 .task-section {
   min-height: 0;
-  display: grid;
+  display: none;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 10px;
   overflow: hidden;
 }
 
-.task-section-optimization {
-  grid-row: 1;
+.task-section[hidden] {
+  display: none !important;
 }
 
-.task-section-evaluation {
-  grid-row: 3;
-}
-
-.task-table-resize-handle {
+.task-section.active {
+  display: grid;
   grid-row: 2;
-  min-height: 8px;
-  border-radius: 999px;
-  cursor: row-resize;
-  background: linear-gradient(90deg, transparent, rgba(21, 211, 255, 0.28), transparent);
-  position: relative;
-}
-
-.task-table-resize-handle::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 78px;
-  height: 3px;
-  border-radius: 999px;
-  transform: translate(-50%, -50%);
-  background: rgba(13, 92, 89, 0.34);
-}
-
-.task-table-resize-handle:hover,
-.task-table-resize-handle.dragging {
-  background: linear-gradient(90deg, transparent, rgba(21, 211, 255, 0.48), transparent);
+  height: 100%;
 }
 
 .task-section-head {
@@ -600,7 +626,8 @@ button:disabled {
   font-size: 16px;
 }
 
-.task-section-evaluation .task-section-head {
+.task-section-evaluation .task-section-head,
+.task-section-frequency .task-section-head {
   justify-content: flex-start;
   gap: 14px;
 }
@@ -2546,6 +2573,154 @@ button:disabled {
 
 .safety-result-table table {
   min-width: 520px;
+}
+
+.frequency-metrics-layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(240px, var(--frequency-metrics-table-width, 360px)) 10px minmax(0, 1fr);
+  gap: 0;
+}
+
+.frequency-metrics-layout > .data-table {
+  max-height: none;
+}
+
+.frequency-8760-curve-board {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid #d7e4e0;
+  border-radius: 16px;
+  background: #f8fbfa;
+}
+
+.frequency-8760-chart-frame {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.frequency-8760-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.frequency-8760-line {
+  fill: none;
+  stroke-width: 2.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.frequency-8760-grid,
+.frequency-8760-x-grid {
+  stroke: #dce9e5;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.frequency-8760-x-grid {
+  stroke-dasharray: 5 6;
+}
+
+.frequency-8760-series-label {
+  fill: #25413f;
+  font-size: 13px;
+  font-weight: 800;
+  text-anchor: end;
+  dominant-baseline: central;
+}
+
+.frequency-8760-value-label,
+.frequency-8760-x-label {
+  fill: #61726f;
+  font-size: 11px;
+}
+
+.frequency-8760-x-label {
+  text-anchor: middle;
+}
+
+.frequency-8760-stats {
+  max-width: min(720px, calc(100% - 100px));
+}
+
+.frequency-8760-stats section {
+  grid-template-columns: minmax(130px, 1fr) repeat(4, auto);
+}
+
+.frequency-8760-hover-capture {
+  pointer-events: all;
+}
+
+.frequency-time-curve-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+
+.frequency-time-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.frequency-time-controls label {
+  display: grid;
+  gap: 5px;
+  color: #536762;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.frequency-time-controls input {
+  width: 92px;
+  height: 36px;
+  border: 1px solid #cbded8;
+  border-radius: 10px;
+  padding: 0 10px;
+  color: #173431;
+  font-weight: 800;
+  background: #fff;
+}
+
+.frequency-time-controls button {
+  height: 36px;
+}
+
+.frequency-time-result-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, var(--frequency-time-info-width, 360px)) 10px minmax(0, 1fr);
+  gap: 0;
+}
+
+.frequency-time-result-layout > .data-table {
+  max-height: none;
+}
+
+.frequency-time-curve-chart {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.frequency-time-curve-chart > .safety-chart-svg {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 .chart-hover-line {
@@ -4634,6 +4809,18 @@ td input[type="checkbox"] {
   .result-column-resize-handle {
     display: none;
   }
+  .frequency-metrics-layout,
+  .frequency-time-result-layout {
+    grid-template-columns: minmax(220px, var(--frequency-metrics-table-width, 340px)) 10px minmax(320px, 1fr);
+    overflow-x: auto;
+  }
+  .frequency-time-result-layout {
+    grid-template-columns: minmax(220px, var(--frequency-time-info-width, 340px)) 10px minmax(320px, 1fr);
+  }
+  .frequency-metrics-layout > .result-column-resize-handle,
+  .frequency-time-result-layout > .result-column-resize-handle {
+    display: block;
+  }
   .overview-column-resize-handle {
     display: none;
   }
@@ -6204,6 +6391,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .main-nav button,
 body[data-home-theme]:not([data-home-theme="default"]) .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .scheme-actions button,
 body[data-home-theme]:not([data-home-theme="default"]) .task-actions button,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab,
@@ -6242,6 +6430,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .month-tab:focus-visible 
 body[data-home-theme]:not([data-home-theme="default"]) .main-nav .active,
 body[data-home-theme]:not([data-home-theme="default"]) .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab[aria-selected="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle.active {
@@ -6945,6 +7135,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .main-nav button,
 body[data-home-theme]:not([data-home-theme="default"]) .tab,
 body[data-home-theme]:not([data-home-theme="default"]) .summary-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab,
@@ -6990,6 +7181,8 @@ body[data-home-theme]:not([data-home-theme="default"]) .scheme-actions .primary,
 body[data-home-theme]:not([data-home-theme="default"]) .tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .summary-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .result-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .task-type-tab[aria-selected="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button[aria-pressed="true"],
