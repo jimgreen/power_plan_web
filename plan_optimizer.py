@@ -456,7 +456,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "optimization_time_limit_minutes",
         numeric(planning_parameters.get("optimization_time_limit_seconds"), 3600) / 60,
     )
-    optimization_time_limit_minutes = int(min(120, max(10, round(numeric(raw_time_limit_minutes, 60)))))
+    optimization_time_limit_minutes = int(min(1440, max(10, round(numeric(raw_time_limit_minutes, 60)))))
     optimization_time_limit_seconds = optimization_time_limit_minutes * 60
     preferred_solver = normalize_preferred_solver(planning_parameters.get("preferred_solver"))
     initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))

@@ -1198,7 +1198,7 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         if hours is not None and not float(hours).is_integer():
             messages.append({"level": "error", "message": f"{label}必须为整数"})
     number_in_range("green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", 0, 1)
-    time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 120)
+    time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 1440)
     if time_limit is not None and not float(time_limit).is_integer():
         messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
     preferred_solver = normalize_preferred_solver(row.get("preferred_solver"))

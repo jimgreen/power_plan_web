@@ -6409,7 +6409,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("频率安全上限不能小于频率安全下限", script)
         self.assertIn("规划求解时间上限(分钟)", script)
         self.assertIn("defaultValue: 60", script)
-        self.assertIn("max: 120", script)
+        self.assertIn("max: 1440", script)
         self.assertIn('spec[0] === "hydrogen_tanks" ? 0.001 : 0.01', script)
         self.assertNotIn("规划负荷系数(0.1-10.0)", script)
         self.assertNotIn("设计容量上限不能小于下限", script)
