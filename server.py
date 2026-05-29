@@ -1954,7 +1954,7 @@ def result_curve_file_signature(path: Path):
 
 def ensure_split_result_workbook(path: Path) -> None:
     curve_path = result_curves_workbook_path(path)
-    if curve_path.exists() or not path.exists():
+    if not path.exists():
         return
     curve_sheet_names = ["供能日曲线", "供能月曲线", "安全日曲线", "调度结果"]
     try:
@@ -1964,10 +1964,15 @@ def ensure_split_result_workbook(path: Path) -> None:
     try:
         if not any(sheet_name in workbook.sheetnames for sheet_name in curve_sheet_names):
             return
-        curve_payload = {"results": {"curves": read_result_curves_from_workbook(workbook, include_hourly_curves=True)}}
+        curve_payload = (
+            {"results": {"curves": read_result_curves_from_workbook(workbook, include_hourly_curves=True)}}
+            if not curve_path.exists()
+            else None
+        )
     finally:
         workbook.close()
-    save_result_workbook(build_result_curves_workbook(curve_payload), curve_path, "曲线结果文件")
+    if curve_payload is not None:
+        save_result_workbook(build_result_curves_workbook(curve_payload), curve_path, "曲线结果文件")
     try:
         workbook = load_workbook(path)
     except RESULT_WORKBOOK_READ_ERRORS:
@@ -2393,6 +2398,7 @@ def write_evaluation_planning_counts(scheme: str, filename: str, planning_rows: 
     result_path = evaluation_result_path(scheme, filename)
     if not result_path.exists():
         raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+    ensure_split_result_workbook(result_path)
 
     counts_by_device: dict[str, object] = {}
     for row in planning_rows if isinstance(planning_rows, list) else []:
@@ -2460,6 +2466,7 @@ def save_evaluation_result_workbook(scheme: str, filename: str) -> Path:
     result_path = evaluation_result_path(scheme, filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)
     if not result_path.exists():
         raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+    ensure_split_result_workbook(result_path)
     return result_path
 
 
@@ -2514,6 +2521,7 @@ def handle_evaluation_results_api_path(
             source_path = evaluation_result_path(scheme, filename)
             if not source_path.exists():
                 raise FileNotFoundError(f"结果文件不存在: {source_path.name}")
+            ensure_split_result_workbook(source_path)
             source_error = result_workbook_error_message(source_path)
             if source_error:
                 raise ValueError(f"复制失败，当前结果文件无法读取: {source_path.name}")

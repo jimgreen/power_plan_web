@@ -2959,6 +2959,9 @@ class PowerPlanServerTest(unittest.TestCase):
             planning_sheet.append(["储能", 4, 250, 1000, "kWh"])
             planning_sheet.append(["电制氢", 1, 80, 0, "kW"])
             planning_sheet.append(["燃料电池", 0, 50, 50, "kW"])
+            embedded_curve_sheet = create_workbook.create_sheet("调度结果")
+            embedded_curve_sheet.append(["小时", "负荷总功率"])
+            embedded_curve_sheet.append([1, 100])
             create_workbook.save(source_path)
             source_curve_path = server.result_curves_workbook_path(source_path)
             source_curve_workbook = Workbook()
@@ -3020,6 +3023,16 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(copied["selected"], "custom_results.xlsx")
             self.assertTrue((planning_root / "方案A" / "custom_results.xlsx").exists())
             self.assertFalse((planning_root / "方案A" / "custom_curves.xlsx").exists())
+            source_after_copy = load_workbook(source_path, read_only=True)
+            try:
+                self.assertNotIn("调度结果", source_after_copy.sheetnames)
+            finally:
+                source_after_copy.close()
+            copied_workbook = load_workbook(planning_root / "方案A" / "custom_results.xlsx", read_only=True)
+            try:
+                self.assertNotIn("调度结果", copied_workbook.sheetnames)
+            finally:
+                copied_workbook.close()
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/results",
