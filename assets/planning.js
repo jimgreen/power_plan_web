@@ -78,7 +78,7 @@ const deviceSpecs = [
   ["storage_pcs", "储能PCS", ["name", "cost", "power_capacity", "storage_charge_efficiency", "storage_discharge_efficiency", "is_grid_forming", "storage_equivalent_inertia_constant_h", "storage_equivalent_primary_frequency_coefficient_k", "storage_equivalent_damping_coefficient_d", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_battery_packs", "储能电池组", ["name", "cost", "battery_capacity", "soc_upper", "soc_lower", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["hydrogen_electrolyzers", "电制氢", ["name", "cost", "power_capacity", "power_lower", "electric_to_hydrogen_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["hydrogen_tanks", "储氢罐", ["name", "cost", "hydrogen_tank_capacity", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["hydrogen_tanks", "储氢罐", ["name", "cost", "hydrogen_tank_capacity", "soc_upper", "soc_lower", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["fuel_cells", "燃料电池", ["name", "cost", "power_capacity", "hydrogen_to_electric_efficiency", "quantity_lower", "quantity_upper", "design_life_years"]],
 ];
 
@@ -3377,6 +3377,12 @@ function defaultDeviceFieldValue(field, spec) {
   if (field === "self_discharge_rate") {
     return spec[0] === "hydrogen_tanks" ? 0.001 : 0.01;
   }
+  if (spec[0] === "hydrogen_tanks" && field === "soc_upper") {
+    return 0.85;
+  }
+  if (spec[0] === "hydrogen_tanks" && field === "soc_lower") {
+    return 0.15;
+  }
   return Object.prototype.hasOwnProperty.call(deviceFieldDefaults, field) ? deviceFieldDefaults[field] : 0;
 }
 
@@ -3842,7 +3848,7 @@ function collectSaveWarnings() {
       if (validateDeviceFieldValue(row.quantity_lower, deviceFieldRules.quantity_lower) && validateDeviceFieldValue(row.quantity_upper, deviceFieldRules.quantity_upper) && Number(row.quantity_upper) < Number(row.quantity_lower)) {
         messages.push({ level: "error", message: `${title}第${index + 1}行数量上限不能小于数量下限` });
       }
-      if (key === "storage_battery_packs" && validateDeviceFieldValue(row.soc_upper, deviceFieldRules.soc_upper) && validateDeviceFieldValue(row.soc_lower, deviceFieldRules.soc_lower) && Number(row.soc_upper) < Number(row.soc_lower)) {
+      if ((key === "storage_battery_packs" || key === "hydrogen_tanks") && validateDeviceFieldValue(row.soc_upper, deviceFieldRules.soc_upper) && validateDeviceFieldValue(row.soc_lower, deviceFieldRules.soc_lower) && Number(row.soc_upper) < Number(row.soc_lower)) {
         messages.push({ level: "error", message: `${title}第${index + 1}行SOC上限不能小于SOC下限` });
       }
     });

@@ -3675,6 +3675,8 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertNotIn("design_life_years", created["planning_parameters"][0])
             self.assertEqual(created["storage_battery_packs"][0]["self_discharge_rate"], 0.01)
             self.assertEqual(created["hydrogen_tanks"][0]["self_discharge_rate"], 0.001)
+            self.assertEqual(created["hydrogen_tanks"][0]["soc_upper"], 0.85)
+            self.assertEqual(created["hydrogen_tanks"][0]["soc_lower"], 0.15)
             self.assertEqual(created["storage_pcs"][0]["storage_charge_efficiency"], 0.95)
             self.assertEqual(created["storage_pcs"][0]["storage_discharge_efficiency"], 0.95)
 
@@ -3694,6 +3696,8 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(loaded["planning_parameters"][0]["storage_frequency_regulation_enabled"], 1)
             self.assertEqual(loaded["storage_battery_packs"][0]["self_discharge_rate"], 0.01)
             self.assertEqual(loaded["hydrogen_tanks"][0]["self_discharge_rate"], 0.001)
+            self.assertEqual(loaded["hydrogen_tanks"][0]["soc_upper"], 0.85)
+            self.assertEqual(loaded["hydrogen_tanks"][0]["soc_lower"], 0.15)
             self.assertEqual(loaded["storage_pcs"][0]["storage_charge_efficiency"], 0.95)
             self.assertEqual(loaded["storage_pcs"][0]["storage_discharge_efficiency"], 0.95)
 
@@ -6637,6 +6641,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("自损耗率(0-1%/天)", script)
         self.assertIn("充电效率(0.0-1.0)", script)
         self.assertIn("放电效率(0.0-1.0)", script)
+        self.assertIn('["hydrogen_tanks", "储氢罐", ["name", "cost", "hydrogen_tank_capacity", "soc_upper", "soc_lower", "self_discharge_rate"', script)
+        self.assertIn('spec[0] === "hydrogen_tanks" && field === "soc_upper"', script)
+        self.assertIn("return 0.85", script)
+        self.assertIn('spec[0] === "hydrogen_tanks" && field === "soc_lower"', script)
+        self.assertIn("return 0.15", script)
 
     def test_planning_scheme_actions_validate_duplicates_and_delete_current_scheme(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")

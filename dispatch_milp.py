@@ -601,6 +601,10 @@ def add_hydrogen_constraints(
     consumption_terms: dict[int, float],
     capacity_terms: dict[int, float] | None = None,
     fixed_capacity: float | None = None,
+    soc_lower_capacity_terms: dict[int, float] | None = None,
+    soc_upper_capacity_terms: dict[int, float] | None = None,
+    fixed_soc_lower_capacity: float | None = None,
+    fixed_soc_upper_capacity: float | None = None,
     initial_ratio: float = 0.5,
     fixed_initial_value: float | None = None,
     self_discharge_rate_per_hour: float = 0.0,
@@ -612,6 +616,20 @@ def add_hydrogen_constraints(
             capacity_terms=capacity_terms,
             fixed_capacity=fixed_capacity,
         )
+    if soc_upper_capacity_terms is not None or fixed_soc_upper_capacity is not None:
+        add_capacity_upper_constraint(
+            builder,
+            storage_index,
+            capacity_terms=soc_upper_capacity_terms,
+            fixed_capacity=fixed_soc_upper_capacity,
+        )
+    if soc_lower_capacity_terms is not None:
+        lower_terms: dict[int, float] = {storage_index: 1.0}
+        for column, coefficient in soc_lower_capacity_terms.items():
+            lower_terms[column] = lower_terms.get(column, 0.0) - float(coefficient)
+        builder.add_constraint(lower_terms, float(fixed_soc_lower_capacity or 0.0), np.inf)
+    elif fixed_soc_lower_capacity is not None:
+        builder.add_constraint({storage_index: 1.0}, float(fixed_soc_lower_capacity), np.inf)
 
     terms: dict[int, float] = {storage_index: 1.0}
     for column, coefficient in production_terms.items():

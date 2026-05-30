@@ -352,6 +352,7 @@ class PlanningStoreTest(unittest.TestCase):
         payload = planning_store.default_payload("方案A")
         pcs_headers = planning_store.SHEET_SPECS["storage_pcs"][1]
         battery_headers = planning_store.SHEET_SPECS["storage_battery_packs"][1]
+        hydrogen_headers = planning_store.SHEET_SPECS["hydrogen_tanks"][1]
 
         self.assertNotIn("charge_power_upper", pcs_headers)
         self.assertNotIn("discharge_power_upper", pcs_headers)
@@ -379,6 +380,13 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertLess(battery_headers.index("cost"), battery_headers.index("battery_capacity"))
         self.assertEqual(payload["storage_battery_packs"][0]["soc_upper"], 0.9)
         self.assertEqual(payload["storage_battery_packs"][0]["soc_lower"], 0.1)
+        self.assertIn("soc_upper", hydrogen_headers)
+        self.assertIn("soc_lower", hydrogen_headers)
+        self.assertLess(hydrogen_headers.index("hydrogen_tank_capacity"), hydrogen_headers.index("soc_upper"))
+        self.assertLess(hydrogen_headers.index("soc_upper"), hydrogen_headers.index("soc_lower"))
+        self.assertLess(hydrogen_headers.index("soc_lower"), hydrogen_headers.index("self_discharge_rate"))
+        self.assertEqual(payload["hydrogen_tanks"][0]["soc_upper"], 0.85)
+        self.assertEqual(payload["hydrogen_tanks"][0]["soc_lower"], 0.15)
 
     def test_wind_turbine_rows_include_rated_wind_speed_between_cut_in_and_cut_out(self):
         payload = planning_store.default_payload("方案A")
@@ -755,10 +763,14 @@ class PlanningStoreTest(unittest.TestCase):
         payload = planning_store.default_payload("方案A")
         payload["storage_battery_packs"][0]["soc_upper"] = 0.2
         payload["storage_battery_packs"][0]["soc_lower"] = 0.8
+        payload["hydrogen_tanks"][0]["soc_upper"] = 0.1
+        payload["hydrogen_tanks"][0]["soc_lower"] = 0.9
 
         messages = planning_store.validate_payload(payload)
+        message_text = "\n".join(item["message"] for item in messages)
 
-        self.assertTrue(any("SOC上限不能小于SOC下限" in item["message"] for item in messages))
+        self.assertIn("储能电池组参数第1行SOC上限不能小于SOC下限", message_text)
+        self.assertIn("储氢罐参数第1行SOC上限不能小于SOC下限", message_text)
 
 
 def corrupt_zip_member(path: Path, member_name: str) -> None:

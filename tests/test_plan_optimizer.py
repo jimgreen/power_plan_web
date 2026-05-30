@@ -1039,6 +1039,46 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertNotIn(("grid_storage_on", 0, 0, 0), variables)
         self.assertNotIn(("grid_storage_on", 0, 0, 1), variables)
 
+    def test_planning_model_uses_hydrogen_tank_soc_limits(self):
+        payload = self._payload()
+        payload["hydrogen_tanks"][0].update(
+            {"hydrogen_tank_capacity": 100, "quantity_lower": 1, "quantity_upper": 2, "soc_upper": 0.85, "soc_lower": 0.15}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.copy()
+            captured["constraint_lower"] = constraint_lower.copy()
+            captured["constraint_upper"] = constraint_upper.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        index_to_key = {index: key for key, index in variables.items()}
+        matrix = captured["constraints"].tocoo()
+        constraints = []
+        for row_index in range(captured["constraints"].shape[0]):
+            terms = {
+                index_to_key[column]: value
+                for row, column, value in zip(matrix.row, matrix.col, matrix.data)
+                if row == row_index
+            }
+            constraints.append((terms, captured["constraint_lower"][row_index], captured["constraint_upper"][row_index]))
+
+        self.assertEqual(model["hydrogen_soc_upper_ratio"], 0.85)
+        self.assertEqual(model["hydrogen_soc_lower_ratio"], 0.15)
+        self.assertIn(
+            ({("hydrogen_storage", 0): 1.0, ("qty", "hydrogen_tanks", 0): -85.0}, -np.inf, 0.0),
+            constraints,
+        )
+        self.assertIn(
+            ({("hydrogen_storage", 0): 1.0, ("qty", "hydrogen_tanks", 0): -15.0}, 0.0, np.inf),
+            constraints,
+        )
+
     def test_storage_charge_and_discharge_use_storage_pcs_capacity(self):
         payload = self._payload()
         payload["storage_pcs"][0].update(

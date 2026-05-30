@@ -128,6 +128,8 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "name",
             "cost",
             "hydrogen_tank_capacity",
+            "soc_upper",
+            "soc_lower",
             "self_discharge_rate",
             "quantity_lower",
             "quantity_upper",
@@ -268,6 +270,8 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
         {
             "name": "储氢罐1",
             "hydrogen_tank_capacity": 100,
+            "soc_upper": 0.85,
+            "soc_lower": 0.15,
             "self_discharge_rate": 0.001,
             "cost": 0,
             "quantity_lower": 0,
@@ -444,6 +448,10 @@ def field_default_for_key(key: str, header: str, fallback: Any = "") -> Any:
             return 0.001
         if key == "storage_battery_packs":
             return 0.01
+    if key == "hydrogen_tanks" and header == "soc_upper":
+        return 0.85
+    if key == "hydrogen_tanks" and header == "soc_lower":
+        return 0.15
     return field_default(header, fallback)
 
 
@@ -1148,7 +1156,7 @@ def validate_payload(payload: dict[str, Any], require_time_series: bool = True) 
                 and float(row.get("quantity_lower")) > float(row.get("quantity_upper"))
             ):
                 messages.append({"level": "error", "message": f"{SHEET_SPECS[key][0]}第{index}行数量上限不能小于数量下限"})
-            if key == "storage_battery_packs":
+            if key in {"storage_battery_packs", "hydrogen_tanks"}:
                 soc_upper = row.get("soc_upper", "")
                 soc_lower = row.get("soc_lower", "")
                 if (

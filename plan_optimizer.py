@@ -489,6 +489,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         numeric(planning_parameters.get("storage_discharge_efficiency"), 0.95),
     )
     storage_soc_lower_ratio, storage_soc_upper_ratio = storage_soc_limits(device_rows["storage_battery_packs"])
+    hydrogen_soc_lower_ratio, hydrogen_soc_upper_ratio = hydrogen_soc_limits(device_rows["hydrogen_tanks"])
     storage_self_discharge_rate = fleet_self_discharge_rate(device_rows["storage_battery_packs"], 0.01)
     hydrogen_self_discharge_rate = fleet_self_discharge_rate(device_rows["hydrogen_tanks"], 0.001)
     loads = np.array([max(0.0, numeric(row.get("load"), 0.0)) for row in time_series], dtype=float)
@@ -538,6 +539,8 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "frequency": frequency,
         "storage_soc_lower_ratio": storage_soc_lower_ratio,
         "storage_soc_upper_ratio": storage_soc_upper_ratio,
+        "hydrogen_soc_lower_ratio": hydrogen_soc_lower_ratio,
+        "hydrogen_soc_upper_ratio": hydrogen_soc_upper_ratio,
         "device_rows": device_rows,
         "wind_available_per_unit": wind_available_per_unit,
         "pv_available_per_unit": pv_available_per_unit,
@@ -648,6 +651,12 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     def qty_terms(devices: list[dict[str, Any]], coefficient_key: str = "capacity", multiplier: float = 1.0) -> dict[int, float]:
         return {
             var(("qty", device["key"], device["index"])): numeric(device.get(coefficient_key), 0.0) * multiplier
+            for device in devices
+        }
+
+    def qty_soc_terms(devices: list[dict[str, Any]], ratio_key: str, default: float) -> dict[int, float]:
+        return {
+            var(("qty", device["key"], device["index"])): device["capacity"] * min(1.0, max(0.0, numeric(device.get(ratio_key), default)))
             for device in devices
         }
 
@@ -861,6 +870,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 for device in fuel_cell_devices
             },
             capacity_terms=hydrogen_capacity_terms,
+            soc_lower_capacity_terms=qty_soc_terms(hydrogen_tank_devices, "soc_lower", 0.15),
+            soc_upper_capacity_terms=qty_soc_terms(hydrogen_tank_devices, "soc_upper", 0.85),
             initial_ratio=model["initial_hydrogen_storage_ratio"],
             self_discharge_rate_per_hour=hydrogen_self_discharge_per_hour,
         )
@@ -1058,6 +1069,12 @@ def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, 
             elif key == "fuel_cells":
                 device["hydrogen_to_electric_efficiency"] = max(0.0001, numeric(source.get("hydrogen_to_electric_efficiency"), 0.55))
             elif key == "hydrogen_tanks":
+                soc_upper = min(1.0, max(0.0, numeric(source.get("soc_upper"), 0.85)))
+                soc_lower = min(1.0, max(0.0, numeric(source.get("soc_lower"), 0.15)))
+                if soc_upper < soc_lower:
+                    soc_upper, soc_lower = soc_lower, soc_upper
+                device["soc_upper"] = soc_upper
+                device["soc_lower"] = soc_lower
                 device["self_discharge_rate"] = min(0.01, max(0.0, numeric(source.get("self_discharge_rate"), 0.001)))
             normalized[key].append(device)
     return normalized
@@ -1071,6 +1088,19 @@ def storage_soc_limits(storage_battery_devices: list[dict[str, Any]]) -> tuple[f
         return 0.1, 0.9
     lower = sum(device["capacity"] * device["quantity_upper"] * numeric(device.get("soc_lower"), 0.1) for device in storage_battery_devices) / total_capacity
     upper = sum(device["capacity"] * device["quantity_upper"] * numeric(device.get("soc_upper"), 0.9) for device in storage_battery_devices) / total_capacity
+    lower = min(1.0, max(0.0, lower))
+    upper = min(1.0, max(0.0, upper))
+    if upper < lower:
+        upper, lower = lower, upper
+    return lower, upper
+
+
+def hydrogen_soc_limits(hydrogen_tank_devices: list[dict[str, Any]]) -> tuple[float, float]:
+    total_capacity = sum(max(0.0, device["capacity"] * device["quantity_upper"]) for device in hydrogen_tank_devices)
+    if total_capacity <= 0:
+        return 0.15, 0.85
+    lower = sum(device["capacity"] * device["quantity_upper"] * numeric(device.get("soc_lower"), 0.15) for device in hydrogen_tank_devices) / total_capacity
+    upper = sum(device["capacity"] * device["quantity_upper"] * numeric(device.get("soc_upper"), 0.85) for device in hydrogen_tank_devices) / total_capacity
     lower = min(1.0, max(0.0, lower))
     upper = min(1.0, max(0.0, upper))
     if upper < lower:
@@ -1603,6 +1633,8 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
             f"电储自损耗={format_log_number(model['storage_self_discharge_rate'] * 100)}%/天，"
             "电化学储能按每日SOC闭环，仅参与日内平衡，"
+            f"氢储SOC范围={format_log_number(model['hydrogen_soc_lower_ratio'] * 100)}%-"
+            f"{format_log_number(model['hydrogen_soc_upper_ratio'] * 100)}%，"
             f"氢储自损耗={format_log_number(model['hydrogen_self_discharge_rate'] * 100)}%/天，"
             f"扰动后平衡={'开启' if model['post_disturbance_power_balance_enabled'] else '关闭'}，"
             f"负荷向上扰动系数={format_log_number(model['load_up_disturbance_factor'])}，"
