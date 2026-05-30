@@ -123,7 +123,8 @@ button:disabled {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
   grid-template-rows: minmax(150px, var(--planning-scheme-rail-height, auto)) 8px minmax(0, 1fr);
-  gap: 18px;
+  column-gap: 18px;
+  row-gap: 5px;
   padding: 18px;
   min-height: 0;
   overflow: hidden;
@@ -238,6 +239,7 @@ button:disabled {
   min-height: 8px;
   cursor: row-resize;
   border-radius: 999px;
+  z-index: 2;
 }
 
 .workspace > .scheme-list-resize-handle {
@@ -249,12 +251,12 @@ button:disabled {
 .scheme-list-resize-handle::before {
   content: "";
   position: absolute;
-  left: 18px;
-  right: 18px;
-  top: 3px;
-  height: 2px;
+  left: 10px;
+  right: 10px;
+  top: 2px;
+  height: 4px;
   border-radius: 999px;
-  background: rgba(13, 92, 89, 0.28);
+  background: rgba(13, 92, 89, 0.46);
   transition: background 0.16s ease, box-shadow 0.16s ease;
 }
 
@@ -7553,6 +7555,17 @@ body[data-home-theme]:not([data-home-theme="default"]) .time-chart-range-scope b
   border-color: var(--theme-accent);
   background: var(--theme-active-bg);
   color: var(--theme-active-text);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-list-resize-handle::before {
+  background: color-mix(in srgb, var(--theme-accent) 72%, transparent);
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-list-resize-handle:hover::before,
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-list-resize-handle.dragging::before,
+body[data-home-theme]:not([data-home-theme="default"]) .scheme-list-resize-handle:focus-visible::before {
+  background: var(--theme-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--theme-accent) 20%, transparent);
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .composition-bar-segment span {
