@@ -15,6 +15,7 @@ const frequencyState = {
 };
 
 const FREQUENCY_SELECTION_STORAGE_KEY = "powerPlanFrequencySelection";
+const FREQUENCY_PAGE_STATE_KEY = "frequency";
 const FREQUENCY_8760_SERIES = [
   { key: "柴发开机容量", color: "#0d5c59" },
   { key: "向上最大扰动", color: "#c7504a" },
@@ -25,7 +26,55 @@ const FREQUENCY_8760_SERIES = [
   { key: "仿真频率最小值", color: "#2d8a55" },
 ];
 
+let restoredFrequencyPageState = {};
+
+function restoreFrequencyPageState() {
+  restoredFrequencyPageState = window.PowerPlanPageState?.read?.(FREQUENCY_PAGE_STATE_KEY, {}) || {};
+  const saved = restoredFrequencyPageState;
+  if (typeof saved.currentScheme === "string") frequencyState.currentScheme = saved.currentScheme;
+  if (typeof saved.selectedResultFile === "string") frequencyState.selectedResultFile = saved.selectedResultFile;
+  if (["metrics", "curve", "logs"].includes(saved.activeResultTab)) frequencyState.activeResultTab = saved.activeResultTab;
+  if (Array.isArray(saved.collapsedSchemes)) frequencyState.collapsedSchemes = new Set(saved.collapsedSchemes.map((item) => String(item || "")).filter(Boolean));
+  if (Number.isFinite(Number(saved.schemeRailHeight))) frequencyState.schemeRailHeight = Number(saved.schemeRailHeight);
+  if (saved.axisRanges && typeof saved.axisRanges === "object") frequencyState.axisRanges = { ...saved.axisRanges };
+  if (saved.frequencyTimeSelection && typeof saved.frequencyTimeSelection === "object") {
+    frequencyState.frequencyTimeSelection = { ...saved.frequencyTimeSelection };
+  }
+  if (Number.isFinite(Number(saved.metricsTableWidth))) {
+    frequencyState.metricsTableWidth = Number(saved.metricsTableWidth);
+    document.documentElement.style.setProperty("--frequency-metrics-table-width", `${Math.round(frequencyState.metricsTableWidth)}px`);
+  }
+  if (Number.isFinite(Number(saved.timeInfoWidth))) {
+    frequencyState.timeInfoWidth = Number(saved.timeInfoWidth);
+    document.documentElement.style.setProperty("--frequency-time-info-width", `${Math.round(frequencyState.timeInfoWidth)}px`);
+  }
+  if (frequencyState.schemeRailHeight) document.documentElement.style.setProperty("--evaluation-scheme-rail-height", `${Math.round(frequencyState.schemeRailHeight)}px`);
+}
+
+function frequencyPageStateSnapshot() {
+  const frequencyTimeSelection = currentFrequencyTimeSelection();
+  const hasFrequencyTimeSelection = Boolean(frequencyTimeSelection.month || frequencyTimeSelection.day || frequencyTimeSelection.hour);
+  return {
+    currentScheme: frequencyState.currentScheme || "",
+    selectedResultFile: frequencyState.selectedResultFile || "",
+    activeResultTab: frequencyState.activeResultTab || "metrics",
+    collapsedSchemes: Array.from(frequencyState.collapsedSchemes || []),
+    frequencyTimeSelection: hasFrequencyTimeSelection ? frequencyTimeSelection : restoredFrequencyPageState.frequencyTimeSelection || frequencyTimeSelection,
+    schemeRailHeight: frequencyState.schemeRailHeight,
+    metricsTableWidth: frequencyState.metricsTableWidth,
+    timeInfoWidth: frequencyState.timeInfoWidth,
+    axisRanges: frequencyState.axisRanges || {},
+  };
+}
+
+function rememberFrequencyPageState(partial = {}) {
+  const next = { ...frequencyPageStateSnapshot(), ...(partial || {}) };
+  restoredFrequencyPageState = next;
+  window.PowerPlanPageState?.write?.(FREQUENCY_PAGE_STATE_KEY, next);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  restoreFrequencyPageState();
   bindFrequencyActions();
   bindFrequencyTabs();
   bindFrequencySchemeListResize();
@@ -38,15 +87,22 @@ document.addEventListener("DOMContentLoaded", () => {
 async function loadFrequencyPage() {
   const remembered = readStoredJson(FREQUENCY_SELECTION_STORAGE_KEY, {});
   frequencyState.schemes = (await frequencyApi("/api/planning/schemes")).schemes || [];
-  if (remembered.scheme && frequencyState.schemes.some((scheme) => scheme.name === remembered.scheme)) {
-    frequencyState.currentScheme = remembered.scheme;
-  } else if (frequencyState.schemes.length) {
-    frequencyState.currentScheme = frequencyState.schemes[0].name;
+  const rememberedScheme = frequencyState.currentScheme || remembered.scheme || "";
+  if (frequencyState.currentScheme && !frequencyState.schemes.some((scheme) => scheme.name === frequencyState.currentScheme)) {
+    frequencyState.currentScheme = "";
+    frequencyState.selectedResultFile = "";
+  }
+  if (!frequencyState.currentScheme) {
+    if (rememberedScheme && frequencyState.schemes.some((scheme) => scheme.name === rememberedScheme)) {
+      frequencyState.currentScheme = rememberedScheme;
+    } else if (frequencyState.schemes.length) {
+      frequencyState.currentScheme = frequencyState.schemes[0].name;
+    }
   }
   renderFrequencySchemes();
   loadFrequencyResultTree().catch(showFrequencyError);
-  setFrequencySchemeRailHeight(frequencySchemeRailHeightBounds().max);
-  await loadFrequencyResults(remembered.result || "");
+  setFrequencySchemeRailHeight(frequencyState.schemeRailHeight || frequencySchemeRailHeightBounds().max, undefined, { remember: false });
+  await loadFrequencyResults(frequencyState.selectedResultFile || remembered.result || "");
   await refreshFrequencyStatus();
 }
 
@@ -68,31 +124,46 @@ function bindFrequencyActions() {
   document.getElementById("startFrequency")?.addEventListener("click", () => controlFrequency("start"));
   document.getElementById("queueFrequency")?.addEventListener("click", () => controlFrequency("queue"));
   document.getElementById("stopFrequency")?.addEventListener("click", () => controlFrequency(terminalFrequencyAction()));
-  document.getElementById("frequencyCurveQuery")?.addEventListener("click", () => refreshFrequencyTimeCurve().catch(showFrequencyError));
+  document.getElementById("frequencyCurveQuery")?.addEventListener("click", () => {
+    rememberFrequencyPageState({ frequencyTimeSelection: currentFrequencyTimeSelection() });
+    refreshFrequencyTimeCurve().catch(showFrequencyError);
+  });
+  document.getElementById("frequencyCurveDate")?.addEventListener("change", () => {
+    rememberFrequencyPageState({ frequencyTimeSelection: currentFrequencyTimeSelection() });
+  });
+  document.getElementById("frequencyCurveHour")?.addEventListener("change", () => {
+    rememberFrequencyPageState({ frequencyTimeSelection: currentFrequencyTimeSelection() });
+  });
 }
 
 function bindFrequencyTabs() {
-  const buttons = Array.from(document.querySelectorAll("[data-result-tab]"));
-  const panels = Array.from(document.querySelectorAll("[data-result-panel]"));
-  buttons.forEach((button) => {
+  document.querySelectorAll("[data-result-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      const target = button.dataset.resultTab || "metrics";
-      frequencyState.activeResultTab = target;
-      buttons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle("active", active);
-        item.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const active = panel.dataset.resultPanel === target;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      if (target === "curve") {
-        refreshFrequencyTimeCurve().catch(showFrequencyError);
-      }
+      activateFrequencyResultTab(button.dataset.resultTab || "metrics");
     });
   });
+  activateFrequencyResultTab(frequencyState.activeResultTab, { remember: false, load: false });
+}
+
+function activateFrequencyResultTab(target, options = {}) {
+  const buttons = Array.from(document.querySelectorAll("[data-result-tab]"));
+  const panels = Array.from(document.querySelectorAll("[data-result-panel]"));
+  const activeTarget = buttons.some((button) => button.dataset.resultTab === target) ? target : "metrics";
+  frequencyState.activeResultTab = activeTarget;
+  buttons.forEach((item) => {
+    const active = item.dataset.resultTab === activeTarget;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+  });
+  panels.forEach((panel) => {
+    const active = panel.dataset.resultPanel === activeTarget;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  if (options.remember !== false) rememberFrequencyPageState({ activeResultTab: activeTarget });
+  if (activeTarget === "curve" && options.load !== false) {
+    refreshFrequencyTimeCurve().catch(showFrequencyError);
+  }
 }
 
 function bindFrequencyMetricsResize() {
@@ -137,6 +208,15 @@ function bindFrequencyHorizontalResize({ handleId, layoutSelector, cssVariable, 
     handle.setAttribute("aria-valuenow", String(Math.round(next)));
     handle.setAttribute("aria-valuemin", String(Math.round(limits.min)));
     handle.setAttribute("aria-valuemax", String(Math.round(limits.max)));
+    const shouldRemember = handle.dataset.resizeInitialized === "true";
+    if (cssVariable === "--frequency-metrics-table-width") {
+      frequencyState.metricsTableWidth = Math.round(next);
+      if (shouldRemember) rememberFrequencyPageState({ metricsTableWidth: frequencyState.metricsTableWidth });
+    }
+    if (cssVariable === "--frequency-time-info-width") {
+      frequencyState.timeInfoWidth = Math.round(next);
+      if (shouldRemember) rememberFrequencyPageState({ timeInfoWidth: frequencyState.timeInfoWidth });
+    }
   };
   handle.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -169,6 +249,7 @@ function bindFrequencyHorizontalResize({ handleId, layoutSelector, cssVariable, 
     }
   });
   applyWidth(currentWidth());
+  handle.dataset.resizeInitialized = "true";
 }
 
 function renderFrequencySchemes() {
@@ -268,6 +349,7 @@ function toggleFrequencySchemeCollapsed(schemeName) {
   if (frequencyState.collapsedSchemes.has(schemeName)) frequencyState.collapsedSchemes.delete(schemeName);
   else frequencyState.collapsedSchemes.add(schemeName);
   renderFrequencySchemes();
+  rememberFrequencyPageState({ collapsedSchemes: Array.from(frequencyState.collapsedSchemes) });
 }
 
 function bindFrequencySchemeListResize() {
@@ -316,7 +398,7 @@ function bindFrequencySchemeListResize() {
   updateFrequencySchemeListResizeHandle();
 }
 
-function setFrequencySchemeRailHeight(height, handle = document.getElementById("frequencySchemeListResizeHandle")) {
+function setFrequencySchemeRailHeight(height, handle = document.getElementById("frequencySchemeListResizeHandle"), options = {}) {
   const bounds = frequencySchemeRailHeightBounds();
   const numericHeight = Number(height);
   const safeHeight = Math.min(Math.max(Number.isFinite(numericHeight) ? numericHeight : bounds.max, bounds.min), bounds.max);
@@ -326,6 +408,7 @@ function setFrequencySchemeRailHeight(height, handle = document.getElementById("
   handle?.setAttribute("aria-valuenow", String(roundedHeight));
   handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
   handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  if (options.remember !== false) rememberFrequencyPageState({ schemeRailHeight: frequencyState.schemeRailHeight });
 }
 
 function frequencySchemeRailHeightBounds() {
@@ -674,15 +757,21 @@ async function refreshFrequencyTimeCurve() {
 function initializeFrequencyTimeControls(rows) {
   const dateInput = document.getElementById("frequencyCurveDate");
   const hourInput = document.getElementById("frequencyCurveHour");
-  if (!dateInput || dateInput.value || !Array.isArray(rows) || !rows.length) return;
+  if (!dateInput || dateInput.value) return;
+  if (restoredFrequencyPageState.frequencyTimeSelection) {
+    applyFrequencyTimeSelection(restoredFrequencyPageState.frequencyTimeSelection, { remember: false });
+    if (dateInput.value) return;
+  }
+  if (!Array.isArray(rows) || !rows.length) return;
   const first = rows[0] || {};
   const parts = parseFrequencyTimeText(first["时间"]);
   if (!parts) return;
   dateInput.value = frequencyDateInputValue(parts);
   if (hourInput) hourInput.value = parts.hour;
+  rememberFrequencyPageState({ frequencyTimeSelection: currentFrequencyTimeSelection() });
 }
 
-function applyFrequencyTimeSelection(selection) {
+function applyFrequencyTimeSelection(selection, options = {}) {
   if (!selection) return;
   const dateInput = document.getElementById("frequencyCurveDate");
   const hourInput = document.getElementById("frequencyCurveHour");
@@ -692,6 +781,20 @@ function applyFrequencyTimeSelection(selection) {
   if (hourInput && selection.hour !== "" && selection.hour != null) {
     hourInput.value = selection.hour;
   }
+  if (options.remember !== false) rememberFrequencyPageState({ frequencyTimeSelection: currentFrequencyTimeSelection() });
+}
+
+function currentFrequencyTimeSelection() {
+  const dateInput = document.getElementById("frequencyCurveDate");
+  const hourInput = document.getElementById("frequencyCurveHour");
+  const value = dateInput?.value || "";
+  const match = value.match(/\d{4}-(\d{2})-(\d{2})/);
+  return {
+    year: match ? value.slice(0, 4) : "2026",
+    month: match ? String(Number(match[1])) : "",
+    day: match ? String(Number(match[2])) : "",
+    hour: hourInput?.value || "",
+  };
 }
 
 function parseFrequencyTimeText(value) {
@@ -787,6 +890,7 @@ function bindFrequencyAxisRangeControls() {
     if (event.target.matches("[data-frequency-axis-max]")) next.max = Number.isFinite(value) ? value : "";
     frequencyState.axisRanges[key] = next;
     rerenderFrequencyAxisBoard(key);
+    rememberFrequencyPageState({ axisRanges: frequencyState.axisRanges });
   });
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-frequency-axis-reset]");
@@ -794,6 +898,7 @@ function bindFrequencyAxisRangeControls() {
     const key = button.dataset.frequencyAxisReset || "";
     delete frequencyState.axisRanges[key];
     rerenderFrequencyAxisBoard(key);
+    rememberFrequencyPageState({ axisRanges: frequencyState.axisRanges });
   });
 }
 
@@ -906,6 +1011,10 @@ function rememberFrequencySelection() {
   writeStoredJson(FREQUENCY_SELECTION_STORAGE_KEY, {
     scheme: frequencyState.currentScheme || "",
     result: frequencyState.selectedResultFile || "",
+  });
+  rememberFrequencyPageState({
+    currentScheme: frequencyState.currentScheme || "",
+    selectedResultFile: frequencyState.selectedResultFile || "",
   });
 }
 

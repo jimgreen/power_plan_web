@@ -5273,7 +5273,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("年度统计", html)
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
-        self.assertIn("assets/comparison.js?v=20260530-axis-popover", html)
+        self.assertIn("assets/comparison.js?v=20260530-page-state", html)
         self.assertIn("assets/result_curves.js?v=20260530-axis-popover", html)
 
         self.assertIn("/api/planning/schemes", script)
@@ -7421,6 +7421,101 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('".css", ".js"', server_text)
         self.assertIn('".png"', server_text)
         self.assertIn("STATIC_ASSET_CACHE_CONTROL", server_text)
+
+    def test_interactive_pages_restore_last_page_state(self):
+        page_state_script = (WEB_ROOT / "assets" / "page_state.js").read_text(encoding="utf-8")
+        self.assertIn("PowerPlanPageState", page_state_script)
+        self.assertIn("localStorage", page_state_script)
+        self.assertIn("read", page_state_script)
+        self.assertIn("write", page_state_script)
+        self.assertIn("patch", page_state_script)
+
+        interactive_pages = (
+            "planning.html",
+            "optimize.html",
+            "evaluation.html",
+            "frequency.html",
+            "comparison.html",
+            "tasks.html",
+        )
+        for page_name in interactive_pages:
+            with self.subTest(page=page_name):
+                html = (WEB_ROOT / page_name).read_text(encoding="utf-8")
+                self.assertIn("assets/page_state.js?v=", html)
+
+        page_scripts = {
+            "planning.js": (
+                "PLANNING_PAGE_STATE_KEY",
+                "restorePlanningPageState",
+                "rememberPlanningPageState",
+                "activeTab",
+                "summaryTab",
+                "currentScheme",
+                "timeChartRange",
+                "month",
+                "activePlanningParameterGroup",
+                "visibleDevices",
+                "loadGeneratorMode",
+            ),
+            "optimize.js": (
+                "OPTIMIZATION_PAGE_STATE_KEY",
+                "restoreOptimizationPageState",
+                "rememberOptimizationPageState",
+                "currentScheme",
+                "activeResultTab",
+                "optimizationSchemeRailHeight",
+                "axisRanges",
+            ),
+            "evaluation.js": (
+                "EVALUATION_PAGE_STATE_KEY",
+                "restoreEvaluationPageState",
+                "rememberEvaluationPageState",
+                "currentScheme",
+                "selectedResultFile",
+                "activeResultTab",
+                "collapsedSchemes",
+                "evaluationSchemeRailHeight",
+                "evaluationResultRailWidth",
+                "axisRanges",
+            ),
+            "frequency.js": (
+                "FREQUENCY_PAGE_STATE_KEY",
+                "restoreFrequencyPageState",
+                "rememberFrequencyPageState",
+                "currentScheme",
+                "selectedResultFile",
+                "activeResultTab",
+                "collapsedSchemes",
+                "frequencyTimeSelection",
+                "schemeRailHeight",
+                "axisRanges",
+            ),
+            "comparison.js": (
+                "COMPARISON_PAGE_STATE_KEY",
+                "restoreComparisonPageState",
+                "rememberComparisonPageState",
+                "tabs",
+                "activeTabId",
+                "tableHeight",
+                "tableColumnWidths",
+                "axisRanges",
+                "selectedCurves",
+            ),
+            "tasks.js": (
+                "TASKS_PAGE_STATE_KEY",
+                "restoreTasksPageState",
+                "rememberTasksPageState",
+                "activeTaskType",
+                "evaluationSchemeFilter",
+                "frequencySchemeFilter",
+            ),
+        }
+        for script_name, tokens in page_scripts.items():
+            with self.subTest(script=script_name):
+                script = (WEB_ROOT / "assets" / script_name).read_text(encoding="utf-8")
+                self.assertIn("PowerPlanPageState", script)
+                for token in tokens:
+                    self.assertIn(token, script)
 
     def test_redirect_response_disables_cache_and_varies_on_cookie(self):
         status, headers, body = server._redirect_response("/login.html?next=%2Ftasks.html")

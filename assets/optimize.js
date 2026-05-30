@@ -1,4 +1,5 @@
 const OPTIMIZATION_SCHEME_STORAGE_KEY = "powerPlanLastOptimizationScheme";
+const OPTIMIZATION_PAGE_STATE_KEY = "optimization";
 const COLLAPSED_PANEL_SIZE = 0;
 const HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8;
 const HOURLY_CURVE_PRELOAD_DELAY_MS = 300;
@@ -32,6 +33,45 @@ const state = {
   seriesToggleBound: false,
   lastOptimizationRenderSignature: "",
 };
+
+let restoredOptimizationPageState = {};
+
+function restoreOptimizationPageState() {
+  restoredOptimizationPageState = window.PowerPlanPageState?.read?.(OPTIMIZATION_PAGE_STATE_KEY, {}) || {};
+  const saved = restoredOptimizationPageState;
+  if (typeof saved.currentScheme === "string") state.currentScheme = saved.currentScheme;
+  if (["overview", "green", "safety", "logs", "curves"].includes(saved.activeResultTab)) state.activeResultTab = saved.activeResultTab;
+  ["greenResultTableWidth", "safetyResultTableWidth", "overviewLeftColumnWidth", "optimizationSchemeRailHeight"].forEach((key) => {
+    if (Number.isFinite(Number(saved[key]))) state[key] = Number(saved[key]);
+  });
+  if (state.greenResultTableWidth) document.documentElement.style.setProperty("--green-result-table-width", `${Math.round(state.greenResultTableWidth)}px`);
+  if (state.safetyResultTableWidth) document.documentElement.style.setProperty("--safety-result-table-width", `${Math.round(state.safetyResultTableWidth)}px`);
+  if (state.overviewLeftColumnWidth) document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(state.overviewLeftColumnWidth)}px`);
+  if (state.optimizationSchemeRailHeight) document.documentElement.style.setProperty("--optimization-scheme-rail-height", `${Math.round(state.optimizationSchemeRailHeight)}px`);
+  if (saved.greenSeriesVisibility && typeof saved.greenSeriesVisibility === "object") state.greenSeriesVisibility = { ...saved.greenSeriesVisibility };
+  if (saved.safetySeriesVisibility && typeof saved.safetySeriesVisibility === "object") state.safetySeriesVisibility = { ...saved.safetySeriesVisibility };
+  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = { ...saved.axisRanges };
+}
+
+function optimizationPageStateSnapshot() {
+  return {
+    currentScheme: state.currentScheme || "",
+    activeResultTab: state.activeResultTab || "overview",
+    greenResultTableWidth: state.greenResultTableWidth,
+    safetyResultTableWidth: state.safetyResultTableWidth,
+    overviewLeftColumnWidth: state.overviewLeftColumnWidth,
+    optimizationSchemeRailHeight: state.optimizationSchemeRailHeight,
+    greenSeriesVisibility: state.greenSeriesVisibility,
+    safetySeriesVisibility: state.safetySeriesVisibility,
+    axisRanges: state.axisRanges || {},
+  };
+}
+
+function rememberOptimizationPageState(partial = {}) {
+  const next = { ...optimizationPageStateSnapshot(), ...(partial || {}) };
+  restoredOptimizationPageState = next;
+  window.PowerPlanPageState?.write?.(OPTIMIZATION_PAGE_STATE_KEY, next);
+}
 
 const resultTabLabels = {
   overview: "结果概览",
@@ -108,6 +148,7 @@ function toggleSeriesVisibility(kind, seriesKey, viewport) {
   if (!seriesKey) return;
   setSeriesVisibility(kind, seriesKey, !isSeriesVisible(kind, seriesKey));
   renderAdaptiveResultChart(kind, viewport || document.querySelector(`[data-result-chart-viewport="${kind}"]`));
+  rememberOptimizationPageState({ [`${kind}SeriesVisibility`]: state[`${kind}SeriesVisibility`] });
 }
 
 function toggleGreenSeriesVisibility(seriesKey, viewport) {
@@ -138,6 +179,7 @@ function bindResultAxisRangeControls() {
     if (event.target.matches("[data-result-axis-max]")) next.max = Number.isFinite(value) ? value : "";
     state.axisRanges[kind] = next;
     renderAdaptiveResultChart(kind);
+    rememberOptimizationPageState({ axisRanges: state.axisRanges });
   });
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-result-axis-reset]");
@@ -145,6 +187,7 @@ function bindResultAxisRangeControls() {
     const kind = button.dataset.resultAxisReset || "";
     delete state.axisRanges[kind];
     renderAdaptiveResultChart(kind);
+    rememberOptimizationPageState({ axisRanges: state.axisRanges });
   });
 }
 
@@ -173,6 +216,7 @@ function applyAxisRange(autoMin, autoMax, range = {}) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  restoreOptimizationPageState();
   state.optimizationCurveViewer = window.ResultCurveViewer
     ? window.ResultCurveViewer.create({
         listId: "optimizationCurveNameList",
@@ -230,18 +274,22 @@ function writeStoredText(key, value) {
 
 function rememberOptimizationScheme() {
   writeStoredText(OPTIMIZATION_SCHEME_STORAGE_KEY, state.currentScheme);
+  rememberOptimizationPageState({ currentScheme: state.currentScheme || "" });
 }
 
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes || [];
-  const storedScheme = readStoredText(OPTIMIZATION_SCHEME_STORAGE_KEY);
+  const storedScheme = state.currentScheme || readStoredText(OPTIMIZATION_SCHEME_STORAGE_KEY);
+  if (state.currentScheme && !state.schemes.some((scheme) => scheme.name === state.currentScheme)) {
+    state.currentScheme = "";
+  }
   if (!state.currentScheme && state.schemes.some((scheme) => scheme.name === storedScheme)) {
     state.currentScheme = storedScheme;
   }
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
   if (state.currentScheme) rememberOptimizationScheme();
   renderSchemes();
-  setOptimizationSchemeRailHeight(optimizationSchemeRailHeightBounds().max);
+  setOptimizationSchemeRailHeight(state.optimizationSchemeRailHeight || optimizationSchemeRailHeightBounds().max);
   renderCurrentScheme();
 }
 
@@ -335,6 +383,7 @@ function setOptimizationSchemeRailHeight(height, handle = document.getElementByI
   handle?.setAttribute("aria-valuenow", String(roundedHeight));
   handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
   handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  rememberOptimizationPageState({ optimizationSchemeRailHeight: state.optimizationSchemeRailHeight });
 }
 
 function optimizationSchemeRailHeightBounds() {
@@ -479,26 +528,32 @@ function scheduleOptimizationPolling() {
 }
 
 function bindResultTabs() {
-  const buttons = Array.from(document.querySelectorAll("[data-result-tab]"));
-  const panels = Array.from(document.querySelectorAll("[data-result-panel]"));
-  buttons.forEach((button) => {
+  document.querySelectorAll("[data-result-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      const target = button.dataset.resultTab;
-      state.activeResultTab = target || "overview";
-      buttons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle("active", active);
-        item.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const active = panel.dataset.resultPanel === target;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      if (target === "curves") loadOptimizationCurveData().catch(showError);
-      window.requestAnimationFrame(refreshAdaptiveResultCharts);
+      activateOptimizationResultTab(button.dataset.resultTab || "overview");
     });
   });
+  activateOptimizationResultTab(state.activeResultTab, { remember: false, load: false });
+}
+
+function activateOptimizationResultTab(target, options = {}) {
+  const buttons = Array.from(document.querySelectorAll("[data-result-tab]"));
+  const panels = Array.from(document.querySelectorAll("[data-result-panel]"));
+  const activeTarget = buttons.some((button) => button.dataset.resultTab === target) ? target : "overview";
+  state.activeResultTab = activeTarget;
+  buttons.forEach((item) => {
+    const active = item.dataset.resultTab === activeTarget;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+  });
+  panels.forEach((panel) => {
+    const active = panel.dataset.resultPanel === activeTarget;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  if (options.remember !== false) rememberOptimizationPageState({ activeResultTab: activeTarget });
+  if (activeTarget === "curves" && options.load !== false) loadOptimizationCurveData().catch(showError);
+  window.requestAnimationFrame(refreshAdaptiveResultCharts);
 }
 
 function renderOptimization(data) {
@@ -1590,6 +1645,7 @@ function setResultColumnTableWidth(kind, width, handle) {
   handle?.setAttribute("aria-valuenow", String(roundedWidth));
   handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
   handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  rememberOptimizationPageState({ [config.stateKey]: roundedWidth });
 }
 
 function currentResultColumnTableWidth(kind, handle) {
@@ -1654,6 +1710,7 @@ function applyOverviewColumnWidth(mode, width, handle) {
   const safeWidth = Math.min(Math.max(Number(width) || bounds.min, bounds.min), bounds.max);
   state.overviewLeftColumnWidth = Math.round(safeWidth);
   document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(safeWidth)}px`);
+  rememberOptimizationPageState({ overviewLeftColumnWidth: state.overviewLeftColumnWidth });
 }
 
 function currentOverviewColumnWidth(mode, handle) {

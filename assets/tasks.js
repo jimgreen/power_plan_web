@@ -8,6 +8,7 @@ const taskState = {
   frequencySchemeFilter: "",
   lastRenderedTaskSignature: "",
 };
+const TASKS_PAGE_STATE_KEY = "tasks";
 const TASK_COLUMN_GROUP = `
       <colgroup>
         <col class="task-col-scheme">
@@ -23,6 +24,7 @@ const TASK_COLUMN_GROUP = `
 `;
 
 document.addEventListener("DOMContentLoaded", () => {
+  restoreTasksPageState();
   document.getElementById("optimizationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("evaluationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("frequencyTaskTable")?.addEventListener("click", handleTaskAction);
@@ -34,6 +36,28 @@ document.addEventListener("DOMContentLoaded", () => {
   loadTasks().catch(showTaskError);
   taskState.pollTimer = window.setInterval(() => loadTasks({ silent: true }).catch(showTaskError), 4000);
 });
+
+function restoreTasksPageState() {
+  const saved = window.PowerPlanPageState?.read?.(TASKS_PAGE_STATE_KEY, {}) || {};
+  if (["optimization", "evaluation", "frequency"].includes(saved.activeTaskType)) {
+    taskState.activeTaskType = saved.activeTaskType;
+  }
+  if (typeof saved.evaluationSchemeFilter === "string") taskState.evaluationSchemeFilter = saved.evaluationSchemeFilter;
+  if (typeof saved.frequencySchemeFilter === "string") taskState.frequencySchemeFilter = saved.frequencySchemeFilter;
+  updateTaskPageVisibility();
+}
+
+function tasksPageStateSnapshot() {
+  return {
+    activeTaskType: taskState.activeTaskType,
+    evaluationSchemeFilter: taskState.evaluationSchemeFilter || "",
+    frequencySchemeFilter: taskState.frequencySchemeFilter || "",
+  };
+}
+
+function rememberTasksPageState(partial = {}) {
+  window.PowerPlanPageState?.write?.(TASKS_PAGE_STATE_KEY, { ...tasksPageStateSnapshot(), ...(partial || {}) });
+}
 
 async function taskApi(path, options = {}) {
   const response = await fetch(path, {
@@ -137,6 +161,7 @@ function renderSchemeFilter(taskTypeKey, selectId, stateKey) {
   if (taskState[stateKey] && !schemeNames.includes(taskState[stateKey])) {
     taskState[stateKey] = "";
     filterReset = true;
+    rememberTasksPageState({ [stateKey]: "" });
   }
   select.innerHTML = [`<option value="">全部方案</option>`, ...schemeNames.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)].join("");
   select.value = taskState[stateKey];
@@ -146,17 +171,20 @@ function renderSchemeFilter(taskTypeKey, selectId, stateKey) {
 
 function handleEvaluationSchemeFilterChange(event) {
   taskState.evaluationSchemeFilter = String(event.target?.value || "");
+  rememberTasksPageState({ evaluationSchemeFilter: taskState.evaluationSchemeFilter });
   renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
 }
 
 function handleFrequencySchemeFilterChange(event) {
   taskState.frequencySchemeFilter = String(event.target?.value || "");
+  rememberTasksPageState({ frequencySchemeFilter: taskState.frequencySchemeFilter });
   renderTaskSection("frequency", "frequencyTaskTable", "暂无频率计算任务");
 }
 
 function switchTaskPage(taskTypeKey) {
   if (!["optimization", "evaluation", "frequency"].includes(taskTypeKey)) return;
   taskState.activeTaskType = taskTypeKey;
+  rememberTasksPageState({ activeTaskType: taskState.activeTaskType });
   updateTaskPageVisibility();
 }
 

@@ -44,6 +44,7 @@ const state = {
 
 let activePlanningParameterGroup = "normal";
 
+const PLANNING_PAGE_STATE_KEY = "planning";
 const WEATHER_COORDINATE_STORAGE_KEY = "powerPlanWeatherCoordinate";
 const COLLAPSED_PANEL_SIZE = 0;
 const AMAP_TILE_SIZE = 256;
@@ -287,6 +288,75 @@ const deviceGroups = [
   ["hydrogenStorage", "氢储能", ["hydrogen_electrolyzers", "hydrogen_tanks", "fuel_cells"]],
 ];
 
+let restoredPlanningPageState = {};
+
+function restorePlanningPageState() {
+  restoredPlanningPageState = window.PowerPlanPageState?.read?.(PLANNING_PAGE_STATE_KEY, {}) || {};
+  const saved = restoredPlanningPageState;
+  if (typeof saved.currentScheme === "string") state.currentScheme = saved.currentScheme;
+  if (Number.isFinite(Number(saved.month))) state.month = Math.min(Math.max(Number(saved.month), 0), monthRanges.length - 1);
+  if (saved.timeChartRange && typeof saved.timeChartRange === "object") {
+    state.timeChartRange = normalizeTimeChartRange(saved.timeChartRange);
+  }
+  if (Number.isFinite(Number(saved.schemeRailManualHeight))) state.schemeRailManualHeight = Number(saved.schemeRailManualHeight);
+  if (Number.isFinite(Number(saved.timeChartManualHeight))) state.timeChartManualHeight = Number(saved.timeChartManualHeight);
+  if (Number.isFinite(Number(saved.weatherPreviewManualHeight))) state.weatherPreviewManualHeight = Number(saved.weatherPreviewManualHeight);
+  if (Number.isFinite(Number(saved.timeSeriesImportManualChartHeight))) state.timeSeriesImportManualChartHeight = Number(saved.timeSeriesImportManualChartHeight);
+  if (typeof saved.curveGeneratorTarget === "string" && curveGeneratorSpecs[saved.curveGeneratorTarget]) {
+    state.curveGeneratorTarget = saved.curveGeneratorTarget;
+  }
+  if (typeof saved.mapProvider === "string") state.mapProvider = saved.mapProvider;
+  if (Array.isArray(saved.visibleDevices)) {
+    const allowed = new Set(deviceSpecs.map(([key]) => key));
+    visibleDevices.clear();
+    saved.visibleDevices.forEach((key) => {
+      if (allowed.has(key)) visibleDevices.add(key);
+    });
+    if (!visibleDevices.size) deviceSpecs.forEach(([key]) => visibleDevices.add(key));
+  }
+  if (Array.isArray(saved.weatherPreviewVisibleCurves)) {
+    const allowed = new Set(weatherPreviewSeries.map(([key]) => key));
+    state.weatherPreviewVisibleCurves = new Set(saved.weatherPreviewVisibleCurves.filter((key) => allowed.has(key)));
+    if (!state.weatherPreviewVisibleCurves.size) state.weatherPreviewVisibleCurves = new Set(["wind_speed", "solar_irradiance", "temperature"]);
+  }
+  if (Array.isArray(saved.timeSeriesImportVisibleCurves)) {
+    const allowed = new Set(timeSeriesImportSeries.map(([key]) => key));
+    state.timeSeriesImportVisibleCurves = new Set(saved.timeSeriesImportVisibleCurves.filter((key) => allowed.has(key)));
+    if (!state.timeSeriesImportVisibleCurves.size) state.timeSeriesImportVisibleCurves = new Set(["wind_speed", "solar_irradiance", "temperature", "load"]);
+  }
+  if (planningParameterGroups.some((group) => group.key === saved.activePlanningParameterGroup)) {
+    activePlanningParameterGroup = saved.activePlanningParameterGroup;
+  }
+}
+
+function planningPageStateSnapshot() {
+  return {
+    activeTab: document.querySelector(".tab.active")?.dataset.tab || restoredPlanningPageState.activeTab || "",
+    summaryTab: document.querySelector("[data-summary-tab].active")?.dataset.summaryTab || restoredPlanningPageState.summaryTab || "",
+    currentScheme: state.currentScheme || "",
+    month: state.month,
+    timeChartRange: normalizeTimeChartRange(state.timeChartRange),
+    activePlanningParameterGroup,
+    visibleDevices: Array.from(visibleDevices),
+    loadGeneratorMode: document.getElementById("loadGeneratorMode")?.value || restoredPlanningPageState.loadGeneratorMode || "random",
+    selectedCurve: document.querySelector('[data-curve][aria-pressed="true"]')?.dataset.curve || restoredPlanningPageState.selectedCurve || "",
+    schemeRailManualHeight: state.schemeRailManualHeight,
+    timeChartManualHeight: state.timeChartManualHeight,
+    weatherPreviewManualHeight: state.weatherPreviewManualHeight,
+    timeSeriesImportManualChartHeight: state.timeSeriesImportManualChartHeight,
+    curveGeneratorTarget: state.curveGeneratorTarget,
+    mapProvider: state.mapProvider,
+    weatherPreviewVisibleCurves: Array.from(state.weatherPreviewVisibleCurves),
+    timeSeriesImportVisibleCurves: Array.from(state.timeSeriesImportVisibleCurves),
+  };
+}
+
+function rememberPlanningPageState(partial = {}) {
+  const next = { ...planningPageStateSnapshot(), ...(partial || {}) };
+  restoredPlanningPageState = next;
+  window.PowerPlanPageState?.write?.(PLANNING_PAGE_STATE_KEY, next);
+}
+
 const labels = {
   name: "名称",
   solar_irradiance: "太阳辐照",
@@ -372,6 +442,7 @@ const deviceFieldRules = {
 };
 
 document.addEventListener("DOMContentLoaded", () => {
+  restorePlanningPageState();
   bindTabs();
   bindSummaryTabs();
   bindPlanningParameterInputs();
@@ -389,35 +460,52 @@ document.addEventListener("DOMContentLoaded", () => {
 function bindTabs() {
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
-      document.getElementById(`${button.dataset.tab}Tab`).classList.add("active");
-      syncAdaptiveLayout();
-      ensureTimeSeriesForActiveTab();
+      activatePlanningTab(button.dataset.tab || "time");
     });
   });
+  activatePlanningTab(restoredPlanningPageState.activeTab || document.querySelector(".tab.active")?.dataset.tab || "time", { remember: false });
+}
+
+function activatePlanningTab(tabKey, options = {}) {
+  const button = Array.from(document.querySelectorAll(".tab")).find((item) => item.dataset.tab === tabKey) || document.querySelector(".tab");
+  if (!button) return;
+  const target = button.dataset.tab || "";
+  const panel = document.getElementById(`${target}Tab`);
+  if (!panel) return;
+  document.querySelectorAll(".tab").forEach((item) => item.classList.remove("active"));
+  document.querySelectorAll(".tab-panel").forEach((item) => item.classList.remove("active"));
+  button.classList.add("active");
+  panel.classList.add("active");
+  syncAdaptiveLayout();
+  ensureTimeSeriesForActiveTab();
+  if (options.remember !== false) rememberPlanningPageState({ activeTab: target });
 }
 
 function bindSummaryTabs() {
-  const buttons = Array.from(document.querySelectorAll("[data-summary-tab]"));
-  const panels = Array.from(document.querySelectorAll("[data-summary-panel]"));
-  buttons.forEach((button) => {
+  document.querySelectorAll("[data-summary-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      const target = button.dataset.summaryTab;
-      buttons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle("active", active);
-        item.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const active = panel.dataset.summaryPanel === target;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      syncAdaptiveLayout();
+      activateSummaryTab(button.dataset.summaryTab || "devices");
     });
   });
+  activateSummaryTab(restoredPlanningPageState.summaryTab || document.querySelector("[data-summary-tab].active")?.dataset.summaryTab || "devices", { remember: false });
+}
+
+function activateSummaryTab(target, options = {}) {
+  const buttons = Array.from(document.querySelectorAll("[data-summary-tab]"));
+  const panels = Array.from(document.querySelectorAll("[data-summary-panel]"));
+  const activeTarget = buttons.some((button) => button.dataset.summaryTab === target) ? target : buttons[0]?.dataset.summaryTab || "";
+  buttons.forEach((item) => {
+    const active = item.dataset.summaryTab === activeTarget;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+  });
+  panels.forEach((panel) => {
+    const active = panel.dataset.summaryPanel === activeTarget;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  syncAdaptiveLayout();
+  if (options.remember !== false) rememberPlanningPageState({ summaryTab: activeTarget });
 }
 
 function bindActions() {
@@ -463,6 +551,7 @@ function bindActions() {
   document.querySelectorAll("[data-curve]").forEach((button) => {
     button.addEventListener("click", () => selectCurve(button.dataset.curve));
   });
+  if (restoredPlanningPageState.selectedCurve) selectCurve(restoredPlanningPageState.selectedCurve, { remember: false });
   bindTimeChartRangeControls();
   const timeChart = document.getElementById("timeChart");
   timeChart.addEventListener("mousemove", onChartMouseMove);
@@ -584,6 +673,7 @@ function bindSchemeListResizeHandle() {
     const bounds = schemeRailHeightBounds();
     state.schemeRailManualHeight = Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
     applyAdaptiveSchemeRailLayout();
+    rememberPlanningPageState({ schemeRailManualHeight: state.schemeRailManualHeight });
   };
   const currentHeight = () => currentSchemeRailHeight();
 
@@ -719,6 +809,7 @@ function bindTimeResizeHandle() {
     document.documentElement.style.setProperty("--time-chart-height", `${Math.round(safeHeight)}px`);
     handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
     syncAdaptiveLayout();
+    rememberPlanningPageState({ timeChartManualHeight: state.timeChartManualHeight });
   };
 
   handle.addEventListener("pointerdown", (event) => {
@@ -778,6 +869,7 @@ function bindTimeSeriesImportResizeHandle() {
     document.documentElement.style.setProperty("--time-series-import-chart-height", `${Math.round(safeHeight)}px`);
     handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
     renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+    rememberPlanningPageState({ timeSeriesImportManualChartHeight: state.timeSeriesImportManualChartHeight });
   };
 
   handle.addEventListener("pointerdown", (event) => {
@@ -831,6 +923,7 @@ function bindWeatherPreviewResizeHandle() {
     handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
     renderWeatherPreviewChart(state.pendingWeatherRows || []);
     setTimeout(() => state.mapInstance?.resize?.(), 0);
+    rememberPlanningPageState({ weatherPreviewManualHeight: state.weatherPreviewManualHeight });
   };
 
   handle.addEventListener("pointerdown", (event) => {
@@ -909,7 +1002,12 @@ async function api(path, options = {}) {
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes;
   renderSchemes();
-  if (!state.currentScheme && state.schemes.length) {
+  if (state.currentScheme && !state.schemes.some((scheme) => scheme.name === state.currentScheme)) {
+    state.currentScheme = "";
+  }
+  if (state.currentScheme) {
+    await selectScheme(state.currentScheme, { preserveMonth: true });
+  } else if (state.schemes.length) {
     await selectScheme(state.schemes[0].name);
   } else {
     renderSummary();
@@ -925,7 +1023,7 @@ async function loadLoadCurveTemplates() {
 function renderLoadGeneratorModeOptions() {
   const select = document.getElementById("loadGeneratorMode");
   if (!select) return;
-  const currentValue = select.value || "random";
+  const currentValue = (select.value && select.value !== "random" ? select.value : restoredPlanningPageState.loadGeneratorMode) || select.value || "random";
   const spec = curveGeneratorSpec();
   const fixedOptions = [
     ["random", "随机曲线"],
@@ -940,6 +1038,7 @@ function renderLoadGeneratorModeOptions() {
   if (Array.from(select.options).some((option) => option.value === currentValue)) {
     select.value = currentValue;
   }
+  rememberPlanningPageState({ loadGeneratorMode: select.value || "random" });
 }
 
 function renderSchemes() {
@@ -967,15 +1066,17 @@ function bindSchemeListItem(item, onSelect) {
   });
 }
 
-async function selectScheme(name) {
+async function selectScheme(name, options = {}) {
+  const previousScheme = state.currentScheme;
   state.currentScheme = name;
   state.timeSeriesLoading = null;
   state.timeSeriesDirty = false;
   state.payload = normalizePayload(await api(`/api/planning/schemes/${encodeURIComponent(name)}/overview`));
   state.isSwitchingScheme = false;
-  state.month = 0;
+  if (options.preserveMonth !== true && previousScheme !== name) state.month = 0;
   renderAll();
   ensureTimeSeriesForActiveTab();
+  if (options.remember !== false) rememberPlanningPageState({ currentScheme: state.currentScheme, month: state.month });
 }
 
 async function selectSchemeWithSwitchFeedback(name) {
@@ -1602,6 +1703,7 @@ function toggleTimeSeriesImportCurve(curveKey) {
   }
   syncTimeSeriesImportCurveToggles();
   renderTimeSeriesImportChart(state.pendingTimeSeriesImport || []);
+  rememberPlanningPageState({ timeSeriesImportVisibleCurves: Array.from(state.timeSeriesImportVisibleCurves) });
 }
 
 function syncTimeSeriesImportCurveToggles() {
@@ -1892,6 +1994,7 @@ function currentLoadTemplateName() {
 function onLoadGeneratorModeChange(event) {
   const mode = event.target.value;
   state.pendingLoadCurve = null;
+  rememberPlanningPageState({ loadGeneratorMode: mode });
   loadLoadGeneratorModeSource(mode).catch((error) => {
     setLoadGeneratorHint(error.message || String(error), "error");
   });
@@ -2211,6 +2314,7 @@ async function openCoordinatePicker() {
 async function selectMapProvider(provider) {
   if (!provider || provider === state.mapProvider) return;
   state.mapProvider = provider;
+  rememberPlanningPageState({ mapProvider: state.mapProvider });
   const config = await loadMapConfig();
   renderMapProviderTabs(config);
   await loadSelectedMapProvider();
@@ -2235,6 +2339,7 @@ async function loadSelectedMapProvider() {
         initAmapTilePicker();
       }
       state.mapProvider = provider;
+      rememberPlanningPageState({ mapProvider: state.mapProvider });
       renderMapProviderTabs(config);
       setMapPickerHint(`当前接口：${mapProviderLabel(provider)}。根据地名查找坐标，或点击地图选点。`);
       return;
@@ -2709,6 +2814,7 @@ function toggleWeatherPreviewCurve(curveKey) {
   }
   renderWeatherPreviewLegend();
   renderWeatherPreviewChart(state.pendingWeatherRows || []);
+  rememberPlanningPageState({ weatherPreviewVisibleCurves: Array.from(state.weatherPreviewVisibleCurves) });
 }
 
 function renderWeatherPreviewChart(rows) {
@@ -2953,6 +3059,7 @@ function bindTimeChartRangeControls() {
       hideChartCursor();
       renderTimeChartRangeControls();
       renderChart();
+      rememberPlanningPageState({ timeChartRange: state.timeChartRange });
     });
   });
   const monthSelect = document.getElementById("timeChartMonth");
@@ -2964,6 +3071,7 @@ function bindTimeChartRangeControls() {
       hideChartCursor();
       renderTimeChartRangeControls();
       renderChart();
+      rememberPlanningPageState({ timeChartRange: state.timeChartRange });
     });
   }
   const daySelect = document.getElementById("timeChartDay");
@@ -2974,6 +3082,7 @@ function bindTimeChartRangeControls() {
       hideChartCursor();
       renderTimeChartRangeControls();
       renderChart();
+      rememberPlanningPageState({ timeChartRange: state.timeChartRange });
     });
   }
   renderTimeChartRangeControls();
@@ -3048,7 +3157,7 @@ function selectedCurveSpec() {
   return summarySeries.find(([key]) => key === selected?.dataset.curve) || summarySeries[0];
 }
 
-function selectCurve(curveKey) {
+function selectCurve(curveKey, options = {}) {
   const target = summarySeries.find(([key]) => key === curveKey) || summarySeries[0];
   document.querySelectorAll("[data-curve]").forEach((button) => {
     const active = button.dataset.curve === target[0];
@@ -3057,6 +3166,7 @@ function selectCurve(curveKey) {
   });
   hideChartCursor();
   renderChart();
+  if (options.remember !== false) rememberPlanningPageState({ selectedCurve: target[0] });
 }
 
 function onChartMouseMove(event) {
@@ -3245,6 +3355,7 @@ function renderMonthTabs() {
       state.month = Number(button.dataset.month);
       renderMonthTabs();
       renderTimeTable();
+      rememberPlanningPageState({ month: state.month });
     });
   });
 }
@@ -3326,6 +3437,7 @@ function renderDeviceFilters() {
       });
       renderDeviceFilters();
       renderDeviceTables();
+      rememberPlanningPageState({ visibleDevices: Array.from(visibleDevices) });
     });
   });
 }
@@ -3422,6 +3534,7 @@ function selectPlanningParameterGroup(groupKey) {
   if (!planningParameterGroups.some((group) => group.key === groupKey)) return;
   activePlanningParameterGroup = groupKey;
   renderPlanningParameters();
+  rememberPlanningPageState({ activePlanningParameterGroup });
 }
 
 function renderPlanningParameterGroupTable(group, row, editable = false) {

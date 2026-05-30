@@ -1,5 +1,6 @@
 const MAX_TABS = 8;
 const COMPARISON_TABS_STORAGE_KEY = "powerPlanLastComparisonTabs";
+const COMPARISON_PAGE_STATE_KEY = "comparison";
 const COLLAPSED_PANEL_SIZE = 0;
 const MIN_COMPARISON_TABLE_FR = 0;
 const HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8;
@@ -25,6 +26,57 @@ const state = {
   resultFilesCache: new Map(),
 };
 
+let restoredComparisonPageState = {};
+
+function restoreComparisonPageState() {
+  restoredComparisonPageState = window.PowerPlanPageState?.read?.(COMPARISON_PAGE_STATE_KEY, {}) || {};
+  const saved = restoredComparisonPageState;
+  if (Array.isArray(saved.tabs) && saved.tabs.length) {
+    state.tabs = saved.tabs
+      .slice(0, MAX_TABS)
+      .map((item, index) => ({
+        id: item?.id || `tab-${index + 1}`,
+        scheme: String(item?.scheme || ""),
+        result: String(item?.result || ""),
+        results: [],
+      }))
+      .filter((tab) => tab.scheme || tab.result);
+    if (!state.tabs.length) state.tabs = [{ id: "tab-1", scheme: "", result: "", results: [] }];
+  }
+  if (typeof saved.activeTabId === "string" && state.tabs.some((tab) => tab.id === saved.activeTabId)) {
+    state.activeTabId = saved.activeTabId;
+  } else {
+    state.activeTabId = state.tabs[0]?.id || "tab-1";
+  }
+  if (Number.isFinite(Number(saved.tableHeight))) {
+    state.tableHeight = Number(saved.tableHeight);
+    document.documentElement.style.setProperty("--comparison-table-height", `${Math.round(state.tableHeight)}px`);
+  }
+  if (Array.isArray(saved.tableColumnWidths) && saved.tableColumnWidths.length === 3) {
+    state.tableColumnWidths = normalizeTableColumnWidths(saved.tableColumnWidths);
+    applyComparisonTableColumnWidthVariables();
+  }
+  if (Array.isArray(saved.selectedCurves)) state.selectedCurves = saved.selectedCurves.map((item) => String(item || "")).filter(Boolean);
+  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = { ...saved.axisRanges };
+}
+
+function comparisonPageStateSnapshot() {
+  return {
+    tabs: state.tabs.slice(0, MAX_TABS).map((tab) => ({ id: tab.id, scheme: tab.scheme || "", result: tab.result || "" })),
+    activeTabId: state.activeTabId || state.tabs[0]?.id || "",
+    tableHeight: state.tableHeight,
+    tableColumnWidths: state.tableColumnWidths,
+    selectedCurves: state.selectedCurves,
+    axisRanges: state.axisRanges || {},
+  };
+}
+
+function rememberComparisonPageState(partial = {}) {
+  const next = { ...comparisonPageStateSnapshot(), ...(partial || {}) };
+  restoredComparisonPageState = next;
+  window.PowerPlanPageState?.write?.(COMPARISON_PAGE_STATE_KEY, next);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   state.comparisonCurveViewer = window.ResultCurveViewer
     ? window.ResultCurveViewer.create({
@@ -36,11 +88,12 @@ document.addEventListener("DOMContentLoaded", () => {
         onSelectionChange: () => syncComparisonCurveViewerIfHourlyActive(),
       })
     : null;
+  restoreComparisonPageState();
+  restoreComparisonTabs();
   bindAddTab();
   bindComparisonTableColumnResizeHandles();
   bindComparisonTableCurveResizeHandle();
   bindComparisonAxisRangeControls();
-  restoreComparisonTabs();
   loadSchemes().catch(showError);
 });
 
@@ -82,6 +135,7 @@ function writeStoredJson(key, value) {
 }
 
 function restoreComparisonTabs() {
+  if (Array.isArray(restoredComparisonPageState.tabs) && restoredComparisonPageState.tabs.length) return;
   const stored = readStoredJson(COMPARISON_TABS_STORAGE_KEY, []);
   if (!Array.isArray(stored) || !stored.length) return;
   const tabs = stored
@@ -103,6 +157,10 @@ function rememberComparisonTabs() {
     COMPARISON_TABS_STORAGE_KEY,
     state.tabs.slice(0, MAX_TABS).map((tab) => ({ scheme: tab.scheme || "", result: tab.result || "" })),
   );
+  rememberComparisonPageState({
+    tabs: state.tabs.slice(0, MAX_TABS).map((tab) => ({ id: tab.id, scheme: tab.scheme || "", result: tab.result || "" })),
+    activeTabId: state.activeTabId || state.tabs[0]?.id || "",
+  });
 }
 
 async function loadSchemes() {
@@ -196,6 +254,7 @@ function renderComparisonTabs() {
     element.addEventListener("click", (event) => {
       if (event.target.closest("select")) return;
       state.activeTabId = element.dataset.comparisonTab || state.activeTabId;
+      rememberComparisonPageState({ activeTabId: state.activeTabId });
       renderComparisonTabs();
     });
     element.addEventListener("dragstart", (event) => {
@@ -339,6 +398,7 @@ async function refreshComparisonData() {
   if (!state.selectedCurves.length && state.comparison.curves.length) {
     state.selectedCurves = [state.comparison.curves[0]];
   }
+  rememberComparisonPageState({ selectedCurves: state.selectedCurves });
   state.hoverIndex = null;
   renderComparisonTables();
   state.comparisonCurveViewer?.setData(state.comparison);
@@ -509,6 +569,7 @@ function toggleSelectedCurve(name, options = {}) {
   renderCurveNameList();
   renderComparisonCurveChart();
   syncComparisonCurveViewerIfHourlyActive();
+  rememberComparisonPageState({ selectedCurves: state.selectedCurves });
 }
 
 function selectedCurveNames() {
@@ -612,11 +673,13 @@ function bindComparisonAxisRangeControls() {
     if (event.target.matches("[data-comparison-axis-max]")) next.max = Number.isFinite(value) ? value : "";
     state.axisRanges.comparisonHourly = next;
     renderComparisonCurveChart();
+    rememberComparisonPageState({ axisRanges: state.axisRanges });
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest("[data-comparison-axis-reset]")) return;
     delete state.axisRanges.comparisonHourly;
     renderComparisonCurveChart();
+    rememberComparisonPageState({ axisRanges: state.axisRanges });
   });
 }
 
@@ -723,10 +786,9 @@ function bindComparisonTableColumnResizeHandles() {
     const applyWidths = (nextWidths) => {
       const widths = normalizeTableColumnWidths(nextWidths);
       state.tableColumnWidths = widths;
-      document.documentElement.style.setProperty("--comparison-capacity-table-width", `${widths[0].toFixed(3)}fr`);
-      document.documentElement.style.setProperty("--comparison-energy-table-width", `${widths[1].toFixed(3)}fr`);
-      document.documentElement.style.setProperty("--comparison-safety-table-width", `${widths[2].toFixed(3)}fr`);
+      applyComparisonTableColumnWidthVariables();
       handle.setAttribute("aria-valuenow", String(Math.round(widths[leftIndex] * 100)));
+      rememberComparisonPageState({ tableColumnWidths: state.tableColumnWidths });
     };
     applyWidths(state.tableColumnWidths);
     handle.addEventListener("pointerdown", (event) => {
@@ -777,6 +839,14 @@ function normalizeTableColumnWidths(widths) {
   });
 }
 
+function applyComparisonTableColumnWidthVariables() {
+  const widths = normalizeTableColumnWidths(state.tableColumnWidths);
+  state.tableColumnWidths = widths;
+  document.documentElement.style.setProperty("--comparison-capacity-table-width", `${widths[0].toFixed(3)}fr`);
+  document.documentElement.style.setProperty("--comparison-energy-table-width", `${widths[1].toFixed(3)}fr`);
+  document.documentElement.style.setProperty("--comparison-safety-table-width", `${widths[2].toFixed(3)}fr`);
+}
+
 function bindComparisonTableCurveResizeHandle() {
   const handle = document.getElementById("comparisonTableCurveResizeHandle");
   const panel = document.querySelector(".comparison-panel");
@@ -786,6 +856,7 @@ function bindComparisonTableCurveResizeHandle() {
     state.tableHeight = safeHeight;
     document.documentElement.style.setProperty("--comparison-table-height", `${Math.round(safeHeight)}px`);
     handle.setAttribute("aria-valuenow", String(Math.round(safeHeight)));
+    rememberComparisonPageState({ tableHeight: state.tableHeight });
   };
   handle.addEventListener("pointerdown", (event) => {
     event.preventDefault();

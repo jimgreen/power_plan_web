@@ -1,4 +1,5 @@
 const EVALUATION_SELECTION_STORAGE_KEY = "powerPlanLastEvaluationSelection";
+const EVALUATION_PAGE_STATE_KEY = "evaluation";
 const COLLAPSED_PANEL_SIZE = 0;
 const HOURLY_CURVE_PRELOAD_BATCH_SIZE = 8;
 const HOURLY_CURVE_PRELOAD_DELAY_MS = 300;
@@ -38,6 +39,51 @@ const state = {
   seriesToggleBound: false,
   lastOptimizationRenderSignature: "",
 };
+
+let restoredEvaluationPageState = {};
+
+function restoreEvaluationPageState() {
+  restoredEvaluationPageState = window.PowerPlanPageState?.read?.(EVALUATION_PAGE_STATE_KEY, {}) || {};
+  const saved = restoredEvaluationPageState;
+  if (typeof saved.currentScheme === "string") state.currentScheme = saved.currentScheme;
+  if (typeof saved.selectedResultFile === "string") state.selectedResultFile = saved.selectedResultFile;
+  if (["overview", "green", "safety", "logs", "curves"].includes(saved.activeResultTab)) state.activeResultTab = saved.activeResultTab;
+  if (Array.isArray(saved.collapsedSchemes)) state.collapsedSchemes = new Set(saved.collapsedSchemes.map((item) => String(item || "")).filter(Boolean));
+  ["greenResultTableWidth", "safetyResultTableWidth", "overviewLeftColumnWidth", "evaluationResultRailWidth", "evaluationSchemeRailHeight"].forEach((key) => {
+    if (Number.isFinite(Number(saved[key]))) state[key] = Number(saved[key]);
+  });
+  if (state.greenResultTableWidth) document.documentElement.style.setProperty("--green-result-table-width", `${Math.round(state.greenResultTableWidth)}px`);
+  if (state.safetyResultTableWidth) document.documentElement.style.setProperty("--safety-result-table-width", `${Math.round(state.safetyResultTableWidth)}px`);
+  if (state.overviewLeftColumnWidth) document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(state.overviewLeftColumnWidth)}px`);
+  if (state.evaluationResultRailWidth) document.documentElement.style.setProperty("--evaluation-result-rail-width", `${Math.round(state.evaluationResultRailWidth)}px`);
+  if (state.evaluationSchemeRailHeight) document.documentElement.style.setProperty("--evaluation-scheme-rail-height", `${Math.round(state.evaluationSchemeRailHeight)}px`);
+  if (saved.greenSeriesVisibility && typeof saved.greenSeriesVisibility === "object") state.greenSeriesVisibility = { ...saved.greenSeriesVisibility };
+  if (saved.safetySeriesVisibility && typeof saved.safetySeriesVisibility === "object") state.safetySeriesVisibility = { ...saved.safetySeriesVisibility };
+  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = { ...saved.axisRanges };
+}
+
+function evaluationPageStateSnapshot() {
+  return {
+    currentScheme: state.currentScheme || "",
+    selectedResultFile: state.selectedResultFile || "",
+    activeResultTab: state.activeResultTab || "overview",
+    collapsedSchemes: Array.from(state.collapsedSchemes || []),
+    greenResultTableWidth: state.greenResultTableWidth,
+    safetyResultTableWidth: state.safetyResultTableWidth,
+    overviewLeftColumnWidth: state.overviewLeftColumnWidth,
+    evaluationResultRailWidth: state.evaluationResultRailWidth,
+    evaluationSchemeRailHeight: state.evaluationSchemeRailHeight,
+    greenSeriesVisibility: state.greenSeriesVisibility,
+    safetySeriesVisibility: state.safetySeriesVisibility,
+    axisRanges: state.axisRanges || {},
+  };
+}
+
+function rememberEvaluationPageState(partial = {}) {
+  const next = { ...evaluationPageStateSnapshot(), ...(partial || {}) };
+  restoredEvaluationPageState = next;
+  window.PowerPlanPageState?.write?.(EVALUATION_PAGE_STATE_KEY, next);
+}
 
 const resultTabLabels = {
   overview: "结果概览",
@@ -114,6 +160,7 @@ function toggleSeriesVisibility(kind, seriesKey, viewport) {
   if (!seriesKey) return;
   setSeriesVisibility(kind, seriesKey, !isSeriesVisible(kind, seriesKey));
   renderAdaptiveResultChart(kind, viewport || document.querySelector(`[data-result-chart-viewport="${kind}"]`));
+  rememberEvaluationPageState({ [`${kind}SeriesVisibility`]: state[`${kind}SeriesVisibility`] });
 }
 
 function toggleGreenSeriesVisibility(seriesKey, viewport) {
@@ -144,6 +191,7 @@ function bindResultAxisRangeControls() {
     if (event.target.matches("[data-result-axis-max]")) next.max = Number.isFinite(value) ? value : "";
     state.axisRanges[kind] = next;
     renderAdaptiveResultChart(kind);
+    rememberEvaluationPageState({ axisRanges: state.axisRanges });
   });
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-result-axis-reset]");
@@ -151,6 +199,7 @@ function bindResultAxisRangeControls() {
     const kind = button.dataset.resultAxisReset || "";
     delete state.axisRanges[kind];
     renderAdaptiveResultChart(kind);
+    rememberEvaluationPageState({ axisRanges: state.axisRanges });
   });
 }
 
@@ -179,6 +228,7 @@ function applyAxisRange(autoMin, autoMax, range = {}) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  restoreEvaluationPageState();
   state.evaluationCurveViewer = window.ResultCurveViewer
     ? window.ResultCurveViewer.create({
         listId: "evaluationCurveNameList",
@@ -250,7 +300,12 @@ function writeStoredJson(key, value) {
 }
 
 function storedEvaluationSelection() {
-  const stored = readStoredJson(EVALUATION_SELECTION_STORAGE_KEY, {});
+  const previous = readStoredJson(EVALUATION_SELECTION_STORAGE_KEY, {}) || {};
+  const stored = {
+    ...previous,
+    scheme: state.currentScheme || restoredEvaluationPageState.currentScheme || previous.scheme || "",
+    result: state.selectedResultFile || restoredEvaluationPageState.selectedResultFile || previous.result || "",
+  };
   if (!stored || typeof stored !== "object") return { scheme: "", result: "" };
   return {
     scheme: String(stored.scheme || ""),
@@ -263,11 +318,19 @@ function rememberEvaluationSelection() {
     scheme: state.currentScheme || "",
     result: state.selectedResultFile || "",
   });
+  rememberEvaluationPageState({
+    currentScheme: state.currentScheme || "",
+    selectedResultFile: state.selectedResultFile || "",
+  });
 }
 
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes || [];
   const remembered = storedEvaluationSelection();
+  if (state.currentScheme && !state.schemes.some((scheme) => scheme.name === state.currentScheme)) {
+    state.currentScheme = "";
+    state.selectedResultFile = "";
+  }
   if (!state.currentScheme && state.schemes.some((scheme) => scheme.name === remembered.scheme)) {
     state.currentScheme = remembered.scheme;
   }
@@ -388,6 +451,7 @@ function setEvaluationSchemeCollapsed(schemeName, collapsed) {
   if (collapsed) state.collapsedSchemes.add(schemeName);
   else state.collapsedSchemes.delete(schemeName);
   renderSchemes();
+  rememberEvaluationPageState({ collapsedSchemes: Array.from(state.collapsedSchemes) });
 }
 
 function renderCurrentScheme() {
@@ -818,26 +882,32 @@ function scheduleOptimizationPolling() {
 }
 
 function bindResultTabs() {
-  const buttons = Array.from(document.querySelectorAll("[data-result-tab]"));
-  const panels = Array.from(document.querySelectorAll("[data-result-panel]"));
-  buttons.forEach((button) => {
+  document.querySelectorAll("[data-result-tab]").forEach((button) => {
     button.addEventListener("click", () => {
-      const target = button.dataset.resultTab;
-      state.activeResultTab = target || "overview";
-      buttons.forEach((item) => {
-        const active = item === button;
-        item.classList.toggle("active", active);
-        item.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const active = panel.dataset.resultPanel === target;
-        panel.classList.toggle("active", active);
-        panel.hidden = !active;
-      });
-      if (target === "curves") loadEvaluationCurveData().catch(showError);
-      window.requestAnimationFrame(refreshAdaptiveResultCharts);
+      activateEvaluationResultTab(button.dataset.resultTab || "overview");
     });
   });
+  activateEvaluationResultTab(state.activeResultTab, { remember: false, load: false });
+}
+
+function activateEvaluationResultTab(target, options = {}) {
+  const buttons = Array.from(document.querySelectorAll("[data-result-tab]"));
+  const panels = Array.from(document.querySelectorAll("[data-result-panel]"));
+  const activeTarget = buttons.some((button) => button.dataset.resultTab === target) ? target : "overview";
+  state.activeResultTab = activeTarget;
+  buttons.forEach((item) => {
+    const active = item.dataset.resultTab === activeTarget;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+  });
+  panels.forEach((panel) => {
+    const active = panel.dataset.resultPanel === activeTarget;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  if (options.remember !== false) rememberEvaluationPageState({ activeResultTab: activeTarget });
+  if (activeTarget === "curves" && options.load !== false) loadEvaluationCurveData().catch(showError);
+  window.requestAnimationFrame(refreshAdaptiveResultCharts);
 }
 
 function renderOptimization(data) {
@@ -2025,6 +2095,7 @@ function setEvaluationSchemeRailHeight(height, handle = document.getElementById(
   handle?.setAttribute("aria-valuenow", String(roundedHeight));
   handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
   handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  rememberEvaluationPageState({ evaluationSchemeRailHeight: state.evaluationSchemeRailHeight });
 }
 
 function currentEvaluationSchemeRailHeight() {
@@ -2069,6 +2140,7 @@ function setEvaluationResultRailWidth(width, handle = document.getElementById("e
   handle?.setAttribute("aria-valuenow", String(roundedWidth));
   handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
   handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  rememberEvaluationPageState({ evaluationResultRailWidth: state.evaluationResultRailWidth });
 }
 
 function currentEvaluationResultRailWidth() {
@@ -2107,6 +2179,7 @@ function setResultColumnTableWidth(kind, width, handle) {
   handle?.setAttribute("aria-valuenow", String(roundedWidth));
   handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
   handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  rememberEvaluationPageState({ [config.stateKey]: roundedWidth });
 }
 
 function currentResultColumnTableWidth(kind, handle) {
@@ -2171,6 +2244,7 @@ function applyOverviewColumnWidth(mode, width, handle) {
   const safeWidth = Math.min(Math.max(Number(width) || bounds.min, bounds.min), bounds.max);
   state.overviewLeftColumnWidth = Math.round(safeWidth);
   document.documentElement.style.setProperty("--overview-left-column-width", `${Math.round(safeWidth)}px`);
+  rememberEvaluationPageState({ overviewLeftColumnWidth: state.overviewLeftColumnWidth });
 }
 
 function currentOverviewColumnWidth(mode, handle) {
