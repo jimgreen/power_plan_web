@@ -70,6 +70,7 @@
   ];
 
   function create(options) {
+    const stateKey = options.stateKey || "";
     const state = {
       groups: emptyGroups(),
       annualTable: [],
@@ -95,6 +96,8 @@
       loadingText: options.loadingText || "小时级曲线正在后台加载",
     };
 
+    restoreResultCurveViewerState();
+
     function setData(payload) {
       state.groups = normalizeGroups(payload);
       state.annualTable = Array.isArray(payload?.annual_table) ? payload.annual_table : [];
@@ -112,21 +115,53 @@
       });
       if (!groupHasData(state.activeGroup)) state.activeGroup = firstAvailableGroup();
       state.hoverIndex = null;
+      rememberResultCurveViewerState();
       render();
     }
 
     function clear(message) {
       state.groups = emptyGroups();
       state.annualTable = [];
-      state.selectedCurvesByGroup = { hourly: [], daily: [], safety: [], monthly: [] };
-      state.hiddenSeriesByGroup = { hourly: [], daily: [], safety: [], monthly: [] };
-      state.annualHiddenSeries = [];
-      state.curveRangeFilter = defaultCurveRangeFilter();
-      state.activeGroup = "hourly";
-      state.annualViewMode = options.enableAnnualBarComparison ? "bar" : "table";
-      state.annualGridSplit = { column: 50, row: 50 };
       state.hoverIndex = null;
       render(message || state.emptyText);
+    }
+
+    function restoreResultCurveViewerState() {
+      if (!stateKey || !window.PowerPlanPageState?.read) return;
+      const saved = window.PowerPlanPageState.read(stateKey, {});
+      if (!saved || typeof saved !== "object") return;
+      if (GROUP_DEFINITIONS.some((group) => group.key === saved.activeGroup)) state.activeGroup = saved.activeGroup;
+      state.selectedCurvesByGroup = normalizeGroupArrayState(saved.selectedCurvesByGroup, state.selectedCurvesByGroup);
+      state.hiddenSeriesByGroup = normalizeGroupArrayState(saved.hiddenSeriesByGroup, state.hiddenSeriesByGroup);
+      state.annualHiddenSeries = uniqueStrings(saved.annualHiddenSeries);
+      state.curveRangeFilter = normalizeCurveRangeFilter(saved.curveRangeFilter, state.activeGroup);
+      if (saved.annualViewMode === "table" || (saved.annualViewMode === "bar" && options.enableAnnualBarComparison)) {
+        state.annualViewMode = saved.annualViewMode;
+      }
+      state.annualGridSplit = normalizeAnnualGridSplit(saved.annualGridSplit);
+      state.axisRanges = normalizeAxisRanges(saved.axisRanges);
+      if (typeof saved.statsVisible === "boolean") state.statsVisible = saved.statsVisible;
+      state.statsPosition = normalizeStatsPosition(saved.statsPosition);
+    }
+
+    function rememberResultCurveViewerState(partial = {}) {
+      if (!stateKey || !window.PowerPlanPageState?.write) return;
+      window.PowerPlanPageState.write(stateKey, { ...resultCurveViewerStateSnapshot(), ...(partial || {}) });
+    }
+
+    function resultCurveViewerStateSnapshot() {
+      return {
+        activeGroup: state.activeGroup,
+        selectedCurvesByGroup: normalizeGroupArrayState(state.selectedCurvesByGroup),
+        hiddenSeriesByGroup: normalizeGroupArrayState(state.hiddenSeriesByGroup),
+        annualHiddenSeries: uniqueStrings(state.annualHiddenSeries),
+        curveRangeFilter: normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup),
+        annualViewMode: state.annualViewMode,
+        annualGridSplit: normalizeAnnualGridSplit(state.annualGridSplit),
+        axisRanges: normalizeAxisRanges(state.axisRanges),
+        statsVisible: state.statsVisible !== false,
+        statsPosition: normalizeStatsPosition(state.statsPosition),
+      };
     }
 
     function render(message) {
@@ -211,6 +246,7 @@
       state.activeGroup = nextGroup;
       state.curveRangeFilter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
       state.hoverIndex = null;
+      rememberResultCurveViewerState();
       render();
       notifySelectionChange();
     }
@@ -219,6 +255,7 @@
       const mode = modeValue === "bar" ? "bar" : "table";
       if (state.annualViewMode === mode) return;
       state.annualViewMode = mode;
+      rememberResultCurveViewerState();
       render();
     }
 
@@ -233,6 +270,7 @@
           ? selected.filter((item) => item !== name)
           : [...selected, name];
       }
+      rememberResultCurveViewerState();
       render();
       notifySelectionChange();
     }
@@ -370,8 +408,8 @@
     }
 
     function applyAxisRange(autoMin, autoMax, range = {}) {
-      let min = Number(range.min);
-      let max = Number(range.max);
+      const min = storedAxisNumber(range.min);
+      const max = storedAxisNumber(range.max);
       const hasMin = Number.isFinite(min);
       const hasMax = Number.isFinite(max);
       if (hasMin && hasMax && max > min) return { min, max };
@@ -387,6 +425,7 @@
         const resetButton = event.target.closest("[data-curve-axis-reset]");
         if (resetButton && target.contains(resetButton)) {
           delete state.axisRanges[resetButton.dataset.curveAxisReset || state.activeGroup];
+          rememberResultCurveViewerState();
           render();
           return;
         }
@@ -394,29 +433,40 @@
         if (!scopeButton || !target.contains(scopeButton) || scopeButton.disabled) return;
         state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, scope: scopeButton.dataset.curveRangeScope || "year" }, state.activeGroup);
         state.hoverIndex = null;
+        rememberResultCurveViewerState();
         render();
       });
       target.addEventListener("change", (event) => {
         if (event.target.matches("[data-curve-axis-min], [data-curve-axis-max]")) {
           const key = event.target.dataset.curveAxisMin || event.target.dataset.curveAxisMax || state.activeGroup;
           const previous = state.axisRanges[key] || {};
-          const value = event.target.value === "" ? "" : Number(event.target.value);
+          const value = storedNumber(event.target.value);
           const next = { ...previous };
-          if (event.target.matches("[data-curve-axis-min]")) next.min = Number.isFinite(value) ? value : "";
-          if (event.target.matches("[data-curve-axis-max]")) next.max = Number.isFinite(value) ? value : "";
-          state.axisRanges[key] = next;
+          if (event.target.matches("[data-curve-axis-min]")) {
+            if (Number.isFinite(value)) next.min = value;
+            else delete next.min;
+          }
+          if (event.target.matches("[data-curve-axis-max]")) {
+            if (Number.isFinite(value)) next.max = value;
+            else delete next.max;
+          }
+          if (Object.keys(next).length) state.axisRanges[key] = next;
+          else delete state.axisRanges[key];
           state.hoverIndex = null;
+          rememberResultCurveViewerState();
           render();
           return;
         }
         if (event.target.matches("[data-curve-range-month]")) {
           state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, month: Number(event.target.value), day: 1 }, state.activeGroup);
           state.hoverIndex = null;
+          rememberResultCurveViewerState();
           render();
         }
         if (event.target.matches("[data-curve-range-day]")) {
           state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, day: Number(event.target.value) }, state.activeGroup);
           state.hoverIndex = null;
+          rememberResultCurveViewerState();
           render();
         }
       });
@@ -606,17 +656,26 @@
         if (!event.target.matches("[data-annual-axis-min], [data-annual-axis-max]")) return;
         const key = event.target.dataset.annualAxisMin || event.target.dataset.annualAxisMax || "";
         const previous = state.axisRanges[key] || {};
-        const value = event.target.value === "" ? "" : Number(event.target.value);
+        const value = storedNumber(event.target.value);
         const next = { ...previous };
-        if (event.target.matches("[data-annual-axis-min]")) next.min = Number.isFinite(value) ? value : "";
-        if (event.target.matches("[data-annual-axis-max]")) next.max = Number.isFinite(value) ? value : "";
-        state.axisRanges[key] = next;
+        if (event.target.matches("[data-annual-axis-min]")) {
+          if (Number.isFinite(value)) next.min = value;
+          else delete next.min;
+        }
+        if (event.target.matches("[data-annual-axis-max]")) {
+          if (Number.isFinite(value)) next.max = value;
+          else delete next.max;
+        }
+        if (Object.keys(next).length) state.axisRanges[key] = next;
+        else delete state.axisRanges[key];
+        rememberResultCurveViewerState();
         render();
       });
       target.addEventListener("click", (event) => {
         const button = event.target.closest("[data-annual-axis-reset]");
         if (!button || !target.contains(button)) return;
         delete state.axisRanges[button.dataset.annualAxisReset || ""];
+        rememberResultCurveViewerState();
         render();
       });
     }
@@ -690,6 +749,7 @@
       if (hidden.has(seriesId)) hidden.delete(seriesId);
       else hidden.add(seriesId);
       state.annualHiddenSeries = Array.from(hidden);
+      rememberResultCurveViewerState();
       render();
     }
 
@@ -734,6 +794,7 @@
             handle.removeEventListener("pointermove", onMove);
             handle.removeEventListener("pointerup", onEnd);
             handle.removeEventListener("pointercancel", onEnd);
+            rememberResultCurveViewerState();
           };
           handle.addEventListener("pointermove", onMove);
           handle.addEventListener("pointerup", onEnd);
@@ -751,6 +812,7 @@
           const grid = handle.closest(".annual-comparison-grid");
           if (!grid) return;
           setAnnualGridSplit(grid, axis, state.annualGridSplit[axis] + deltaMap[event.key]);
+          rememberResultCurveViewerState();
         });
       });
     }
@@ -980,6 +1042,7 @@
         if (action === "toggle") state.statsVisible = !state.statsVisible;
         if (action === "reset") state.statsPosition = null;
         state.hoverIndex = null;
+        rememberResultCurveViewerState();
         render();
       });
     }
@@ -1057,6 +1120,7 @@
       drag.panel.releasePointerCapture?.(drag.pointerId);
       if (drag.moved) {
         state.suppressStatsPanelClick = true;
+        rememberResultCurveViewerState();
         setTimeout(() => {
           state.suppressStatsPanelClick = false;
         }, 0);
@@ -1074,6 +1138,7 @@
       else hidden.add(seriesId);
       state.hiddenSeriesByGroup[state.activeGroup] = Array.from(hidden);
       state.hoverIndex = null;
+      rememberResultCurveViewerState();
       render();
     }
 
@@ -1210,6 +1275,71 @@
       groups[group.key] = { title: group.title, curves: [], series: {} };
       return groups;
     }, {});
+  }
+
+  function nonAnnualGroupKeys() {
+    return GROUP_DEFINITIONS.filter((group) => group.key !== "annual").map((group) => group.key);
+  }
+
+  function normalizeGroupArrayState(value, fallback = {}) {
+    const source = value && typeof value === "object" ? value : {};
+    const backup = fallback && typeof fallback === "object" ? fallback : {};
+    return nonAnnualGroupKeys().reduce((next, key) => {
+      const selected = Array.isArray(source[key]) ? source[key] : backup[key];
+      next[key] = uniqueStrings(selected);
+      return next;
+    }, {});
+  }
+
+  function uniqueStrings(value) {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value.map((item) => String(item || "")).filter(Boolean)));
+  }
+
+  function storedNumber(value, fallback = null) {
+    const helper = window.PowerPlanPageState?.number;
+    if (typeof helper === "function") return helper(value, fallback);
+    return value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : fallback;
+  }
+
+  function storedAxisNumber(value, fallback = null) {
+    return storedNumber(value, fallback);
+  }
+
+  function normalizeAnnualGridSplit(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+      column: clamp(storedNumber(source.column, 50), ANNUAL_GRID_SPLIT_MIN, 100 - ANNUAL_GRID_SPLIT_MIN),
+      row: clamp(storedNumber(source.row, 50), ANNUAL_GRID_SPLIT_MIN, 100 - ANNUAL_GRID_SPLIT_MIN),
+    };
+  }
+
+  function normalizeAxisRanges(value) {
+    if (!value || typeof value !== "object") return {};
+    return Object.entries(value).reduce((next, [key, range]) => {
+      if (!key || !range || typeof range !== "object") return next;
+      const min = storedAxisNumber(range.min);
+      const max = storedAxisNumber(range.max);
+      const normalized = {};
+      if (Number.isFinite(min)) normalized.min = min;
+      if (Number.isFinite(max)) normalized.max = max;
+      if (Object.keys(normalized).length) next[String(key)] = normalized;
+      return next;
+    }, {});
+  }
+
+  function normalizeStatsPosition(value) {
+    if (!value || typeof value !== "object") return null;
+    const left = storedNumber(value.left);
+    const top = storedNumber(value.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return { left: clamp(left, 0, 100), top: clamp(top, 0, 100) };
+  }
+
+  function clamp(value, min, max) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return min;
+    return Math.min(Math.max(number, min), max);
   }
 
   function normalizeGroups(payload) {

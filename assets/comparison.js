@@ -48,8 +48,9 @@ function restoreComparisonPageState() {
   } else {
     state.activeTabId = state.tabs[0]?.id || "tab-1";
   }
-  if (Number.isFinite(Number(saved.tableHeight))) {
-    state.tableHeight = Number(saved.tableHeight);
+  const tableHeight = window.PowerPlanPageState?.number?.(saved.tableHeight);
+  if (Number.isFinite(tableHeight)) {
+    state.tableHeight = tableHeight;
     document.documentElement.style.setProperty("--comparison-table-height", `${Math.round(state.tableHeight)}px`);
   }
   if (Array.isArray(saved.tableColumnWidths) && saved.tableColumnWidths.length === 3) {
@@ -57,7 +58,7 @@ function restoreComparisonPageState() {
     applyComparisonTableColumnWidthVariables();
   }
   if (Array.isArray(saved.selectedCurves)) state.selectedCurves = saved.selectedCurves.map((item) => String(item || "")).filter(Boolean);
-  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = { ...saved.axisRanges };
+  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = normalizeAxisRanges(saved.axisRanges);
 }
 
 function comparisonPageStateSnapshot() {
@@ -85,6 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
         emptyText: "暂无小时级曲线",
         promptText: "请选择小时级曲线",
         enableAnnualBarComparison: true,
+        stateKey: "comparison-result-curves",
         onSelectionChange: () => syncComparisonCurveViewerIfHourlyActive(),
       })
     : null;
@@ -653,8 +655,8 @@ function renderComparisonAxisRangeControls() {
 }
 
 function applyAxisRange(autoMin, autoMax, range = {}) {
-  let min = Number(range.min);
-  let max = Number(range.max);
+  const min = storedAxisNumber(range.min);
+  const max = storedAxisNumber(range.max);
   const hasMin = Number.isFinite(min);
   const hasMax = Number.isFinite(max);
   if (hasMin && hasMax && max > min) return { min, max };
@@ -667,11 +669,18 @@ function bindComparisonAxisRangeControls() {
   document.addEventListener("change", (event) => {
     if (!event.target.matches("[data-comparison-axis-min], [data-comparison-axis-max]")) return;
     const previous = state.axisRanges.comparisonHourly || {};
-    const value = event.target.value === "" ? "" : Number(event.target.value);
+    const value = storedAxisNumber(event.target.value);
     const next = { ...previous };
-    if (event.target.matches("[data-comparison-axis-min]")) next.min = Number.isFinite(value) ? value : "";
-    if (event.target.matches("[data-comparison-axis-max]")) next.max = Number.isFinite(value) ? value : "";
-    state.axisRanges.comparisonHourly = next;
+    if (event.target.matches("[data-comparison-axis-min]")) {
+      if (Number.isFinite(value)) next.min = value;
+      else delete next.min;
+    }
+    if (event.target.matches("[data-comparison-axis-max]")) {
+      if (Number.isFinite(value)) next.max = value;
+      else delete next.max;
+    }
+    if (Object.keys(next).length) state.axisRanges.comparisonHourly = next;
+    else delete state.axisRanges.comparisonHourly;
     renderComparisonCurveChart();
     rememberComparisonPageState({ axisRanges: state.axisRanges });
   });
@@ -681,6 +690,26 @@ function bindComparisonAxisRangeControls() {
     renderComparisonCurveChart();
     rememberComparisonPageState({ axisRanges: state.axisRanges });
   });
+}
+
+function storedAxisNumber(value, fallback = null) {
+  const helper = window.PowerPlanPageState?.number;
+  if (typeof helper === "function") return helper(value, fallback);
+  return value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function normalizeAxisRanges(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.entries(value).reduce((next, [key, range]) => {
+    if (!key || !range || typeof range !== "object") return next;
+    const min = storedAxisNumber(range.min);
+    const max = storedAxisNumber(range.max);
+    const normalized = {};
+    if (Number.isFinite(min)) normalized.min = min;
+    if (Number.isFinite(max)) normalized.max = max;
+    if (Object.keys(normalized).length) next[String(key)] = normalized;
+    return next;
+  }, {});
 }
 
 function renderYAxisGrid(y, left, right) {

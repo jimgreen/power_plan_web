@@ -47,9 +47,19 @@
     return next;
   }
 
+  function isFiniteNumber(value) {
+    return value !== null && value !== "" && Number.isFinite(Number(value));
+  }
+
+  function number(value, fallback = null) {
+    return isFiniteNumber(value) ? Number(value) : fallback;
+  }
+
   window.PowerPlanPageState = {
     read,
     write,
     patch,
+    isFiniteNumber,
+    number,
   };
 })();

@@ -42,7 +42,8 @@ function restoreOptimizationPageState() {
   if (typeof saved.currentScheme === "string") state.currentScheme = saved.currentScheme;
   if (["overview", "green", "safety", "logs", "curves"].includes(saved.activeResultTab)) state.activeResultTab = saved.activeResultTab;
   ["greenResultTableWidth", "safetyResultTableWidth", "overviewLeftColumnWidth", "optimizationSchemeRailHeight"].forEach((key) => {
-    if (Number.isFinite(Number(saved[key]))) state[key] = Number(saved[key]);
+    const savedNumber = window.PowerPlanPageState?.number?.(saved[key]);
+    if (Number.isFinite(savedNumber)) state[key] = savedNumber;
   });
   if (state.greenResultTableWidth) document.documentElement.style.setProperty("--green-result-table-width", `${Math.round(state.greenResultTableWidth)}px`);
   if (state.safetyResultTableWidth) document.documentElement.style.setProperty("--safety-result-table-width", `${Math.round(state.safetyResultTableWidth)}px`);
@@ -50,7 +51,7 @@ function restoreOptimizationPageState() {
   if (state.optimizationSchemeRailHeight) document.documentElement.style.setProperty("--optimization-scheme-rail-height", `${Math.round(state.optimizationSchemeRailHeight)}px`);
   if (saved.greenSeriesVisibility && typeof saved.greenSeriesVisibility === "object") state.greenSeriesVisibility = { ...saved.greenSeriesVisibility };
   if (saved.safetySeriesVisibility && typeof saved.safetySeriesVisibility === "object") state.safetySeriesVisibility = { ...saved.safetySeriesVisibility };
-  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = { ...saved.axisRanges };
+  if (saved.axisRanges && typeof saved.axisRanges === "object") state.axisRanges = normalizeAxisRanges(saved.axisRanges);
 }
 
 function optimizationPageStateSnapshot() {
@@ -173,11 +174,18 @@ function bindResultAxisRangeControls() {
     if (!event.target.matches("[data-result-axis-min], [data-result-axis-max]")) return;
     const kind = event.target.dataset.resultAxisMin || event.target.dataset.resultAxisMax || "";
     const previous = state.axisRanges[kind] || {};
-    const value = event.target.value === "" ? "" : Number(event.target.value);
+    const value = storedAxisNumber(event.target.value);
     const next = { ...previous };
-    if (event.target.matches("[data-result-axis-min]")) next.min = Number.isFinite(value) ? value : "";
-    if (event.target.matches("[data-result-axis-max]")) next.max = Number.isFinite(value) ? value : "";
-    state.axisRanges[kind] = next;
+    if (event.target.matches("[data-result-axis-min]")) {
+      if (Number.isFinite(value)) next.min = value;
+      else delete next.min;
+    }
+    if (event.target.matches("[data-result-axis-max]")) {
+      if (Number.isFinite(value)) next.max = value;
+      else delete next.max;
+    }
+    if (Object.keys(next).length) state.axisRanges[kind] = next;
+    else delete state.axisRanges[kind];
     renderAdaptiveResultChart(kind);
     rememberOptimizationPageState({ axisRanges: state.axisRanges });
   });
@@ -205,14 +213,34 @@ function renderResultAxisRangeControls(kind) {
 }
 
 function applyAxisRange(autoMin, autoMax, range = {}) {
-  let min = Number(range.min);
-  let max = Number(range.max);
+  const min = storedAxisNumber(range.min);
+  const max = storedAxisNumber(range.max);
   const hasMin = Number.isFinite(min);
   const hasMax = Number.isFinite(max);
   if (hasMin && hasMax && max > min) return { min, max };
   if (hasMin && !hasMax) return { min, max: Math.max(autoMax, min + 1) };
   if (!hasMin && hasMax) return { min: Math.min(autoMin, max - 1), max };
   return { min: autoMin, max: autoMax };
+}
+
+function storedAxisNumber(value, fallback = null) {
+  const helper = window.PowerPlanPageState?.number;
+  if (typeof helper === "function") return helper(value, fallback);
+  return value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function normalizeAxisRanges(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.entries(value).reduce((next, [key, range]) => {
+    if (!key || !range || typeof range !== "object") return next;
+    const min = storedAxisNumber(range.min);
+    const max = storedAxisNumber(range.max);
+    const normalized = {};
+    if (Number.isFinite(min)) normalized.min = min;
+    if (Number.isFinite(max)) normalized.max = max;
+    if (Object.keys(normalized).length) next[String(key)] = normalized;
+    return next;
+  }, {});
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -223,6 +251,7 @@ document.addEventListener("DOMContentLoaded", () => {
         chartId: "optimizationCurveChart",
         emptyText: "暂无小时级曲线",
         promptText: "请选择小时级曲线",
+        stateKey: "optimization-result-curves",
         onSelectionChange: () => syncOptimizationCurveViewerIfHourlyActive(),
       })
     : null;

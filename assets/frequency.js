@@ -35,17 +35,20 @@ function restoreFrequencyPageState() {
   if (typeof saved.selectedResultFile === "string") frequencyState.selectedResultFile = saved.selectedResultFile;
   if (["metrics", "curve", "logs"].includes(saved.activeResultTab)) frequencyState.activeResultTab = saved.activeResultTab;
   if (Array.isArray(saved.collapsedSchemes)) frequencyState.collapsedSchemes = new Set(saved.collapsedSchemes.map((item) => String(item || "")).filter(Boolean));
-  if (Number.isFinite(Number(saved.schemeRailHeight))) frequencyState.schemeRailHeight = Number(saved.schemeRailHeight);
-  if (saved.axisRanges && typeof saved.axisRanges === "object") frequencyState.axisRanges = { ...saved.axisRanges };
+  const schemeRailHeight = window.PowerPlanPageState?.number?.(saved.schemeRailHeight);
+  if (Number.isFinite(schemeRailHeight)) frequencyState.schemeRailHeight = schemeRailHeight;
+  if (saved.axisRanges && typeof saved.axisRanges === "object") frequencyState.axisRanges = normalizeAxisRanges(saved.axisRanges);
   if (saved.frequencyTimeSelection && typeof saved.frequencyTimeSelection === "object") {
     frequencyState.frequencyTimeSelection = { ...saved.frequencyTimeSelection };
   }
-  if (Number.isFinite(Number(saved.metricsTableWidth))) {
-    frequencyState.metricsTableWidth = Number(saved.metricsTableWidth);
+  const metricsTableWidth = window.PowerPlanPageState?.number?.(saved.metricsTableWidth);
+  if (Number.isFinite(metricsTableWidth)) {
+    frequencyState.metricsTableWidth = metricsTableWidth;
     document.documentElement.style.setProperty("--frequency-metrics-table-width", `${Math.round(frequencyState.metricsTableWidth)}px`);
   }
-  if (Number.isFinite(Number(saved.timeInfoWidth))) {
-    frequencyState.timeInfoWidth = Number(saved.timeInfoWidth);
+  const timeInfoWidth = window.PowerPlanPageState?.number?.(saved.timeInfoWidth);
+  if (Number.isFinite(timeInfoWidth)) {
+    frequencyState.timeInfoWidth = timeInfoWidth;
     document.documentElement.style.setProperty("--frequency-time-info-width", `${Math.round(frequencyState.timeInfoWidth)}px`);
   }
   if (frequencyState.schemeRailHeight) document.documentElement.style.setProperty("--evaluation-scheme-rail-height", `${Math.round(frequencyState.schemeRailHeight)}px`);
@@ -884,11 +887,18 @@ function bindFrequencyAxisRangeControls() {
     if (!event.target.matches("[data-frequency-axis-min], [data-frequency-axis-max]")) return;
     const key = event.target.dataset.frequencyAxisMin || event.target.dataset.frequencyAxisMax || "";
     const previous = frequencyState.axisRanges[key] || {};
-    const value = event.target.value === "" ? "" : Number(event.target.value);
+    const value = storedAxisNumber(event.target.value);
     const next = { ...previous };
-    if (event.target.matches("[data-frequency-axis-min]")) next.min = Number.isFinite(value) ? value : "";
-    if (event.target.matches("[data-frequency-axis-max]")) next.max = Number.isFinite(value) ? value : "";
-    frequencyState.axisRanges[key] = next;
+    if (event.target.matches("[data-frequency-axis-min]")) {
+      if (Number.isFinite(value)) next.min = value;
+      else delete next.min;
+    }
+    if (event.target.matches("[data-frequency-axis-max]")) {
+      if (Number.isFinite(value)) next.max = value;
+      else delete next.max;
+    }
+    if (Object.keys(next).length) frequencyState.axisRanges[key] = next;
+    else delete frequencyState.axisRanges[key];
     rerenderFrequencyAxisBoard(key);
     rememberFrequencyPageState({ axisRanges: frequencyState.axisRanges });
   });
@@ -921,14 +931,34 @@ function renderFrequencyAxisRangeControls(key) {
 }
 
 function applyAxisRange(autoMin, autoMax, range = {}) {
-  let min = Number(range.min);
-  let max = Number(range.max);
+  const min = storedAxisNumber(range.min);
+  const max = storedAxisNumber(range.max);
   const hasMin = Number.isFinite(min);
   const hasMax = Number.isFinite(max);
   if (hasMin && hasMax && max > min) return { min, max };
   if (hasMin && !hasMax) return { min, max: Math.max(autoMax, min + 1) };
   if (!hasMin && hasMax) return { min: Math.min(autoMin, max - 1), max };
   return { min: autoMin, max: autoMax };
+}
+
+function storedAxisNumber(value, fallback = null) {
+  const helper = window.PowerPlanPageState?.number;
+  if (typeof helper === "function") return helper(value, fallback);
+  return value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : fallback;
+}
+
+function normalizeAxisRanges(value) {
+  if (!value || typeof value !== "object") return {};
+  return Object.entries(value).reduce((next, [key, range]) => {
+    if (!key || !range || typeof range !== "object") return next;
+    const min = storedAxisNumber(range.min);
+    const max = storedAxisNumber(range.max);
+    const normalized = {};
+    if (Number.isFinite(min)) normalized.min = min;
+    if (Number.isFinite(max)) normalized.max = max;
+    if (Object.keys(normalized).length) next[String(key)] = normalized;
+    return next;
+  }, {});
 }
 
 function linePath(points, accessor, xAt, yAt) {

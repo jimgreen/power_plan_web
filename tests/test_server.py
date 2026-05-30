@@ -5273,8 +5273,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("年度统计", html)
         self.assertNotIn("8760曲线", html)
         self.assertIn("assets/result_curves.js", html)
-        self.assertIn("assets/comparison.js?v=20260530-page-state", html)
-        self.assertIn("assets/result_curves.js?v=20260530-axis-popover", html)
+        self.assertIn("assets/comparison.js?v=20260530-page-state3", html)
+        self.assertIn("assets/result_curves.js?v=20260530-page-state3", html)
 
         self.assertIn("/api/planning/schemes", script)
         self.assertIn("/api/evaluation/results", script)
@@ -7429,6 +7429,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("read", page_state_script)
         self.assertIn("write", page_state_script)
         self.assertIn("patch", page_state_script)
+        self.assertIn("isFiniteNumber", page_state_script)
+        self.assertIn("number", page_state_script)
 
         interactive_pages = (
             "planning.html",
@@ -7516,6 +7518,68 @@ class PowerPlanServerTest(unittest.TestCase):
                 self.assertIn("PowerPlanPageState", script)
                 for token in tokens:
                     self.assertIn(token, script)
+
+    def test_page_state_ignores_empty_numeric_layout_values(self):
+        page_state_script = (WEB_ROOT / "assets" / "page_state.js").read_text(encoding="utf-8")
+        self.assertIn("value !== null", page_state_script)
+        self.assertIn('value !== ""', page_state_script)
+
+        for script_name in ("planning.js", "optimize.js", "evaluation.js", "frequency.js", "comparison.js"):
+            with self.subTest(script=script_name):
+                script = (WEB_ROOT / "assets" / script_name).read_text(encoding="utf-8")
+                self.assertIn("PowerPlanPageState?.number", script)
+                self.assertNotIn("Number.isFinite(Number(saved[key]))", script)
+                self.assertNotIn("Number.isFinite(Number(saved.schemeRailManualHeight))", script)
+                self.assertNotIn("Number.isFinite(Number(saved.tableHeight))", script)
+
+    def test_axis_range_state_ignores_empty_values(self):
+        for script_name in ("optimize.js", "evaluation.js", "frequency.js", "comparison.js", "result_curves.js"):
+            with self.subTest(script=script_name):
+                script = (WEB_ROOT / "assets" / script_name).read_text(encoding="utf-8")
+                self.assertIn("storedAxisNumber", script)
+                self.assertNotIn("= Number(range.min)", script)
+                self.assertNotIn("= Number(range.max)", script)
+                self.assertNotIn('next.min = Number.isFinite(value) ? value : ""', script)
+                self.assertNotIn('next.max = Number.isFinite(value) ? value : ""', script)
+
+    def test_planning_import_curve_visibility_is_not_reset_on_modal_open(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        self.assertIn("timeSeriesImportVisibleCurves", script)
+        self.assertNotIn("state.timeSeriesImportVisibleCurves = new Set(timeSeriesImportSeries.map", script)
+
+    def test_planning_curve_generator_and_weather_input_state_are_remembered(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+
+        self.assertIn("rememberPlanningPageState({ curveGeneratorTarget: state.curveGeneratorTarget })", script)
+        self.assertIn("rememberWeatherInputsFromFields", script)
+        self.assertIn('document.getElementById("weatherPlace").addEventListener("input", rememberWeatherInputsFromFields)', script)
+        self.assertIn('document.getElementById("weatherYear").addEventListener("input", rememberWeatherInputsFromFields)', script)
+        self.assertIn('document.getElementById("weatherLatitude").addEventListener("input", rememberWeatherInputsFromFields)', script)
+        self.assertIn('document.getElementById("weatherLongitude").addEventListener("input", rememberWeatherInputsFromFields)', script)
+
+    def test_result_curve_viewer_persists_internal_selection_state(self):
+        curve_script = (WEB_ROOT / "assets" / "result_curves.js").read_text(encoding="utf-8")
+        self.assertIn("stateKey", curve_script)
+        self.assertIn("restoreResultCurveViewerState", curve_script)
+        self.assertIn("rememberResultCurveViewerState", curve_script)
+        self.assertIn("selectedCurvesByGroup", curve_script)
+        self.assertIn("activeGroup", curve_script)
+        self.assertIn("curveRangeFilter", curve_script)
+        self.assertIn("annualViewMode", curve_script)
+
+        optimize_script = (WEB_ROOT / "assets" / "optimize.js").read_text(encoding="utf-8")
+        evaluation_script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
+        comparison_script = (WEB_ROOT / "assets" / "comparison.js").read_text(encoding="utf-8")
+        optimize_html = (WEB_ROOT / "optimize.html").read_text(encoding="utf-8")
+        evaluation_html = (WEB_ROOT / "evaluation.html").read_text(encoding="utf-8")
+        comparison_html = (WEB_ROOT / "comparison.html").read_text(encoding="utf-8")
+
+        self.assertIn('stateKey: "optimization-result-curves"', optimize_script)
+        self.assertIn('stateKey: "evaluation-result-curves"', evaluation_script)
+        self.assertIn('stateKey: "comparison-result-curves"', comparison_script)
+        self.assertIn("assets/result_curves.js?v=20260530-page-state3", optimize_html)
+        self.assertIn("assets/result_curves.js?v=20260530-page-state3", evaluation_html)
+        self.assertIn("assets/result_curves.js?v=20260530-page-state3", comparison_html)
 
     def test_redirect_response_disables_cache_and_varies_on_cookie(self):
         status, headers, body = server._redirect_response("/login.html?next=%2Ftasks.html")

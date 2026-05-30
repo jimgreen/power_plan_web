@@ -294,14 +294,19 @@ function restorePlanningPageState() {
   restoredPlanningPageState = window.PowerPlanPageState?.read?.(PLANNING_PAGE_STATE_KEY, {}) || {};
   const saved = restoredPlanningPageState;
   if (typeof saved.currentScheme === "string") state.currentScheme = saved.currentScheme;
-  if (Number.isFinite(Number(saved.month))) state.month = Math.min(Math.max(Number(saved.month), 0), monthRanges.length - 1);
+  const savedMonth = window.PowerPlanPageState?.number?.(saved.month);
+  if (Number.isFinite(savedMonth)) state.month = Math.min(Math.max(savedMonth, 0), monthRanges.length - 1);
   if (saved.timeChartRange && typeof saved.timeChartRange === "object") {
     state.timeChartRange = normalizeTimeChartRange(saved.timeChartRange);
   }
-  if (Number.isFinite(Number(saved.schemeRailManualHeight))) state.schemeRailManualHeight = Number(saved.schemeRailManualHeight);
-  if (Number.isFinite(Number(saved.timeChartManualHeight))) state.timeChartManualHeight = Number(saved.timeChartManualHeight);
-  if (Number.isFinite(Number(saved.weatherPreviewManualHeight))) state.weatherPreviewManualHeight = Number(saved.weatherPreviewManualHeight);
-  if (Number.isFinite(Number(saved.timeSeriesImportManualChartHeight))) state.timeSeriesImportManualChartHeight = Number(saved.timeSeriesImportManualChartHeight);
+  const schemeRailManualHeight = window.PowerPlanPageState?.number?.(saved.schemeRailManualHeight);
+  const timeChartManualHeight = window.PowerPlanPageState?.number?.(saved.timeChartManualHeight);
+  const weatherPreviewManualHeight = window.PowerPlanPageState?.number?.(saved.weatherPreviewManualHeight);
+  const timeSeriesImportManualChartHeight = window.PowerPlanPageState?.number?.(saved.timeSeriesImportManualChartHeight);
+  if (Number.isFinite(schemeRailManualHeight)) state.schemeRailManualHeight = schemeRailManualHeight;
+  if (Number.isFinite(timeChartManualHeight)) state.timeChartManualHeight = timeChartManualHeight;
+  if (Number.isFinite(weatherPreviewManualHeight)) state.weatherPreviewManualHeight = weatherPreviewManualHeight;
+  if (Number.isFinite(timeSeriesImportManualChartHeight)) state.timeSeriesImportManualChartHeight = timeSeriesImportManualChartHeight;
   if (typeof saved.curveGeneratorTarget === "string" && curveGeneratorSpecs[saved.curveGeneratorTarget]) {
     state.curveGeneratorTarget = saved.curveGeneratorTarget;
   }
@@ -540,6 +545,10 @@ function bindActions() {
   document.getElementById("openCoordinatePicker").addEventListener("click", openCoordinatePicker);
   document.getElementById("closeMapPicker").addEventListener("click", closeMapPicker);
   document.getElementById("confirmMapPoint").addEventListener("click", confirmMapPoint);
+  document.getElementById("weatherPlace").addEventListener("input", rememberWeatherInputsFromFields);
+  document.getElementById("weatherYear").addEventListener("input", rememberWeatherInputsFromFields);
+  document.getElementById("weatherLatitude").addEventListener("input", rememberWeatherInputsFromFields);
+  document.getElementById("weatherLongitude").addEventListener("input", rememberWeatherInputsFromFields);
   document.getElementById("weatherLatitude").addEventListener("change", syncMapPointFromInputs);
   document.getElementById("weatherLongitude").addEventListener("change", syncMapPointFromInputs);
   document.querySelectorAll("[data-weather-preview-curve]").forEach((button) => {
@@ -1771,7 +1780,6 @@ function openTimeSeriesImportModal() {
     return;
   }
   state.pendingTimeSeriesImport = null;
-  state.timeSeriesImportVisibleCurves = new Set(timeSeriesImportSeries.map(([key]) => key));
   state.timeSeriesImportChartMeta = null;
   state.timeSeriesImportDrag = null;
   syncTimeSeriesImportCurveToggles();
@@ -1801,6 +1809,7 @@ function openCurveGenerator(target) {
     return;
   }
   state.curveGeneratorTarget = curveGeneratorSpecs[target] ? target : "load";
+  rememberPlanningPageState({ curveGeneratorTarget: state.curveGeneratorTarget });
   configureCurveGeneratorModal();
   prefillLoadGeneratorValues();
   state.originalLoadCurve = currentCurveGeneratorRows();
@@ -2757,15 +2766,47 @@ function rememberWeatherCoordinate(latitude, longitude, year, place = "") {
   const lng = Number(longitude);
   const dataYear = Number(year);
   const cleanPlace = String(place || document.getElementById("weatherPlace")?.value || "").trim();
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
   const payload = {
-    latitude: lat,
-    longitude: lng,
-    year: Number.isInteger(dataYear) ? dataYear : Number(document.getElementById("weatherYear")?.value || NaN),
     place: cleanPlace,
   };
+  if (Number.isFinite(lat)) {
+    payload.latitude = lat;
+    payload.latitudeText = formatCoordinate(lat);
+  }
+  if (Number.isFinite(lng)) {
+    payload.longitude = lng;
+    payload.longitudeText = formatCoordinate(lng);
+  }
+  if (Number.isInteger(dataYear)) {
+    payload.year = dataYear;
+    payload.yearText = String(dataYear);
+  } else {
+    const yearText = String(document.getElementById("weatherYear")?.value || "");
+    if (yearText) payload.yearText = yearText;
+  }
+  writeWeatherCoordinatePayload(payload);
+}
+
+function rememberWeatherInputsFromFields() {
+  const place = String(document.getElementById("weatherPlace")?.value || "").trim();
+  const latitudeText = String(document.getElementById("weatherLatitude")?.value || "");
+  const longitudeText = String(document.getElementById("weatherLongitude")?.value || "");
+  const yearText = String(document.getElementById("weatherYear")?.value || "");
+  const latitude = storedOptionalNumber(latitudeText);
+  const longitude = storedOptionalNumber(longitudeText);
+  const year = storedOptionalNumber(yearText);
+  const payload = { place, latitudeText, longitudeText, yearText };
+  if (Number.isFinite(latitude)) payload.latitude = latitude;
+  if (Number.isFinite(longitude)) payload.longitude = longitude;
+  if (Number.isInteger(year)) payload.year = year;
+  writeWeatherCoordinatePayload(payload);
+}
+
+function writeWeatherCoordinatePayload(payload) {
+  const hasValue = Object.values(payload || {}).some((value) => String(value ?? "").trim() !== "");
   try {
-    localStorage.setItem(WEATHER_COORDINATE_STORAGE_KEY, JSON.stringify(payload));
+    if (hasValue) localStorage.setItem(WEATHER_COORDINATE_STORAGE_KEY, JSON.stringify(payload));
+    else localStorage.removeItem(WEATHER_COORDINATE_STORAGE_KEY);
   } catch (error) {
     console.warn("保存气象坐标失败", error);
   }
@@ -2779,17 +2820,29 @@ function restoreWeatherCoordinate() {
     stored = null;
   }
   if (!stored) return;
-  const latitude = Number(stored.latitude);
-  const longitude = Number(stored.longitude);
-  const year = Number(stored.year);
+  const latitude = storedOptionalNumber(stored.latitude);
+  const longitude = storedOptionalNumber(stored.longitude);
+  const year = storedOptionalNumber(stored.year);
+  const latitudeText = typeof stored.latitudeText === "string" ? stored.latitudeText : "";
+  const longitudeText = typeof stored.longitudeText === "string" ? stored.longitudeText : "";
+  const yearText = typeof stored.yearText === "string" ? stored.yearText : "";
   const place = String(stored.place || "").trim();
-  if (Number.isFinite(latitude)) document.getElementById("weatherLatitude").value = formatCoordinate(latitude);
-  if (Number.isFinite(longitude)) document.getElementById("weatherLongitude").value = formatCoordinate(longitude);
-  if (Number.isInteger(year)) document.getElementById("weatherYear").value = String(year);
+  const latitudeInput = document.getElementById("weatherLatitude");
+  const longitudeInput = document.getElementById("weatherLongitude");
+  const yearInput = document.getElementById("weatherYear");
+  if (latitudeInput) latitudeInput.value = latitudeText || (Number.isFinite(latitude) ? formatCoordinate(latitude) : "");
+  if (longitudeInput) longitudeInput.value = longitudeText || (Number.isFinite(longitude) ? formatCoordinate(longitude) : "");
+  if (yearInput) yearInput.value = yearText || (Number.isInteger(year) ? String(year) : "");
   if (place) document.getElementById("weatherPlace").value = place;
   if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
     state.mapPoint = { latitude, longitude };
   }
+}
+
+function storedOptionalNumber(value) {
+  if (value === null || value === undefined || value === "") return NaN;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : NaN;
 }
 
 function formatCoordinate(value) {
