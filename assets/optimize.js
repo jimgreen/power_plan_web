@@ -25,6 +25,7 @@ const state = {
   hourlyCurvePreloadToken: 0,
   activeResultTab: "overview",
   isSwitchingScheme: false,
+  optimizationSchemeRailHeight: null,
   greenSeriesVisibility: null,
   safetySeriesVisibility: null,
   axisRanges: {},
@@ -191,6 +192,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   bindSeriesToggleButtons();
   bindResultAxisRangeControls();
+  bindOptimizationSchemeListResizeHandle();
   loadSchemes().then(() => refreshOptimizationStatus()).catch(showError);
 });
 
@@ -239,6 +241,7 @@ async function loadSchemes() {
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
   if (state.currentScheme) rememberOptimizationScheme();
   renderSchemes();
+  setOptimizationSchemeRailHeight(optimizationSchemeRailHeightBounds().max);
   renderCurrentScheme();
 }
 
@@ -274,6 +277,90 @@ function bindSchemeListItem(item, onSelect) {
       onSelect();
     }
   });
+}
+
+function bindOptimizationSchemeListResizeHandle() {
+  const handle = document.getElementById("optimizationSchemeListResizeHandle");
+  if (!handle || handle.dataset.resizeBound === "true") return;
+  handle.dataset.resizeBound = "true";
+  const applyHeight = (height) => setOptimizationSchemeRailHeight(height, handle);
+  const currentHeight = () => state.optimizationSchemeRailHeight || document.querySelector(".optimization-workspace:not(.evaluation-workspace) > .scheme-rail")?.getBoundingClientRect().height || optimizationSchemeRailHeightBounds().max;
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = currentHeight();
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => applyHeight(startHeight + moveEvent.clientY - startY);
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const steps = { ArrowUp: -24, ArrowDown: 24, PageUp: -96, PageDown: 96 };
+    if (event.key in steps) {
+      event.preventDefault();
+      applyHeight(currentHeight() + steps[event.key]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyHeight(optimizationSchemeRailHeightBounds().min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyHeight(optimizationSchemeRailHeightBounds().max);
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    if (state.optimizationSchemeRailHeight) setOptimizationSchemeRailHeight(state.optimizationSchemeRailHeight, handle);
+    else updateOptimizationSchemeListResizeHandle();
+  });
+  updateOptimizationSchemeListResizeHandle();
+}
+
+function setOptimizationSchemeRailHeight(height, handle = document.getElementById("optimizationSchemeListResizeHandle")) {
+  const bounds = optimizationSchemeRailHeightBounds();
+  const numericHeight = Number(height);
+  const safeHeight = Math.min(Math.max(Number.isFinite(numericHeight) ? numericHeight : bounds.max, bounds.min), bounds.max);
+  const roundedHeight = Math.round(safeHeight);
+  state.optimizationSchemeRailHeight = roundedHeight;
+  document.documentElement.style.setProperty("--optimization-scheme-rail-height", `${roundedHeight}px`);
+  handle?.setAttribute("aria-valuenow", String(roundedHeight));
+  handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+}
+
+function optimizationSchemeRailHeightBounds() {
+  const workspace = document.querySelector(".optimization-workspace:not(.evaluation-workspace)");
+  const handle = document.getElementById("optimizationSchemeListResizeHandle");
+  if (!workspace) return { min: 150, max: 900 };
+  const style = getComputedStyle(workspace);
+  const rowGap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const handleHeight = handle?.getBoundingClientRect().height || 8;
+  const contentHeight =
+    (workspace.clientHeight || window.innerHeight - 120) -
+    (Number.parseFloat(style.paddingTop) || 0) -
+    (Number.parseFloat(style.paddingBottom) || 0);
+  return {
+    min: 150,
+    max: Math.max(180, Math.min(1200, contentHeight - rowGap * 2 - handleHeight)),
+  };
+}
+
+function updateOptimizationSchemeListResizeHandle() {
+  const handle = document.getElementById("optimizationSchemeListResizeHandle");
+  if (!handle) return;
+  const bounds = optimizationSchemeRailHeightBounds();
+  handle.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  handle.setAttribute("aria-valuenow", String(Math.round(state.optimizationSchemeRailHeight || bounds.max)));
 }
 
 function renderCurrentScheme() {

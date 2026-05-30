@@ -311,7 +311,7 @@ function bindFrequencySchemeListResize() {
 
   window.addEventListener("resize", () => {
     if (frequencyState.schemeRailHeight) setFrequencySchemeRailHeight(frequencyState.schemeRailHeight, handle);
-    else updateFrequencySchemeListResizeHandle();
+    else setFrequencySchemeRailHeight(frequencySchemeRailHeightBounds().max, handle);
   });
   updateFrequencySchemeListResizeHandle();
 }
@@ -330,9 +330,11 @@ function setFrequencySchemeRailHeight(height, handle = document.getElementById("
 
 function frequencySchemeRailHeightBounds() {
   const workspace = document.querySelector(".frequency-workspace");
+  const handle = document.getElementById("frequencySchemeListResizeHandle");
   if (!workspace) return { min: 150, max: 720 };
   const style = getComputedStyle(workspace);
   const rowGap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const handleHeight = handle?.getBoundingClientRect().height || 8;
   const contentHeight =
     (workspace.clientHeight || window.innerHeight - 120) -
     (Number.parseFloat(style.paddingTop) || 0) -
@@ -340,7 +342,7 @@ function frequencySchemeRailHeightBounds() {
   const bottomRailMinHeight = 260;
   return {
     min: 150,
-    max: Math.max(180, Math.min(960, contentHeight - rowGap - bottomRailMinHeight)),
+    max: Math.max(180, Math.min(960, contentHeight - rowGap * 2 - handleHeight - bottomRailMinHeight)),
   };
 }
 

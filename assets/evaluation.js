@@ -203,6 +203,8 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvaluationSchemeListResizeHandle();
   window.addEventListener("resize", () => {
     clampEvaluationMainWidth();
+    if (state.evaluationSchemeRailHeight) setEvaluationSchemeRailHeight(state.evaluationSchemeRailHeight);
+    else setEvaluationSchemeRailHeight(evaluationSchemeRailHeightBounds().max);
   });
   loadSchemes()
     .then(() => loadEvaluationResults())
@@ -2032,9 +2034,11 @@ function currentEvaluationSchemeRailHeight() {
 
 function evaluationSchemeRailHeightBounds() {
   const workspace = document.querySelector(".evaluation-workspace");
+  const handle = document.getElementById("evaluationSchemeListResizeHandle");
   if (!workspace) return { min: 150, max: 600 };
   const style = getComputedStyle(workspace);
   const rowGap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const handleHeight = handle?.getBoundingClientRect().height || 8;
   const contentHeight =
     (workspace.clientHeight || window.innerHeight - 120) -
     (Number.parseFloat(style.paddingTop) || 0) -
@@ -2042,7 +2046,7 @@ function evaluationSchemeRailHeightBounds() {
   const bottomRailMinHeight = 260;
   return {
     min: 150,
-    max: Math.max(180, Math.min(960, contentHeight - rowGap - bottomRailMinHeight)),
+    max: Math.max(180, Math.min(960, contentHeight - rowGap * 2 - handleHeight - bottomRailMinHeight)),
   };
 }
 

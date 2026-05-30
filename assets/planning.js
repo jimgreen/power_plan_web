@@ -543,6 +543,7 @@ function applyAdaptiveSchemeRailLayout() {
   const workspace = rail?.closest(".workspace");
   const summaryRail = workspace?.querySelector(".summary-rail");
   const schemeList = layout?.querySelector(".scheme-list");
+  const handle = document.getElementById("schemeListResizeHandle");
   if (!layout || !rail || !workspace || !schemeList) return;
 
   const workspaceStyle = getComputedStyle(workspace);
@@ -566,7 +567,8 @@ function applyAdaptiveSchemeRailLayout() {
   const gapHeight = Math.max(0, children.length - 1) * layoutGap;
   const requiredRailHeight = Math.ceil(verticalChrome + nonListHeight + schemeList.scrollHeight + gapHeight);
   const summaryMinimumHeight = Math.max(280, Math.min(340, summaryRail?.scrollHeight || 280));
-  const maxRailHeight = Math.max(150, workspaceContentHeight - rowGap - summaryMinimumHeight);
+  const handleHeight = handle?.getBoundingClientRect().height || 8;
+  const maxRailHeight = Math.max(150, workspaceContentHeight - rowGap * 2 - handleHeight - summaryMinimumHeight);
   const preferredHeight = Number.isFinite(state.schemeRailManualHeight) ? state.schemeRailManualHeight : maxRailHeight;
   const targetHeight = Math.max(150, Math.min(preferredHeight, maxRailHeight));
   const capped = requiredRailHeight > targetHeight + 2;
@@ -631,6 +633,7 @@ function currentSchemeRailHeight() {
 function schemeRailHeightBounds() {
   const workspace = document.querySelector(".workspace");
   const summaryRail = workspace?.querySelector(".summary-rail");
+  const handle = document.getElementById("schemeListResizeHandle");
   if (!workspace) return { min: 150, max: 600 };
   const workspaceStyle = getComputedStyle(workspace);
   const rowGap = parseFloat(workspaceStyle.rowGap || workspaceStyle.gap || 0) || 0;
@@ -639,9 +642,10 @@ function schemeRailHeightBounds() {
     (parseFloat(workspaceStyle.paddingTop) || 0) -
     (parseFloat(workspaceStyle.paddingBottom) || 0);
   const summaryMinimumHeight = Math.max(280, Math.min(340, summaryRail?.scrollHeight || 280));
+  const handleHeight = handle?.getBoundingClientRect().height || 8;
   return {
     min: 150,
-    max: Math.max(150, workspaceContentHeight - rowGap - summaryMinimumHeight),
+    max: Math.max(150, workspaceContentHeight - rowGap * 2 - handleHeight - summaryMinimumHeight),
   };
 }
 
