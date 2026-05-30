@@ -772,6 +772,46 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("储能电池组参数第1行SOC上限不能小于SOC下限", message_text)
         self.assertIn("储氢罐参数第1行SOC上限不能小于SOC下限", message_text)
 
+    def test_validate_initial_hydrogen_soc_within_active_tank_limits(self):
+        payload = planning_store.default_payload("方案A")
+        payload["hydrogen_tanks"][0].update({"quantity_upper": 1, "soc_lower": 0.6, "soc_upper": 0.85})
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.5
+
+        messages = planning_store.validate_payload(payload)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        self.assertIn("初始氢储SOC(0.0-1.0)必须位于储氢罐SOC范围0.6-0.85内", message_text)
+
+    def test_validate_initial_hydrogen_soc_ignores_inactive_tank_limits(self):
+        payload = planning_store.default_payload("方案A")
+        payload["hydrogen_tanks"][0].update({"quantity_upper": 0, "soc_lower": 0.6, "soc_upper": 0.85})
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.5
+
+        messages = planning_store.validate_payload(payload)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        self.assertNotIn("初始氢储SOC(0.0-1.0)必须位于储氢罐SOC范围", message_text)
+
+    def test_validate_initial_storage_soc_within_active_battery_limits(self):
+        payload = planning_store.default_payload("方案A")
+        payload["storage_battery_packs"][0].update({"quantity_upper": 1, "soc_lower": 0.55, "soc_upper": 0.9})
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
+
+        messages = planning_store.validate_payload(payload)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        self.assertIn("初始电储SOC(0.0-1.0)必须位于储能电池组SOC范围0.55-0.9内", message_text)
+
+    def test_validate_initial_storage_soc_ignores_inactive_battery_limits(self):
+        payload = planning_store.default_payload("方案A")
+        payload["storage_battery_packs"][0].update({"quantity_upper": 0, "soc_lower": 0.55, "soc_upper": 0.9})
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
+
+        messages = planning_store.validate_payload(payload)
+        message_text = "\n".join(item["message"] for item in messages)
+
+        self.assertNotIn("初始电储SOC(0.0-1.0)必须位于储能电池组SOC范围", message_text)
+
 
 def corrupt_zip_member(path: Path, member_name: str) -> None:
     with zipfile.ZipFile(path) as archive:

@@ -490,6 +490,8 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     )
     storage_soc_lower_ratio, storage_soc_upper_ratio = storage_soc_limits(device_rows["storage_battery_packs"])
     hydrogen_soc_lower_ratio, hydrogen_soc_upper_ratio = hydrogen_soc_limits(device_rows["hydrogen_tanks"])
+    validate_initial_storage_soc(initial_storage_soc_ratio, device_rows["storage_battery_packs"])
+    validate_initial_hydrogen_soc(initial_hydrogen_storage_ratio, device_rows["hydrogen_tanks"])
     storage_self_discharge_rate = fleet_self_discharge_rate(device_rows["storage_battery_packs"], 0.01)
     hydrogen_self_discharge_rate = fleet_self_discharge_rate(device_rows["hydrogen_tanks"], 0.001)
     loads = np.array([max(0.0, numeric(row.get("load"), 0.0)) for row in time_series], dtype=float)
@@ -1106,6 +1108,60 @@ def hydrogen_soc_limits(hydrogen_tank_devices: list[dict[str, Any]]) -> tuple[fl
     if upper < lower:
         upper, lower = lower, upper
     return lower, upper
+
+
+def active_device_soc_window(
+    devices: list[dict[str, Any]],
+    *,
+    default_lower: float,
+    default_upper: float,
+) -> tuple[float, float] | None:
+    active_devices = [
+        device
+        for device in devices
+        if device["capacity"] > 0 and device["quantity_upper"] > 0
+    ]
+    if not active_devices:
+        return None
+    lower = max(min(1.0, max(0.0, numeric(device.get("soc_lower"), default_lower))) for device in active_devices)
+    upper = min(min(1.0, max(0.0, numeric(device.get("soc_upper"), default_upper))) for device in active_devices)
+    return lower, upper
+
+
+def active_storage_battery_soc_window(storage_battery_devices: list[dict[str, Any]]) -> tuple[float, float] | None:
+    return active_device_soc_window(storage_battery_devices, default_lower=0.1, default_upper=0.9)
+
+
+def active_hydrogen_tank_soc_window(hydrogen_tank_devices: list[dict[str, Any]]) -> tuple[float, float] | None:
+    return active_device_soc_window(hydrogen_tank_devices, default_lower=0.15, default_upper=0.85)
+
+
+def validate_initial_storage_soc(initial_ratio: float, storage_battery_devices: list[dict[str, Any]]) -> None:
+    soc_window = active_storage_battery_soc_window(storage_battery_devices)
+    if soc_window is None:
+        return
+    lower, upper = soc_window
+    if lower > upper:
+        raise ValueError("储能电池组SOC范围不存在公共区间，初始电储SOC无法同时满足所有储能电池组")
+    if initial_ratio < lower or initial_ratio > upper:
+        raise ValueError(
+            "初始电储SOC(0.0-1.0)必须位于储能电池组SOC范围"
+            f"{format_log_number(lower)}-{format_log_number(upper)}内"
+        )
+
+
+def validate_initial_hydrogen_soc(initial_ratio: float, hydrogen_tank_devices: list[dict[str, Any]]) -> None:
+    soc_window = active_hydrogen_tank_soc_window(hydrogen_tank_devices)
+    if soc_window is None:
+        return
+    lower, upper = soc_window
+    if lower > upper:
+        raise ValueError("储氢罐SOC范围不存在公共区间，初始氢储SOC无法同时满足所有储氢罐")
+    if initial_ratio < lower or initial_ratio > upper:
+        raise ValueError(
+            "初始氢储SOC(0.0-1.0)必须位于储氢罐SOC范围"
+            f"{format_log_number(lower)}-{format_log_number(upper)}内"
+        )
 
 
 def fleet_self_discharge_rate(devices: list[dict[str, Any]], default: float) -> float:

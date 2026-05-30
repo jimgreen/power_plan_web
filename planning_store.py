@@ -1103,6 +1103,51 @@ def numeric(value: Any, default: float = 0.0) -> float:
     return number if number == number and number not in (float("inf"), float("-inf")) else default
 
 
+def format_ratio(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def active_device_soc_window(
+    payload: dict[str, Any],
+    key: str,
+    capacity_field: str,
+    default_lower: float,
+    default_upper: float,
+) -> tuple[float, float] | None:
+    lower: float | None = None
+    upper: float | None = None
+    capacity_rule = DEVICE_FIELD_RULES[capacity_field]
+    for row in payload.get(key, []):
+        if not isinstance(row, dict):
+            continue
+        if not (
+            validate_device_field_value(row.get(capacity_field, ""), capacity_rule)
+            and validate_device_field_value(row.get("quantity_upper", ""), DEVICE_FIELD_RULES["quantity_upper"])
+            and validate_device_field_value(row.get("soc_upper", ""), DEVICE_FIELD_RULES["soc_upper"])
+            and validate_device_field_value(row.get("soc_lower", ""), DEVICE_FIELD_RULES["soc_lower"])
+        ):
+            continue
+        if numeric(row.get(capacity_field), 0.0) <= 0 or numeric(row.get("quantity_upper"), 0.0) <= 0:
+            continue
+        row_lower = numeric(row.get("soc_lower"), default_lower)
+        row_upper = numeric(row.get("soc_upper"), default_upper)
+        if row_upper < row_lower:
+            continue
+        lower = row_lower if lower is None else max(lower, row_lower)
+        upper = row_upper if upper is None else min(upper, row_upper)
+    if lower is None or upper is None:
+        return None
+    return lower, upper
+
+
+def active_storage_battery_soc_window(payload: dict[str, Any]) -> tuple[float, float] | None:
+    return active_device_soc_window(payload, "storage_battery_packs", "battery_capacity", 0.1, 0.9)
+
+
+def active_hydrogen_tank_soc_window(payload: dict[str, Any]) -> tuple[float, float] | None:
+    return active_device_soc_window(payload, "hydrogen_tanks", "hydrogen_tank_capacity", 0.15, 0.85)
+
+
 def validate_device_field_value(value: Any, rule: dict[str, Any]) -> bool:
     # Keep browser-side and server-side numeric validation in sync by using the
     # same small rule dictionary for both paths.
@@ -1212,8 +1257,38 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
     preferred_solver = normalize_preferred_solver(row.get("preferred_solver"))
     if preferred_solver not in {"auto", "gurobi", "cplex", "mosek", "scipy"}:
         messages.append({"level": "error", "message": "优先求解器必须为auto、gurobi、cplex、mosek或scipy"})
-    number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
-    number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
+    initial_storage_soc = number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
+    storage_soc_window = active_storage_battery_soc_window(payload)
+    if initial_storage_soc is not None and storage_soc_window is not None:
+        lower, upper = storage_soc_window
+        if lower > upper:
+            messages.append({"level": "error", "message": "储能电池组SOC范围不存在公共区间，初始电储SOC无法同时满足所有储能电池组"})
+        elif initial_storage_soc < lower or initial_storage_soc > upper:
+            messages.append(
+                {
+                    "level": "error",
+                    "message": (
+                        "初始电储SOC(0.0-1.0)必须位于储能电池组SOC范围"
+                        f"{format_ratio(lower)}-{format_ratio(upper)}内"
+                    ),
+                }
+            )
+    initial_hydrogen_soc = number_in_range("initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", 0, 1)
+    hydrogen_soc_window = active_hydrogen_tank_soc_window(payload)
+    if initial_hydrogen_soc is not None and hydrogen_soc_window is not None:
+        lower, upper = hydrogen_soc_window
+        if lower > upper:
+            messages.append({"level": "error", "message": "储氢罐SOC范围不存在公共区间，初始氢储SOC无法同时满足所有储氢罐"})
+        elif initial_hydrogen_soc < lower or initial_hydrogen_soc > upper:
+            messages.append(
+                {
+                    "level": "error",
+                    "message": (
+                        "初始氢储SOC(0.0-1.0)必须位于储氢罐SOC范围"
+                        f"{format_ratio(lower)}-{format_ratio(upper)}内"
+                    ),
+                }
+            )
     for key, label in (
         ("storage_frequency_regulation_enabled", "储能是否参与调频"),
         ("frequency_security_constraint_enabled", "是否考虑频率安全约束"),

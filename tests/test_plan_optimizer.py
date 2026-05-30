@@ -1079,6 +1079,27 @@ class PlanOptimizerTest(unittest.TestCase):
             constraints,
         )
 
+    def test_planning_optimization_rejects_initial_hydrogen_soc_outside_tank_limits(self):
+        payload = self._payload()
+        payload["hydrogen_tanks"][0].update(
+            {"hydrogen_tank_capacity": 100, "quantity_lower": 1, "quantity_upper": 1, "soc_upper": 0.85, "soc_lower": 0.6}
+        )
+        payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.5
+
+        with self.assertRaisesRegex(ValueError, "初始氢储SOC"):
+            plan_optimizer.run_optimization(payload, horizon_hours=1)
+
+    def test_planning_optimization_rejects_initial_storage_soc_outside_battery_limits(self):
+        payload = self._payload()
+        payload["storage_pcs"][0].update({"power_capacity": 10, "quantity_lower": 1, "quantity_upper": 1})
+        payload["storage_battery_packs"][0].update(
+            {"battery_capacity": 100, "quantity_lower": 1, "quantity_upper": 1, "soc_upper": 0.9, "soc_lower": 0.55}
+        )
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
+
+        with self.assertRaisesRegex(ValueError, "初始电储SOC"):
+            plan_optimizer.run_optimization(payload, horizon_hours=1)
+
     def test_storage_charge_and_discharge_use_storage_pcs_capacity(self):
         payload = self._payload()
         payload["storage_pcs"][0].update(

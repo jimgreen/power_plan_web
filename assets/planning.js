@@ -3888,6 +3888,8 @@ function collectPlanningParameterWarnings() {
       messages.push({ level: "error", message: `${label}不能大于${options.max}` });
     }
   });
+  messages.push(...collectStorageInitialSocWarning(row));
+  messages.push(...collectHydrogenInitialSocWarning(row));
   const nominalFrequency = Number(row.nominal_frequency_hz);
   const nadirLower = Number(row.frequency_nadir_lower_hz);
   const peakUpper = Number(row.frequency_peak_upper_hz);
@@ -3909,6 +3911,85 @@ function collectPlanningParameterWarnings() {
     messages.push({ level: "error", message: "稳态频率上限(Hz)不能小于稳态频率下限(Hz)" });
   }
   return messages;
+}
+
+function collectStorageInitialSocWarning(row) {
+  const initialSoc = Number(row.initial_storage_soc_ratio);
+  if (!Number.isFinite(initialSoc)) return [];
+  const window = activeStorageBatterySocWindow();
+  if (!window) return [];
+  if (window.lower > window.upper) {
+    return [{ level: "error", message: "储能电池组SOC范围不存在公共区间，初始电储SOC无法同时满足所有储能电池组" }];
+  }
+  if (initialSoc < window.lower || initialSoc > window.upper) {
+    return [{
+      level: "error",
+      message: `初始电储SOC(0.0-1.0)必须位于储能电池组SOC范围${formatSocRatio(window.lower)}-${formatSocRatio(window.upper)}内`,
+    }];
+  }
+  return [];
+}
+
+function collectHydrogenInitialSocWarning(row) {
+  const initialSoc = Number(row.initial_hydrogen_storage_ratio);
+  if (!Number.isFinite(initialSoc)) return [];
+  const window = activeHydrogenTankSocWindow();
+  if (!window) return [];
+  if (window.lower > window.upper) {
+    return [{ level: "error", message: "储氢罐SOC范围不存在公共区间，初始氢储SOC无法同时满足所有储氢罐" }];
+  }
+  if (initialSoc < window.lower || initialSoc > window.upper) {
+    return [{
+      level: "error",
+      message: `初始氢储SOC(0.0-1.0)必须位于储氢罐SOC范围${formatSocRatio(window.lower)}-${formatSocRatio(window.upper)}内`,
+    }];
+  }
+  return [];
+}
+
+function activeStorageBatterySocWindow() {
+  return activeDeviceSocWindow({
+    rows: state.payload?.storage_battery_packs || [],
+    capacityField: "battery_capacity",
+  });
+}
+
+function activeHydrogenTankSocWindow() {
+  return activeDeviceSocWindow({
+    rows: state.payload?.hydrogen_tanks || [],
+    capacityField: "hydrogen_tank_capacity",
+  });
+}
+
+function activeDeviceSocWindow({ rows, capacityField }) {
+  if (!state.payload) return null;
+  let lower = null;
+  let upper = null;
+  rows.forEach((row) => {
+    if (!validateDeviceFieldValue(row[capacityField], deviceFieldRules[capacityField])
+      || !validateDeviceFieldValue(row.quantity_upper, deviceFieldRules.quantity_upper)
+      || !validateDeviceFieldValue(row.soc_upper, deviceFieldRules.soc_upper)
+      || !validateDeviceFieldValue(row.soc_lower, deviceFieldRules.soc_lower)) {
+      return;
+    }
+    if (Number(row[capacityField]) <= 0 || Number(row.quantity_upper) <= 0) {
+      return;
+    }
+    const rowLower = Number(row.soc_lower);
+    const rowUpper = Number(row.soc_upper);
+    if (rowUpper < rowLower) {
+      return;
+    }
+    lower = lower === null ? rowLower : Math.max(lower, rowLower);
+    upper = upper === null ? rowUpper : Math.min(upper, rowUpper);
+  });
+  return lower === null || upper === null ? null : { lower, upper };
+}
+
+function formatSocRatio(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return number.toFixed(4).replace(/\.?0+$/, "");
 }
 
 function deviceFieldsForKey(key) {

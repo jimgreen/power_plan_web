@@ -6646,6 +6646,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("return 0.85", script)
         self.assertIn('spec[0] === "hydrogen_tanks" && field === "soc_lower"', script)
         self.assertIn("return 0.15", script)
+        self.assertIn("collectHydrogenInitialSocWarning", script)
+        self.assertIn("初始氢储SOC(0.0-1.0)必须位于储氢罐SOC范围", script)
+        self.assertIn("collectStorageInitialSocWarning", script)
+        self.assertIn("初始电储SOC(0.0-1.0)必须位于储能电池组SOC范围", script)
 
     def test_planning_scheme_actions_validate_duplicates_and_delete_current_scheme(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
