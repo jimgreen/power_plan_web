@@ -595,6 +595,53 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn({("diesel_on_count", 23, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
         self.assertNotIn({("diesel_on_count", 24, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
 
+    def test_planning_model_closes_electrochemical_storage_soc_each_day(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
+        payload["storage_battery_packs"][0].update(
+            {"battery_capacity": 100, "quantity_lower": 1, "quantity_upper": 2}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:49])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower.copy()
+            captured["constraint_upper"] = constraint_upper.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        index_to_key = {index: key for key, index in variables.items()}
+        equality_rows = []
+        matrix = captured["constraints"]
+        for row_index in range(matrix.shape[0]):
+            if abs(captured["constraint_lower"][row_index]) > 1e-9 or abs(captured["constraint_upper"][row_index]) > 1e-9:
+                continue
+            row = matrix.getrow(row_index)
+            terms = {index_to_key[int(column)]: float(value) for column, value in zip(row.indices, row.data)}
+            equality_rows.append(terms)
+
+        battery_quantity_key = ("qty", "storage_battery_packs", 0)
+        daily_cycle_terms = {
+            ("storage_soc", 23): 1.0,
+            battery_quantity_key: -50.0,
+        }
+        next_day_cycle_terms = {
+            ("storage_soc", 47): 1.0,
+            battery_quantity_key: -50.0,
+        }
+        non_cycle_midnight_terms = {
+            ("storage_soc", 24): 1.0,
+            battery_quantity_key: -50.0,
+        }
+
+        self.assertIn(daily_cycle_terms, equality_rows)
+        self.assertIn(next_day_cycle_terms, equality_rows)
+        self.assertNotIn(non_cycle_midnight_terms, equality_rows)
+
     def test_planning_optimization_applies_storage_and_hydrogen_self_discharge(self):
         payload = self._payload()
         payload["storage_pcs"][0].update({"power_capacity": 10, "quantity_lower": 1, "quantity_upper": 1})

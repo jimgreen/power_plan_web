@@ -1602,6 +1602,7 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"储能效率={format_log_number(model['storage_charge_efficiency'] * 100)}%/"
             f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
             f"电储自损耗={format_log_number(model['storage_self_discharge_rate'] * 100)}%/天，"
+            "电化学储能按每日SOC闭环，仅参与日内平衡，"
             f"氢储自损耗={format_log_number(model['hydrogen_self_discharge_rate'] * 100)}%/天，"
             f"扰动后平衡={'开启' if model['post_disturbance_power_balance_enabled'] else '关闭'}，"
             f"负荷向上扰动系数={format_log_number(model['load_up_disturbance_factor'])}，"
