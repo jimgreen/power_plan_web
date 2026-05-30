@@ -16,6 +16,8 @@ const state = {
   greenDailyPoints: [],
   safetyDailyPoints: [],
   resultFiles: [],
+  resultsByScheme: {},
+  collapsedSchemes: new Set(),
   selectedResultFile: "",
   planningResultRows: [],
   greenChartSize: null,
@@ -23,6 +25,7 @@ const state = {
   resultChartResizeObserver: null,
   evaluationCurveViewer: null,
   evaluationResultRailWidth: null,
+  evaluationSchemeRailHeight: null,
   curveDataKey: "",
   curvePayload: null,
   loadedCurveKeys: new Set(),
@@ -155,10 +158,12 @@ function renderResultAxisRangeControls(kind) {
   const range = state.axisRanges[kind] || {};
   return `
     <div class="axis-range-controls" aria-label="纵坐标显示范围">
-      <span>纵坐标</span>
-      <label>最小值<input type="number" step="any" data-result-axis-min="${escapeHtml(kind)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
-      <label>最大值<input type="number" step="any" data-result-axis-max="${escapeHtml(kind)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
-      <button type="button" data-result-axis-reset="${escapeHtml(kind)}">自动</button>
+      <button type="button" class="axis-range-toggle">纵坐标配置</button>
+      <div class="axis-range-panel">
+        <label>最小值<input type="number" step="any" data-result-axis-min="${escapeHtml(kind)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+        <label>最大值<input type="number" step="any" data-result-axis-max="${escapeHtml(kind)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+        <button type="button" data-result-axis-reset="${escapeHtml(kind)}">自动</button>
+      </div>
     </div>`;
 }
 
@@ -195,6 +200,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindSeriesToggleButtons();
   bindResultAxisRangeControls();
   bindEvaluationMainResizeHandle();
+  bindEvaluationSchemeListResizeHandle();
   window.addEventListener("resize", () => {
     clampEvaluationMainWidth();
   });
@@ -265,6 +271,7 @@ async function loadSchemes() {
   }
   if (!state.currentScheme && state.schemes.length) state.currentScheme = state.schemes[0].name;
   renderSchemes();
+  loadEvaluationResultTree().catch(showError);
   renderCurrentScheme();
 }
 
@@ -274,10 +281,16 @@ function renderSchemes() {
     list.innerHTML = '<div class="validation-item">暂无方案，请先在参数维护中新建方案。</div>';
     return;
   }
-  list.innerHTML = `<ul class="scheme-list-items" role="listbox">${state.schemes
-    .map((scheme) => `<li class="scheme-item ${scheme.name === state.currentScheme ? "active" : ""}" data-name="${escapeHtml(scheme.name)}" role="option" aria-selected="${scheme.name === state.currentScheme ? "true" : "false"}" tabindex="0">${escapeHtml(scheme.name)}</li>`)
+  list.innerHTML = `<ul class="scheme-list-items evaluation-scheme-tree" role="tree">${state.schemes
+    .map((scheme) => renderEvaluationSchemeTreeNode(scheme))
     .join("")}</ul>`;
-  list.querySelectorAll(".scheme-item").forEach((item) => {
+  list.querySelectorAll("[data-scheme-tree-toggle]").forEach((toggle) => {
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleEvaluationSchemeCollapsed(toggle.dataset.schemeTreeToggle || "");
+    });
+  });
+  list.querySelectorAll(".scheme-item[data-name]").forEach((item) => {
     bindSchemeListItem(item, () => {
       state.currentScheme = item.dataset.name || "";
       renderSchemes();
@@ -290,11 +303,31 @@ function renderSchemes() {
         });
     });
   });
+  list.querySelectorAll(".scheme-result-item").forEach((item) => {
+    bindSchemeListItem(item, () => {
+      state.currentScheme = item.dataset.scheme || "";
+      state.selectedResultFile = item.dataset.result || "";
+      renderSchemes();
+      clearEvaluationResultDisplayForSwitch(state.selectedResultFile);
+      loadEvaluationResults(state.selectedResultFile)
+        .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
+        .catch((error) => {
+          state.isSwitchingResult = false;
+          showError(error);
+        });
+    });
+  });
+  updateEvaluationSchemeListResizeHandle();
 }
 
 function bindSchemeListItem(item, onSelect) {
   item.addEventListener("click", onSelect);
   item.addEventListener("keydown", (event) => {
+    if (item.dataset.name && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      setEvaluationSchemeCollapsed(item.dataset.name, event.key === "ArrowLeft");
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onSelect();
@@ -302,10 +335,64 @@ function bindSchemeListItem(item, onSelect) {
   });
 }
 
+function renderEvaluationSchemeTreeNode(scheme) {
+  const schemeName = scheme.name || "";
+  const activeScheme = schemeName === state.currentScheme;
+  const results = state.resultsByScheme[schemeName];
+  const collapsed = state.collapsedSchemes.has(schemeName);
+  const hasResults = Array.isArray(results) && results.length > 0;
+  const resultItems = Array.isArray(results)
+    ? results.map((item) => renderEvaluationResultTreeItem(schemeName, item)).join("")
+    : '<li class="scheme-result-empty">正在读取结果...</li>';
+  return `<li class="scheme-tree-node${activeScheme ? " active" : ""}" role="none">
+    <div class="scheme-item scheme-tree-parent ${activeScheme ? "active" : ""}" data-name="${escapeHtml(schemeName)}" role="treeitem" aria-selected="${activeScheme ? "true" : "false"}" aria-expanded="${collapsed ? "false" : "true"}" tabindex="0">
+      <span class="scheme-tree-caret ${collapsed ? "collapsed" : ""}" data-scheme-tree-toggle="${escapeHtml(schemeName)}" aria-hidden="true">${collapsed ? "▸" : "▾"}</span>
+      <span class="scheme-tree-label">${escapeHtml(schemeName)}</span>
+    </div>
+    <ul class="scheme-result-list" role="group" ${collapsed ? "hidden" : ""}>
+      ${hasResults ? resultItems : Array.isArray(results) ? '<li class="scheme-result-empty">暂无结果</li>' : resultItems}
+    </ul>
+  </li>`;
+}
+
+function renderEvaluationResultTreeItem(schemeName, item) {
+  const name = item?.name || "";
+  const active = schemeName === state.currentScheme && name === state.selectedResultFile;
+  const readable = item?.readable !== false;
+  const label = resultDisplayName(name) || name;
+  const title = readable ? label : `${label}（无法读取）`;
+  return `<li class="scheme-result-item ${active ? "active" : ""} ${readable ? "" : "unreadable"}" data-scheme="${escapeHtml(schemeName)}" data-result="${escapeHtml(name)}" role="treeitem" aria-selected="${active ? "true" : "false"}" tabindex="0" title="${escapeHtml(title)}">
+    <span>${escapeHtml(label)}</span>
+  </li>`;
+}
+
+async function loadEvaluationResultTree() {
+  const schemes = state.schemes.map((scheme) => scheme.name).filter(Boolean);
+  await Promise.all(schemes.map(async (schemeName) => {
+    if (Array.isArray(state.resultsByScheme[schemeName])) return;
+    const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(schemeName)}&light=1`);
+    state.resultsByScheme[schemeName] = data.results || [];
+  }));
+  renderSchemes();
+}
+
+function toggleEvaluationSchemeCollapsed(schemeName) {
+  if (!schemeName) return;
+  setEvaluationSchemeCollapsed(schemeName, !state.collapsedSchemes.has(schemeName));
+}
+
+function setEvaluationSchemeCollapsed(schemeName, collapsed) {
+  if (!schemeName) return;
+  if (collapsed) state.collapsedSchemes.add(schemeName);
+  else state.collapsedSchemes.delete(schemeName);
+  renderSchemes();
+}
+
 function renderCurrentScheme() {
   const current = document.getElementById("optimizationCurrentScheme");
   if (!current) return;
   current.textContent = currentEvaluationResultLabel();
+  renderCurrentEvaluationResultTitle();
 }
 
 function bindOptimizationActions() {
@@ -315,16 +402,6 @@ function bindOptimizationActions() {
 }
 
 function bindEvaluationResultActions() {
-  document.getElementById("evaluationResultSelect").addEventListener("change", (event) => {
-    state.selectedResultFile = event.target.value || "";
-    clearEvaluationResultDisplayForSwitch(state.selectedResultFile);
-    loadEvaluationResults(state.selectedResultFile)
-      .then(() => refreshOptimizationStatus(state.currentScheme, state.selectedResultFile))
-      .catch((error) => {
-        state.isSwitchingResult = false;
-        showError(error);
-      });
-  });
   document.getElementById("deleteEvaluationResult").addEventListener("click", () => manageEvaluationResult("delete"));
   document.getElementById("copyEvaluationResult").addEventListener("click", copyEvaluationResult);
   document.getElementById("saveEvaluationResult").addEventListener("click", saveEvaluationResult);
@@ -448,10 +525,12 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
   const selectedParam = requestedSelected ? `&filename=${encodeURIComponent(requestedSelected)}` : "";
   const data = await api(`/api/evaluation/results?scheme=${encodeURIComponent(state.currentScheme)}${selectedParam}`);
   state.resultFiles = data.results || [];
+  state.resultsByScheme[state.currentScheme] = state.resultFiles;
   const readableNames = state.resultFiles.filter((item) => item.readable !== false).map((item) => item.name);
   state.selectedResultFile = data.selected || (readableNames.includes(requestedSelected) ? requestedSelected : readableNames[0] || "");
   rememberEvaluationSelection();
   renderCurrentScheme();
+  renderSchemes();
   state.planningResultRows = data.planning_result_rows || [];
   renderEvaluationResults();
   renderEvaluationPlanningResultTable();
@@ -459,22 +538,9 @@ async function loadEvaluationResults(selected = state.selectedResultFile) {
 }
 
 function renderEvaluationResults() {
-  const select = document.getElementById("evaluationResultSelect");
-  if (!state.resultFiles.length) {
-    select.innerHTML = '<option value="">暂无结果文件</option>';
-  } else {
-    const placeholder = state.selectedResultFile ? "" : '<option value="">暂无可读取结果文件</option>';
-    select.innerHTML = placeholder + state.resultFiles.map(renderEvaluationResultOption).join("");
-  }
-  select.value = state.selectedResultFile;
+  renderCurrentEvaluationResultTitle();
   renderEvaluationResultWarnings();
   updateEvaluationResultActions();
-}
-
-function renderEvaluationResultOption(item) {
-  const unreadable = item.readable === false;
-  const label = `${resultDisplayName(item.name)}${unreadable ? "（无法读取）" : ""}`;
-  return `<option value="${escapeHtml(item.name)}">${escapeHtml(label)}</option>`;
 }
 
 function renderEvaluationResultWarnings() {
@@ -495,6 +561,12 @@ function currentEvaluationResultLabel() {
   const schemeName = state.currentScheme || "未选择方案";
   const resultName = resultDisplayName(state.selectedResultFile) || "未选择结果";
   return `当前: ${schemeName}/${resultName}`;
+}
+
+function renderCurrentEvaluationResultTitle() {
+  const title = document.getElementById("evaluationPlanningResultTitle");
+  if (!title) return;
+  title.textContent = `当前结果:${resultDisplayName(state.selectedResultFile) || "未选择结果"}`;
 }
 
 function renderEvaluationPlanningResultTable() {
@@ -1893,6 +1965,94 @@ function bindEvaluationMainResizeHandle() {
   });
 
   applyWidth(currentWidth());
+}
+
+function bindEvaluationSchemeListResizeHandle() {
+  const handle = document.getElementById("evaluationSchemeListResizeHandle");
+  if (!handle) return;
+  const applyHeight = (height) => setEvaluationSchemeRailHeight(height, handle);
+  const currentHeight = () => currentEvaluationSchemeRailHeight();
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = currentHeight();
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => applyHeight(startHeight + moveEvent.clientY - startY);
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const steps = {
+      ArrowUp: -24,
+      ArrowDown: 24,
+      PageUp: -96,
+      PageDown: 96,
+    };
+    if (event.key in steps) {
+      event.preventDefault();
+      applyHeight(currentHeight() + steps[event.key]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyHeight(evaluationSchemeRailHeightBounds().min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyHeight(evaluationSchemeRailHeightBounds().max);
+    }
+  });
+  if (state.evaluationSchemeRailHeight) updateEvaluationSchemeListResizeHandle();
+  else setEvaluationSchemeRailHeight(evaluationSchemeRailHeightBounds().max, handle);
+}
+
+function setEvaluationSchemeRailHeight(height, handle = document.getElementById("evaluationSchemeListResizeHandle")) {
+  const bounds = evaluationSchemeRailHeightBounds();
+  const numericHeight = Number(height);
+  const safeHeight = Math.min(Math.max(Number.isFinite(numericHeight) ? numericHeight : bounds.min, bounds.min), bounds.max);
+  const roundedHeight = Math.round(safeHeight);
+  state.evaluationSchemeRailHeight = roundedHeight;
+  document.documentElement.style.setProperty("--evaluation-scheme-rail-height", `${roundedHeight}px`);
+  handle?.setAttribute("aria-valuenow", String(roundedHeight));
+  handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+}
+
+function currentEvaluationSchemeRailHeight() {
+  const rail = document.querySelector(".evaluation-workspace > .scheme-rail");
+  return state.evaluationSchemeRailHeight || rail?.getBoundingClientRect().height || 240;
+}
+
+function evaluationSchemeRailHeightBounds() {
+  const workspace = document.querySelector(".evaluation-workspace");
+  if (!workspace) return { min: 150, max: 600 };
+  const style = getComputedStyle(workspace);
+  const rowGap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const contentHeight =
+    (workspace.clientHeight || window.innerHeight - 120) -
+    (Number.parseFloat(style.paddingTop) || 0) -
+    (Number.parseFloat(style.paddingBottom) || 0);
+  const bottomRailMinHeight = 260;
+  return {
+    min: 150,
+    max: Math.max(180, Math.min(960, contentHeight - rowGap - bottomRailMinHeight)),
+  };
+}
+
+function updateEvaluationSchemeListResizeHandle() {
+  const handle = document.getElementById("evaluationSchemeListResizeHandle");
+  if (!handle) return;
+  const bounds = evaluationSchemeRailHeightBounds();
+  handle.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  handle.setAttribute("aria-valuenow", String(Math.round(currentEvaluationSchemeRailHeight())));
 }
 
 function setEvaluationResultRailWidth(width, handle = document.getElementById("evaluationMainResizeHandle")) {

@@ -2549,9 +2549,18 @@ def handle_evaluation_results_api_path(
         return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
     try:
         if method == "GET":
-            scheme = parse_qs(query).get("scheme", [""])[0]
-            filename = parse_qs(query).get("filename", [""])[0]
+            query_params = parse_qs(query)
+            scheme = query_params.get("scheme", [""])[0]
+            filename = query_params.get("filename", [""])[0]
+            light = query_params.get("light", [""])[0] in {"1", "true", "yes"}
             selected = selected_evaluation_result_filename(scheme, filename)
+            if light:
+                return _json_response(
+                    {
+                        "selected": selected,
+                        "results": list_evaluation_result_files(scheme),
+                    }
+                )
             return _json_response(
                 {
                     "selected": selected,

@@ -582,10 +582,12 @@ function renderComparisonAxisRangeControls() {
   const range = state.axisRanges.comparisonHourly || {};
   return `
     <div class="axis-range-controls" aria-label="纵坐标显示范围">
-      <span>纵坐标</span>
-      <label>最小值<input type="number" step="any" data-comparison-axis-min value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
-      <label>最大值<input type="number" step="any" data-comparison-axis-max value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
-      <button type="button" data-comparison-axis-reset>自动</button>
+      <button type="button" class="axis-range-toggle">纵坐标配置</button>
+      <div class="axis-range-panel">
+        <label>最小值<input type="number" step="any" data-comparison-axis-min value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+        <label>最大值<input type="number" step="any" data-comparison-axis-max value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+        <button type="button" data-comparison-axis-reset>自动</button>
+      </div>
     </div>`;
 }
 

@@ -78,7 +78,7 @@
       annualHiddenSeries: [],
       curveRangeFilter: defaultCurveRangeFilter(),
       activeGroup: "hourly",
-      annualViewMode: "table",
+      annualViewMode: options.enableAnnualBarComparison ? "bar" : "table",
       annualGridSplit: { column: 50, row: 50 },
       axisRanges: {},
       statsVisible: true,
@@ -123,7 +123,7 @@
       state.annualHiddenSeries = [];
       state.curveRangeFilter = defaultCurveRangeFilter();
       state.activeGroup = "hourly";
-      state.annualViewMode = "table";
+      state.annualViewMode = options.enableAnnualBarComparison ? "bar" : "table";
       state.annualGridSplit = { column: 50, row: 50 };
       state.hoverIndex = null;
       render(message || state.emptyText);
@@ -351,18 +351,21 @@
           </div>
           <label>月份<select data-curve-range-month ${filter.scope === "year" ? "disabled" : ""}>${monthOptions}</select></label>
           <label>日期<select data-curve-range-day ${dayDisabled ? "disabled" : ""}>${dayOptions}</select></label>
+          ${axisControls}
         </div>
-        ${axisControls}`;
+        `;
     }
 
     function renderAxisRangeControls(key) {
       const range = state.axisRanges[key] || {};
       return `
         <div class="axis-range-controls" aria-label="纵坐标显示范围">
-          <span>纵坐标</span>
-          <label>最小值<input type="number" step="any" data-curve-axis-min="${escapeHtml(key)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
-          <label>最大值<input type="number" step="any" data-curve-axis-max="${escapeHtml(key)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
-          <button type="button" data-curve-axis-reset="${escapeHtml(key)}">自动</button>
+          <button type="button" class="axis-range-toggle">纵坐标配置</button>
+          <div class="axis-range-panel">
+            <label>最小值<input type="number" step="any" data-curve-axis-min="${escapeHtml(key)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+            <label>最大值<input type="number" step="any" data-curve-axis-max="${escapeHtml(key)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+            <button type="button" data-curve-axis-reset="${escapeHtml(key)}">自动</button>
+          </div>
         </div>`;
     }
 
@@ -468,14 +471,16 @@
           })()
         : null;
       if (!barMetrics.length && !lineMetric) {
-        return `<section class="annual-comparison-card"><h3>${escapeHtml(definition.title)}</h3><div class="empty-summary">暂无柱图对比数据</div></section>`;
+        return `<section class="annual-comparison-card">
+          ${renderAnnualComparisonHead(definition, [], lineMetric)}
+          <div class="empty-summary">暂无柱图对比数据</div>
+        </section>`;
       }
       const visibleBarMetrics = barMetrics.filter((metric) => !isAnnualSeriesHidden(metric.seriesId));
       const visibleLineMetric = lineMetric && !isAnnualSeriesHidden(lineMetric.seriesId) ? lineMetric : null;
       if (!visibleBarMetrics.length && !visibleLineMetric) {
         return `<section class="annual-comparison-card">
           ${renderAnnualComparisonHead(definition, barMetrics, lineMetric)}
-          ${renderAnnualAxisRangeControls(definition.title, Boolean(lineMetric))}
           <div class="annual-comparison-chart">
             <div class="empty-summary">暂无可显示曲线</div>
           </div>
@@ -528,7 +533,6 @@
 
       return `<section class="annual-comparison-card">
         ${renderAnnualComparisonHead(definition, barMetrics, lineMetric)}
-        ${renderAnnualAxisRangeControls(definition.title, Boolean(lineMetric))}
         <div class="annual-comparison-chart">
           <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(definition.title)}">
             <line class="annual-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
@@ -563,7 +567,10 @@
       return `<div class="annual-comparison-head">
         <h3>${escapeHtml(definition.title)}</h3>
         ${renderAnnualComparisonLegend(barMetrics, lineMetric)}
-        <span class="annual-axis-note">${escapeHtml(axisText)}</span>
+        <div class="annual-head-actions">
+          ${renderAnnualAxisRangeControls(definition.title, Boolean(lineMetric))}
+          <span class="annual-axis-note">${escapeHtml(axisText)}</span>
+        </div>
       </div>`;
     }
 
@@ -580,9 +587,11 @@
           <button type="button" data-annual-axis-reset="${escapeHtml(key)}">自动</button>
         </fieldset>`;
       return `<div class="axis-range-controls annual-axis-range-controls" aria-label="${escapeHtml(title)}纵坐标显示范围">
-        <span>纵坐标</span>
-        ${control("左轴", leftKey, leftRange)}
-        ${hasRightAxis ? control("右轴", rightKey, rightRange) : ""}
+        <button type="button" class="axis-range-toggle">纵坐标配置</button>
+        <div class="axis-range-panel">
+          ${control("左轴", leftKey, leftRange)}
+          ${hasRightAxis ? control("右轴", rightKey, rightRange) : ""}
+        </div>
       </div>`;
     }
 

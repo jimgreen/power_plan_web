@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>方案评估 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260530-axis-range-controls">
+  <link rel="stylesheet" href="assets/planning.css?v=20260530-evaluation-result-actions-bottom">
 </head>
 <body>
   <main class="planning-shell">
@@ -30,11 +30,15 @@
       <aside class="scheme-rail">
         <div class="scheme-list-title">方案列表</div>
         <div id="schemeList" class="scheme-list"></div>
+        <div id="evaluationSchemeListResizeHandle" class="scheme-list-resize-handle" role="separator" tabindex="0" aria-label="调整方案与结果树高度" aria-orientation="horizontal" aria-valuemin="150" aria-valuemax="600" aria-valuenow="0"></div>
       </aside>
 
       <aside class="evaluation-result-rail">
+        <section class="evaluation-planning-result-panel" aria-label="当前结果">
+          <div id="evaluationPlanningResultTitle" class="evaluation-planning-result-title">当前结果:未选择结果</div>
+          <div id="evaluationPlanningResultTable" class="data-table evaluation-planning-result-table"></div>
+        </section>
         <div class="evaluation-result-actions" aria-label="结果文件管理">
-          <select id="evaluationResultSelect" aria-label="结果文件列表"></select>
           <div id="evaluationResultWarnings" class="result-file-warnings" hidden></div>
           <div class="evaluation-result-action-buttons">
             <button id="deleteEvaluationResult" type="button">删除</button>
@@ -43,10 +47,6 @@
             <button id="renameEvaluationResult" type="button">重命名</button>
           </div>
         </div>
-        <section class="evaluation-planning-result-panel" aria-label="当前规划结果">
-          <div class="evaluation-planning-result-title">当前规划结果</div>
-          <div id="evaluationPlanningResultTable" class="data-table evaluation-planning-result-table"></div>
-        </section>
       </aside>
 
       <div id="evaluationMainResizeHandle" class="evaluation-main-resize-handle" role="separator" tabindex="0" aria-label="调整结果显示和评估面板宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="620" aria-valuenow="360"></div>
@@ -95,7 +95,7 @@
   </main>
   <script src="assets/i18n.js?v=20260518-fit-text4"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/result_curves.js?v=20260530-axis-range-controls"></script>
-  <script src="assets/evaluation.js?v=20260530-axis-range-controls"></script>
+  <script src="assets/result_curves.js?v=20260530-axis-popover"></script>
+  <script src="assets/evaluation.js?v=20260530-evaluation-result-actions-bottom"></script>
 </body>
 </html>

@@ -32,6 +32,7 @@ const state = {
   layoutFrame: 0,
   timeChartRenderFrame: 0,
   schemeRailLayoutFrame: 0,
+  schemeRailManualHeight: null,
   pendingTimeSeriesImport: null,
   pendingLoadCurve: null,
   originalLoadCurve: null,
@@ -377,6 +378,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindTimeResizeHandle();
   bindTimeSeriesImportResizeHandle();
   bindWeatherPreviewResizeHandle();
+  bindSchemeListResizeHandle();
   bindActions();
   bindAdaptiveLayout();
   syncAdaptiveLayout();
@@ -565,10 +567,90 @@ function applyAdaptiveSchemeRailLayout() {
   const requiredRailHeight = Math.ceil(verticalChrome + nonListHeight + schemeList.scrollHeight + gapHeight);
   const summaryMinimumHeight = Math.max(280, Math.min(340, summaryRail?.scrollHeight || 280));
   const maxRailHeight = Math.max(150, workspaceContentHeight - rowGap - summaryMinimumHeight);
-  const targetHeight = Math.max(150, Math.min(requiredRailHeight, maxRailHeight));
+  const preferredHeight = Number.isFinite(state.schemeRailManualHeight) ? state.schemeRailManualHeight : maxRailHeight;
+  const targetHeight = Math.max(150, Math.min(preferredHeight, maxRailHeight));
   const capped = requiredRailHeight > targetHeight + 2;
   workspace.style.setProperty("--planning-scheme-rail-height", `${Math.round(targetHeight)}px`);
   rail.classList.toggle("scheme-list-capped", capped);
+  updateSchemeListResizeHandle(targetHeight, maxRailHeight);
+}
+
+function bindSchemeListResizeHandle() {
+  const handle = document.getElementById("schemeListResizeHandle");
+  if (!handle) return;
+  const applyHeight = (height) => {
+    const bounds = schemeRailHeightBounds();
+    state.schemeRailManualHeight = Math.min(Math.max(Number(height) || bounds.min, bounds.min), bounds.max);
+    applyAdaptiveSchemeRailLayout();
+  };
+  const currentHeight = () => currentSchemeRailHeight();
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = currentHeight();
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => applyHeight(startHeight + moveEvent.clientY - startY);
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const steps = {
+      ArrowUp: -24,
+      ArrowDown: 24,
+      PageUp: -96,
+      PageDown: 96,
+    };
+    if (event.key in steps) {
+      event.preventDefault();
+      applyHeight(currentHeight() + steps[event.key]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyHeight(schemeRailHeightBounds().min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyHeight(schemeRailHeightBounds().max);
+    }
+  });
+}
+
+function currentSchemeRailHeight() {
+  const rail = document.querySelector(".planning-scheme-rail-layout")?.closest(".scheme-rail");
+  return state.schemeRailManualHeight || rail?.getBoundingClientRect().height || 240;
+}
+
+function schemeRailHeightBounds() {
+  const workspace = document.querySelector(".workspace");
+  const summaryRail = workspace?.querySelector(".summary-rail");
+  if (!workspace) return { min: 150, max: 600 };
+  const workspaceStyle = getComputedStyle(workspace);
+  const rowGap = parseFloat(workspaceStyle.rowGap || workspaceStyle.gap || 0) || 0;
+  const workspaceContentHeight =
+    workspace.clientHeight -
+    (parseFloat(workspaceStyle.paddingTop) || 0) -
+    (parseFloat(workspaceStyle.paddingBottom) || 0);
+  const summaryMinimumHeight = Math.max(280, Math.min(340, summaryRail?.scrollHeight || 280));
+  return {
+    min: 150,
+    max: Math.max(150, workspaceContentHeight - rowGap - summaryMinimumHeight),
+  };
+}
+
+function updateSchemeListResizeHandle(height, maxHeight) {
+  const handle = document.getElementById("schemeListResizeHandle");
+  if (!handle) return;
+  handle.setAttribute("aria-valuemin", "150");
+  handle.setAttribute("aria-valuemax", String(Math.round(maxHeight || schemeRailHeightBounds().max)));
+  handle.setAttribute("aria-valuenow", String(Math.round(height || currentSchemeRailHeight())));
 }
 
 function applyAdaptiveTimeSeriesLayout() {

@@ -2,12 +2,15 @@ const frequencyState = {
   schemes: [],
   currentScheme: "",
   resultFiles: [],
+  resultsByScheme: {},
+  collapsedSchemes: new Set(),
   selectedResultFile: "",
   status: null,
   pollTimer: null,
   activeResultTab: "metrics",
   frequencyTimeCurve: null,
   frequency8760Rows: [],
+  schemeRailHeight: null,
   axisRanges: {},
 };
 
@@ -25,6 +28,7 @@ const FREQUENCY_8760_SERIES = [
 document.addEventListener("DOMContentLoaded", () => {
   bindFrequencyActions();
   bindFrequencyTabs();
+  bindFrequencySchemeListResize();
   bindFrequencyMetricsResize();
   bindFrequencyTimeResultResize();
   bindFrequencyAxisRangeControls();
@@ -40,6 +44,8 @@ async function loadFrequencyPage() {
     frequencyState.currentScheme = frequencyState.schemes[0].name;
   }
   renderFrequencySchemes();
+  loadFrequencyResultTree().catch(showFrequencyError);
+  setFrequencySchemeRailHeight(frequencySchemeRailHeightBounds().max);
   await loadFrequencyResults(remembered.result || "");
   await refreshFrequencyStatus();
 }
@@ -59,12 +65,6 @@ async function frequencyApi(path, options = {}) {
 }
 
 function bindFrequencyActions() {
-  document.getElementById("frequencyResultSelect")?.addEventListener("change", async (event) => {
-    frequencyState.selectedResultFile = event.target.value || "";
-    rememberFrequencySelection();
-    renderFrequencyCurrentLabel();
-    await refreshFrequencyStatus();
-  });
   document.getElementById("startFrequency")?.addEventListener("click", () => controlFrequency("start"));
   document.getElementById("queueFrequency")?.addEventListener("click", () => controlFrequency("queue"));
   document.getElementById("stopFrequency")?.addEventListener("click", () => controlFrequency(terminalFrequencyAction()));
@@ -178,10 +178,16 @@ function renderFrequencySchemes() {
     list.innerHTML = '<div class="validation-item">暂无方案，请先在参数维护中新建方案。</div>';
     return;
   }
-  list.innerHTML = `<ul class="scheme-list-items" role="listbox">${frequencyState.schemes
-    .map((scheme) => `<li class="scheme-item ${scheme.name === frequencyState.currentScheme ? "active" : ""}" data-name="${escapeHtml(scheme.name)}" role="option" aria-selected="${scheme.name === frequencyState.currentScheme ? "true" : "false"}" tabindex="0">${escapeHtml(scheme.name)}</li>`)
+  list.innerHTML = `<ul class="scheme-list-items evaluation-scheme-tree" role="tree">${frequencyState.schemes
+    .map((scheme) => renderFrequencySchemeTreeNode(scheme))
     .join("")}</ul>`;
-  list.querySelectorAll(".scheme-item").forEach((item) => {
+  list.querySelectorAll("[data-frequency-scheme-toggle]").forEach((toggle) => {
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleFrequencySchemeCollapsed(toggle.dataset.frequencySchemeToggle || "");
+    });
+  });
+  list.querySelectorAll(".scheme-item[data-name]").forEach((item) => {
     const selectScheme = async () => {
       frequencyState.currentScheme = item.dataset.name || "";
       frequencyState.selectedResultFile = "";
@@ -197,10 +203,157 @@ function renderFrequencySchemes() {
       }
     });
   });
+  list.querySelectorAll(".scheme-result-item").forEach((item) => {
+    const selectResult = async () => {
+      frequencyState.currentScheme = item.dataset.scheme || "";
+      frequencyState.selectedResultFile = item.dataset.result || "";
+      renderFrequencySchemes();
+      await loadFrequencyResults(frequencyState.selectedResultFile);
+      await refreshFrequencyStatus();
+    };
+    item.addEventListener("click", () => selectResult().catch(showFrequencyError));
+    item.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectResult().catch(showFrequencyError);
+      }
+    });
+  });
+  updateFrequencySchemeListResizeHandle();
+}
+
+function renderFrequencySchemeTreeNode(scheme) {
+  const schemeName = scheme.name || "";
+  const activeScheme = schemeName === frequencyState.currentScheme;
+  const results = frequencyState.resultsByScheme[schemeName];
+  const collapsed = frequencyState.collapsedSchemes.has(schemeName);
+  const hasResults = Array.isArray(results) && results.length > 0;
+  const resultItems = Array.isArray(results)
+    ? results.map((item) => renderFrequencyResultTreeItem(schemeName, item)).join("")
+    : '<li class="scheme-result-empty">正在读取结果...</li>';
+  return `<li class="scheme-tree-node${activeScheme ? " active" : ""}" role="none">
+    <div class="scheme-item scheme-tree-parent ${activeScheme ? "active" : ""}" data-name="${escapeHtml(schemeName)}" role="treeitem" aria-selected="${activeScheme ? "true" : "false"}" aria-expanded="${collapsed ? "false" : "true"}" tabindex="0">
+      <span class="scheme-tree-caret ${collapsed ? "collapsed" : ""}" data-frequency-scheme-toggle="${escapeHtml(schemeName)}" aria-hidden="true">${collapsed ? "▸" : "▾"}</span>
+      <span class="scheme-tree-label">${escapeHtml(schemeName)}</span>
+    </div>
+    <ul class="scheme-result-list" role="group" ${collapsed ? "hidden" : ""}>
+      ${hasResults ? resultItems : Array.isArray(results) ? '<li class="scheme-result-empty">暂无结果</li>' : resultItems}
+    </ul>
+  </li>`;
+}
+
+function renderFrequencyResultTreeItem(schemeName, item) {
+  const name = item?.name || "";
+  const active = schemeName === frequencyState.currentScheme && name === frequencyState.selectedResultFile;
+  const readable = item?.readable !== false;
+  const label = resultDisplayName(name) || name;
+  const title = readable ? label : `${label}（无法读取）`;
+  return `<li class="scheme-result-item ${active ? "active" : ""} ${readable ? "" : "unreadable"}" data-scheme="${escapeHtml(schemeName)}" data-result="${escapeHtml(name)}" role="treeitem" aria-selected="${active ? "true" : "false"}" tabindex="0" title="${escapeHtml(title)}">
+    <span>${escapeHtml(label)}</span>
+  </li>`;
+}
+
+async function loadFrequencyResultTree() {
+  const schemes = frequencyState.schemes.map((scheme) => scheme.name).filter(Boolean);
+  await Promise.all(schemes.map(async (schemeName) => {
+    if (Array.isArray(frequencyState.resultsByScheme[schemeName])) return;
+    const data = await frequencyApi(`/api/evaluation/results?scheme=${encodeURIComponent(schemeName)}&light=1`);
+    frequencyState.resultsByScheme[schemeName] = data.results || [];
+  }));
+  renderFrequencySchemes();
+}
+
+function toggleFrequencySchemeCollapsed(schemeName) {
+  if (!schemeName) return;
+  if (frequencyState.collapsedSchemes.has(schemeName)) frequencyState.collapsedSchemes.delete(schemeName);
+  else frequencyState.collapsedSchemes.add(schemeName);
+  renderFrequencySchemes();
+}
+
+function bindFrequencySchemeListResize() {
+  const handle = document.getElementById("frequencySchemeListResizeHandle");
+  if (!handle || handle.dataset.resizeBound === "true") return;
+  handle.dataset.resizeBound = "true";
+  const currentHeight = () => frequencyState.schemeRailHeight || document.querySelector(".frequency-workspace > .scheme-rail")?.getBoundingClientRect().height || frequencySchemeRailHeightBounds().max;
+  const applyHeight = (height) => setFrequencySchemeRailHeight(height, handle);
+
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = currentHeight();
+    handle.classList.add("dragging");
+    handle.setPointerCapture?.(event.pointerId);
+    const onMove = (moveEvent) => applyHeight(startHeight + moveEvent.clientY - startY);
+    const onDone = () => {
+      handle.classList.remove("dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onDone);
+      window.removeEventListener("pointercancel", onDone);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onDone);
+    window.addEventListener("pointercancel", onDone);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const steps = { ArrowUp: -24, ArrowDown: 24, PageUp: -96, PageDown: 96 };
+    if (event.key in steps) {
+      event.preventDefault();
+      applyHeight(currentHeight() + steps[event.key]);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      applyHeight(frequencySchemeRailHeightBounds().min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      applyHeight(frequencySchemeRailHeightBounds().max);
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    if (frequencyState.schemeRailHeight) setFrequencySchemeRailHeight(frequencyState.schemeRailHeight, handle);
+    else updateFrequencySchemeListResizeHandle();
+  });
+  updateFrequencySchemeListResizeHandle();
+}
+
+function setFrequencySchemeRailHeight(height, handle = document.getElementById("frequencySchemeListResizeHandle")) {
+  const bounds = frequencySchemeRailHeightBounds();
+  const numericHeight = Number(height);
+  const safeHeight = Math.min(Math.max(Number.isFinite(numericHeight) ? numericHeight : bounds.max, bounds.min), bounds.max);
+  const roundedHeight = Math.round(safeHeight);
+  frequencyState.schemeRailHeight = roundedHeight;
+  document.documentElement.style.setProperty("--evaluation-scheme-rail-height", `${roundedHeight}px`);
+  handle?.setAttribute("aria-valuenow", String(roundedHeight));
+  handle?.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle?.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+}
+
+function frequencySchemeRailHeightBounds() {
+  const workspace = document.querySelector(".frequency-workspace");
+  if (!workspace) return { min: 150, max: 720 };
+  const style = getComputedStyle(workspace);
+  const rowGap = Number.parseFloat(style.rowGap || style.gap) || 0;
+  const contentHeight =
+    (workspace.clientHeight || window.innerHeight - 120) -
+    (Number.parseFloat(style.paddingTop) || 0) -
+    (Number.parseFloat(style.paddingBottom) || 0);
+  const bottomRailMinHeight = 260;
+  return {
+    min: 150,
+    max: Math.max(180, Math.min(960, contentHeight - rowGap - bottomRailMinHeight)),
+  };
+}
+
+function updateFrequencySchemeListResizeHandle() {
+  const handle = document.getElementById("frequencySchemeListResizeHandle");
+  if (!handle) return;
+  const bounds = frequencySchemeRailHeightBounds();
+  handle.setAttribute("aria-valuemin", String(Math.round(bounds.min)));
+  handle.setAttribute("aria-valuemax", String(Math.round(bounds.max)));
+  handle.setAttribute("aria-valuenow", String(Math.round(frequencyState.schemeRailHeight || bounds.max)));
 }
 
 async function loadFrequencyResults(preferred = frequencyState.selectedResultFile) {
-  const select = document.getElementById("frequencyResultSelect");
   if (!frequencyState.currentScheme) {
     frequencyState.resultFiles = [];
     frequencyState.selectedResultFile = "";
@@ -210,31 +363,18 @@ async function loadFrequencyResults(preferred = frequencyState.selectedResultFil
   const selectedParam = preferred ? `&filename=${encodeURIComponent(preferred)}` : "";
   const data = await frequencyApi(`/api/evaluation/results?scheme=${encodeURIComponent(frequencyState.currentScheme)}${selectedParam}`);
   frequencyState.resultFiles = data.results || [];
+  frequencyState.resultsByScheme[frequencyState.currentScheme] = frequencyState.resultFiles;
   const readableNames = frequencyState.resultFiles.filter((item) => item.readable !== false).map((item) => item.name);
   frequencyState.selectedResultFile = data.selected || (readableNames.includes(preferred) ? preferred : readableNames[0] || "");
-  if (select) select.value = frequencyState.selectedResultFile;
   rememberFrequencySelection();
+  renderFrequencySchemes();
   renderFrequencyResults();
   renderFrequencyCurrentLabel();
 }
 
 function renderFrequencyResults() {
-  const select = document.getElementById("frequencyResultSelect");
-  if (!select) return;
-  if (!frequencyState.resultFiles.length) {
-    select.innerHTML = '<option value="">暂无结果文件</option>';
-  } else {
-    const placeholder = frequencyState.selectedResultFile ? "" : '<option value="">暂无可读取结果文件</option>';
-    select.innerHTML = placeholder + frequencyState.resultFiles.map(renderFrequencyResultOption).join("");
-  }
-  select.value = frequencyState.selectedResultFile;
+  renderFrequencySummaryTitle();
   renderFrequencyResultWarnings();
-}
-
-function renderFrequencyResultOption(item) {
-  const unreadable = item.readable === false;
-  const label = `${resultDisplayName(item.name)}${unreadable ? "（无法读取）" : ""}`;
-  return `<option value="${escapeHtml(item.name)}">${escapeHtml(label)}</option>`;
 }
 
 function renderFrequencyResultWarnings() {
@@ -664,10 +804,12 @@ function renderFrequencyAxisRangeControls(key) {
   const range = frequencyState.axisRanges[key] || {};
   return `
     <div class="axis-range-controls" aria-label="纵坐标显示范围">
-      <span>纵坐标</span>
-      <label>最小值<input type="number" step="any" data-frequency-axis-min="${escapeHtml(key)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
-      <label>最大值<input type="number" step="any" data-frequency-axis-max="${escapeHtml(key)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
-      <button type="button" data-frequency-axis-reset="${escapeHtml(key)}">自动</button>
+      <button type="button" class="axis-range-toggle">纵坐标配置</button>
+      <div class="axis-range-panel">
+        <label>最小值<input type="number" step="any" data-frequency-axis-min="${escapeHtml(key)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+        <label>最大值<input type="number" step="any" data-frequency-axis-max="${escapeHtml(key)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+        <button type="button" data-frequency-axis-reset="${escapeHtml(key)}">自动</button>
+      </div>
     </div>`;
 }
 
@@ -732,6 +874,11 @@ function renderFrequencyCurrentLabel() {
   const schemeName = frequencyState.currentScheme || "未选择方案";
   const resultName = resultDisplayName(frequencyState.selectedResultFile) || "未选择结果";
   setText("frequencyCurrentScheme", `当前: ${schemeName}/${resultName}`);
+  renderFrequencySummaryTitle();
+}
+
+function renderFrequencySummaryTitle() {
+  setText("frequencySummaryTitle", `当前结果:${resultDisplayName(frequencyState.selectedResultFile) || "未选择结果"}`);
 }
 
 function metricValue(metrics, label, fallback = "-") {
