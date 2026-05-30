@@ -80,6 +80,7 @@
       activeGroup: "hourly",
       annualViewMode: "table",
       annualGridSplit: { column: 50, row: 50 },
+      axisRanges: {},
       statsVisible: true,
       statsPosition: null,
       statsDrag: null,
@@ -87,6 +88,7 @@
       listInteractionsBound: false,
       chartControlsBound: false,
       annualLegendBound: false,
+      annualAxisBound: false,
       hoverIndex: null,
       emptyText: options.emptyText || "暂无小时级曲线",
       promptText: options.promptText || "请选择小时级曲线",
@@ -290,9 +292,12 @@
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
       const values = visibleSeries.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
-      const minY = values.length ? Math.min(...values, 0) : 0;
-      const maxY = values.length ? Math.max(...values, 1) : 1;
-      const ySpan = Math.max(maxY - minY, 1);
+      const autoMinY = values.length ? Math.min(...values, 0) : 0;
+      const autoMaxY = values.length ? Math.max(...values, 1) : 1;
+      const axisRange = applyAxisRange(autoMinY, autoMaxY, state.axisRanges[state.activeGroup]);
+      const minY = axisRange.min;
+      const maxY = axisRange.max;
+      const ySpan = Math.max(maxY - minY, 0.00001);
       const maxPoints = Math.max(...visibleSeries.map((item) => item.points.length), 1);
       const xAt = (index, total) => margin.left + (total <= 1 ? plotWidth / 2 : (index / (total - 1)) * plotWidth);
       const yAt = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
@@ -326,7 +331,9 @@
     }
 
     function renderRangeControls() {
-      if (state.activeGroup !== "hourly" && state.activeGroup !== "daily") return "";
+      if (state.activeGroup === "annual") return "";
+      const axisControls = renderAxisRangeControls(state.activeGroup);
+      if (state.activeGroup !== "hourly" && state.activeGroup !== "daily") return axisControls;
       const filter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
       const monthOptions = MONTH_RANGES.map(([label], index) => `<option value="${index}" ${index === filter.month ? "selected" : ""}>${label}</option>`).join("");
       const dayOptions = availableDaysInMonth(filter.month)
@@ -344,13 +351,42 @@
           </div>
           <label>月份<select data-curve-range-month ${filter.scope === "year" ? "disabled" : ""}>${monthOptions}</select></label>
           <label>日期<select data-curve-range-day ${dayDisabled ? "disabled" : ""}>${dayOptions}</select></label>
+        </div>
+        ${axisControls}`;
+    }
+
+    function renderAxisRangeControls(key) {
+      const range = state.axisRanges[key] || {};
+      return `
+        <div class="axis-range-controls" aria-label="纵坐标显示范围">
+          <span>纵坐标</span>
+          <label>最小值<input type="number" step="any" data-curve-axis-min="${escapeHtml(key)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+          <label>最大值<input type="number" step="any" data-curve-axis-max="${escapeHtml(key)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+          <button type="button" data-curve-axis-reset="${escapeHtml(key)}">自动</button>
         </div>`;
+    }
+
+    function applyAxisRange(autoMin, autoMax, range = {}) {
+      let min = Number(range.min);
+      let max = Number(range.max);
+      const hasMin = Number.isFinite(min);
+      const hasMax = Number.isFinite(max);
+      if (hasMin && hasMax && max > min) return { min, max };
+      if (hasMin && !hasMax) return { min, max: Math.max(autoMax, min + 1) };
+      if (!hasMin && hasMax) return { min: Math.min(autoMin, max - 1), max };
+      return { min: autoMin, max: autoMax };
     }
 
     function bindRangeControls(target) {
       if (!target || state.chartControlsBound) return;
       state.chartControlsBound = true;
       target.addEventListener("click", (event) => {
+        const resetButton = event.target.closest("[data-curve-axis-reset]");
+        if (resetButton && target.contains(resetButton)) {
+          delete state.axisRanges[resetButton.dataset.curveAxisReset || state.activeGroup];
+          render();
+          return;
+        }
         const scopeButton = event.target.closest("[data-curve-range-scope]");
         if (!scopeButton || !target.contains(scopeButton) || scopeButton.disabled) return;
         state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, scope: scopeButton.dataset.curveRangeScope || "year" }, state.activeGroup);
@@ -358,6 +394,18 @@
         render();
       });
       target.addEventListener("change", (event) => {
+        if (event.target.matches("[data-curve-axis-min], [data-curve-axis-max]")) {
+          const key = event.target.dataset.curveAxisMin || event.target.dataset.curveAxisMax || state.activeGroup;
+          const previous = state.axisRanges[key] || {};
+          const value = event.target.value === "" ? "" : Number(event.target.value);
+          const next = { ...previous };
+          if (event.target.matches("[data-curve-axis-min]")) next.min = Number.isFinite(value) ? value : "";
+          if (event.target.matches("[data-curve-axis-max]")) next.max = Number.isFinite(value) ? value : "";
+          state.axisRanges[key] = next;
+          state.hoverIndex = null;
+          render();
+          return;
+        }
         if (event.target.matches("[data-curve-range-month]")) {
           state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, month: Number(event.target.value), day: 1 }, state.activeGroup);
           state.hoverIndex = null;
@@ -405,6 +453,7 @@
       bindAnnualGridResizers(target);
       bindAnnualChartHover(target);
       bindAnnualLegendToggles(target);
+      bindAnnualAxisRangeControls(target);
     }
 
     function renderAnnualComparisonChart(definition, caseHeaders) {
@@ -426,6 +475,7 @@
       if (!visibleBarMetrics.length && !visibleLineMetric) {
         return `<section class="annual-comparison-card">
           ${renderAnnualComparisonHead(definition, barMetrics, lineMetric)}
+          ${renderAnnualAxisRangeControls(definition.title, Boolean(lineMetric))}
           <div class="annual-comparison-chart">
             <div class="empty-summary">暂无可显示曲线</div>
           </div>
@@ -439,17 +489,27 @@
       const plotHeight = height - margin.top - margin.bottom;
       const leftValues = visibleBarMetrics.flatMap((metric) => metric.values).filter(Number.isFinite);
       const rightValues = visibleLineMetric ? visibleLineMetric.values.filter(Number.isFinite) : [];
-      const leftMax = Math.max(...leftValues, 1);
-      const rightMax = Math.max(...rightValues, 1);
+      const leftAutoMin = Math.min(...leftValues, 0);
+      const leftAutoMax = Math.max(...leftValues, 1);
+      const rightAutoMin = Math.min(...rightValues, 0);
+      const rightAutoMax = Math.max(...rightValues, 1);
+      const leftAxis = applyAxisRange(leftAutoMin, leftAutoMax, state.axisRanges[annualAxisRangeKey(definition.title, "left")]);
+      const rightAxis = applyAxisRange(rightAutoMin, rightAutoMax, state.axisRanges[annualAxisRangeKey(definition.title, "right")]);
+      const leftMin = leftAxis.min;
+      const leftMax = leftAxis.max;
+      const rightMin = rightAxis.min;
+      const rightMax = rightAxis.max;
       const groupWidth = plotWidth / Math.max(caseHeaders.length, 1);
       const gap = Math.min(8, Math.max(3, groupWidth * 0.04));
       const barWidth = Math.max(5, Math.min(26, (groupWidth - 22) / Math.max(visibleBarMetrics.length + 0.5, 1)));
       const groupedWidth = visibleBarMetrics.length * barWidth + Math.max(visibleBarMetrics.length - 1, 0) * gap;
       const xCenter = (index) => margin.left + groupWidth * index + groupWidth / 2;
-      const yLeft = (value) => margin.top + plotHeight - (Math.max(Number(value) || 0, 0) / leftMax) * plotHeight;
-      const yRight = (value) => margin.top + plotHeight - (Math.max(Number(value) || 0, 0) / rightMax) * plotHeight;
+      const yLeft = (value) => margin.top + plotHeight - ((Number(value) - leftMin) / Math.max(0.00001, leftMax - leftMin)) * plotHeight;
+      const yRight = (value) => margin.top + plotHeight - ((Number(value) - rightMin) / Math.max(0.00001, rightMax - rightMin)) * plotHeight;
+      const clampY = (value) => Math.min(Math.max(value, margin.top), height - margin.bottom);
+      const leftBaseY = clampY(yLeft(leftMin > 0 ? leftMin : 0));
       const linePoints = visibleLineMetric
-        ? visibleLineMetric.values.map((value, index) => `${xCenter(index).toFixed(2)},${yRight(value).toFixed(2)}`)
+        ? visibleLineMetric.values.map((value, index) => `${xCenter(index).toFixed(2)},${clampY(yRight(value)).toFixed(2)}`)
         : [];
       const linePointOverlays = visibleLineMetric ? renderAnnualLinePoints({ width, height, xCenter, yRight, lineMetric: visibleLineMetric, caseHeaders }) : "";
       const overlays = renderAnnualChartLabels({
@@ -459,13 +519,16 @@
         groupWidth,
         xCenter,
         caseHeaders,
+        leftMin,
         leftMax,
+        rightMin,
         rightMax,
         lineMetric: visibleLineMetric,
       });
 
       return `<section class="annual-comparison-card">
         ${renderAnnualComparisonHead(definition, barMetrics, lineMetric)}
+        ${renderAnnualAxisRangeControls(definition.title, Boolean(lineMetric))}
         <div class="annual-comparison-chart">
           <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(definition.title)}">
             <line class="annual-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
@@ -480,8 +543,8 @@
                 .map((value, caseIndex) => {
                   const safeValue = Math.max(Number(value) || 0, 0);
                   const x = xCenter(caseIndex) - groupedWidth / 2 + metricIndex * (barWidth + gap);
-                  const y = yLeft(safeValue);
-                  const h = Math.max(height - margin.bottom - y, 0);
+                  const y = Math.min(clampY(yLeft(safeValue)), leftBaseY);
+                  const h = Math.max(leftBaseY - y, 0);
                   return `<rect class="annual-bar" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${ANNUAL_BAR_COLORS[metricIndex % ANNUAL_BAR_COLORS.length]}" data-annual-chart-hit="bar" data-annual-chart-title="${escapeHtml(definition.title)}" data-annual-chart-case="${escapeHtml(caseHeaders[caseIndex])}" data-annual-chart-metric="${escapeHtml(metric.label)}" data-annual-chart-value="${escapeHtml(formatAnnualMetricValue(safeValue, metric))}" data-annual-chart-unit="${escapeHtml(metric.unit || "")}"></rect>`;
                 })
                 .join(""),
@@ -504,7 +567,52 @@
       </div>`;
     }
 
-    function renderAnnualChartLabels({ width, height, margin, groupWidth, xCenter, caseHeaders, leftMax, rightMax, lineMetric }) {
+    function renderAnnualAxisRangeControls(title, hasRightAxis) {
+      const leftKey = annualAxisRangeKey(title, "left");
+      const rightKey = annualAxisRangeKey(title, "right");
+      const leftRange = state.axisRanges[leftKey] || {};
+      const rightRange = state.axisRanges[rightKey] || {};
+      const control = (axisLabel, key, range) => `
+        <fieldset>
+          <legend>${escapeHtml(axisLabel)}</legend>
+          <label>最小值<input type="number" step="any" data-annual-axis-min="${escapeHtml(key)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+          <label>最大值<input type="number" step="any" data-annual-axis-max="${escapeHtml(key)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+          <button type="button" data-annual-axis-reset="${escapeHtml(key)}">自动</button>
+        </fieldset>`;
+      return `<div class="axis-range-controls annual-axis-range-controls" aria-label="${escapeHtml(title)}纵坐标显示范围">
+        <span>纵坐标</span>
+        ${control("左轴", leftKey, leftRange)}
+        ${hasRightAxis ? control("右轴", rightKey, rightRange) : ""}
+      </div>`;
+    }
+
+    function annualAxisRangeKey(title, axis) {
+      return `annual::${title || ""}::${axis || "left"}`;
+    }
+
+    function bindAnnualAxisRangeControls(target) {
+      if (!target || state.annualAxisBound) return;
+      state.annualAxisBound = true;
+      target.addEventListener("change", (event) => {
+        if (!event.target.matches("[data-annual-axis-min], [data-annual-axis-max]")) return;
+        const key = event.target.dataset.annualAxisMin || event.target.dataset.annualAxisMax || "";
+        const previous = state.axisRanges[key] || {};
+        const value = event.target.value === "" ? "" : Number(event.target.value);
+        const next = { ...previous };
+        if (event.target.matches("[data-annual-axis-min]")) next.min = Number.isFinite(value) ? value : "";
+        if (event.target.matches("[data-annual-axis-max]")) next.max = Number.isFinite(value) ? value : "";
+        state.axisRanges[key] = next;
+        render();
+      });
+      target.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-annual-axis-reset]");
+        if (!button || !target.contains(button)) return;
+        delete state.axisRanges[button.dataset.annualAxisReset || ""];
+        render();
+      });
+    }
+
+    function renderAnnualChartLabels({ width, height, margin, groupWidth, xCenter, caseHeaders, leftMin, leftMax, rightMin, rightMax, lineMetric }) {
       const pctX = (value) => ((value / Math.max(width, 1)) * 100).toFixed(2);
       const pctY = (value) => ((value / Math.max(height, 1)) * 100).toFixed(2);
       const leftX = pctX(margin.left);
@@ -517,11 +625,11 @@
       const rightLabelStyle = `left:calc(${rightX}% + 8px); width:max(0px, calc(100% - ${rightX}% - 12px));`;
       const rightAxisLabels = lineMetric
         ? `<span class="annual-chart-axis-label annual-chart-axis-label-right" style="${rightLabelStyle} top:${topY}%">${escapeHtml(formatAnnualAxisValue(rightMax, lineMetric))}</span>
-          <span class="annual-chart-axis-label annual-chart-axis-label-right" style="${rightLabelStyle} top:${bottomY}%">0</span>`
+          <span class="annual-chart-axis-label annual-chart-axis-label-right" style="${rightLabelStyle} top:${bottomY}%">${escapeHtml(formatAnnualAxisValue(rightMin, lineMetric))}</span>`
         : "";
       return `<div class="annual-chart-axis-labels" aria-hidden="true">
           <span class="annual-chart-axis-label annual-chart-axis-label-left" style="${leftLabelStyle} top:${topY}%">${escapeHtml(formatAxis(leftMax))}</span>
-          <span class="annual-chart-axis-label annual-chart-axis-label-left" style="${leftLabelStyle} top:${bottomY}%">0</span>
+          <span class="annual-chart-axis-label annual-chart-axis-label-left" style="${leftLabelStyle} top:${bottomY}%">${escapeHtml(formatAxis(leftMin))}</span>
           ${rightAxisLabels}
         </div>
         <div class="annual-chart-x-axis" aria-hidden="true" style="--annual-x-label-width:${xLabelWidth}%">${caseHeaders

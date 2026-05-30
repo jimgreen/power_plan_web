@@ -18,6 +18,7 @@ const state = {
   tableHeight: null,
   tableColumnWidths: [1, 1, 1],
   hoverIndex: null,
+  axisRanges: {},
   curveDataKey: "",
   loadedCurveKeys: new Set(),
   hourlyCurvePreloadToken: 0,
@@ -38,6 +39,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindAddTab();
   bindComparisonTableColumnResizeHandles();
   bindComparisonTableCurveResizeHandle();
+  bindComparisonAxisRangeControls();
   restoreComparisonTabs();
   loadSchemes().catch(showError);
 });
@@ -541,9 +543,12 @@ function renderComparisonCurveChart() {
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const allY = series.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
-  const minY = Math.min(...allY, 0);
-  const maxY = Math.max(...allY, 1);
-  const ySpan = Math.max(maxY - minY, 1);
+  const autoMinY = Math.min(...allY, 0);
+  const autoMaxY = Math.max(...allY, 1);
+  const axisRange = applyAxisRange(autoMinY, autoMaxY, state.axisRanges.comparisonHourly);
+  const minY = axisRange.min;
+  const maxY = axisRange.max;
+  const ySpan = Math.max(maxY - minY, 0.00001);
   const maxPoints = Math.max(...series.map((item) => item.points.length), 1);
   const xAt = (index, total) => margin.left + (total <= 1 ? plotWidth / 2 : (index / (total - 1)) * plotWidth);
   const yAt = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
@@ -554,6 +559,7 @@ function renderComparisonCurveChart() {
     y: yAt(minY + ySpan * ratio),
   }));
   target.innerHTML = `
+    ${renderComparisonAxisRangeControls()}
     <div class="comparison-chart-frame" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
       <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(curveNames.join('、'))}曲线对比">
         <line class="comparison-chart-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
@@ -570,6 +576,46 @@ function renderComparisonCurveChart() {
       <div id="comparisonChartTooltip" class="comparison-chart-tooltip" hidden></div>
     </div>`;
   bindComparisonChartHover({ width, height, margin, plotWidth, plotHeight, series });
+}
+
+function renderComparisonAxisRangeControls() {
+  const range = state.axisRanges.comparisonHourly || {};
+  return `
+    <div class="axis-range-controls" aria-label="纵坐标显示范围">
+      <span>纵坐标</span>
+      <label>最小值<input type="number" step="any" data-comparison-axis-min value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+      <label>最大值<input type="number" step="any" data-comparison-axis-max value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+      <button type="button" data-comparison-axis-reset>自动</button>
+    </div>`;
+}
+
+function applyAxisRange(autoMin, autoMax, range = {}) {
+  let min = Number(range.min);
+  let max = Number(range.max);
+  const hasMin = Number.isFinite(min);
+  const hasMax = Number.isFinite(max);
+  if (hasMin && hasMax && max > min) return { min, max };
+  if (hasMin && !hasMax) return { min, max: Math.max(autoMax, min + 1) };
+  if (!hasMin && hasMax) return { min: Math.min(autoMin, max - 1), max };
+  return { min: autoMin, max: autoMax };
+}
+
+function bindComparisonAxisRangeControls() {
+  document.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-comparison-axis-min], [data-comparison-axis-max]")) return;
+    const previous = state.axisRanges.comparisonHourly || {};
+    const value = event.target.value === "" ? "" : Number(event.target.value);
+    const next = { ...previous };
+    if (event.target.matches("[data-comparison-axis-min]")) next.min = Number.isFinite(value) ? value : "";
+    if (event.target.matches("[data-comparison-axis-max]")) next.max = Number.isFinite(value) ? value : "";
+    state.axisRanges.comparisonHourly = next;
+    renderComparisonCurveChart();
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-comparison-axis-reset]")) return;
+    delete state.axisRanges.comparisonHourly;
+    renderComparisonCurveChart();
+  });
 }
 
 function renderYAxisGrid(y, left, right) {

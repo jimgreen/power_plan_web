@@ -31,6 +31,7 @@ const state = {
   isSwitchingResult: false,
   greenSeriesVisibility: null,
   safetySeriesVisibility: null,
+  axisRanges: {},
   seriesToggleBound: false,
   lastOptimizationRenderSignature: "",
 };
@@ -129,6 +130,49 @@ function renderSeriesLegendButtons(kind, seriesList) {
     .join("");
 }
 
+function bindResultAxisRangeControls() {
+  document.addEventListener("change", (event) => {
+    if (!event.target.matches("[data-result-axis-min], [data-result-axis-max]")) return;
+    const kind = event.target.dataset.resultAxisMin || event.target.dataset.resultAxisMax || "";
+    const previous = state.axisRanges[kind] || {};
+    const value = event.target.value === "" ? "" : Number(event.target.value);
+    const next = { ...previous };
+    if (event.target.matches("[data-result-axis-min]")) next.min = Number.isFinite(value) ? value : "";
+    if (event.target.matches("[data-result-axis-max]")) next.max = Number.isFinite(value) ? value : "";
+    state.axisRanges[kind] = next;
+    renderAdaptiveResultChart(kind);
+  });
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-result-axis-reset]");
+    if (!button) return;
+    const kind = button.dataset.resultAxisReset || "";
+    delete state.axisRanges[kind];
+    renderAdaptiveResultChart(kind);
+  });
+}
+
+function renderResultAxisRangeControls(kind) {
+  const range = state.axisRanges[kind] || {};
+  return `
+    <div class="axis-range-controls" aria-label="纵坐标显示范围">
+      <span>纵坐标</span>
+      <label>最小值<input type="number" step="any" data-result-axis-min="${escapeHtml(kind)}" value="${escapeHtml(range.min ?? "")}" placeholder="自动"></label>
+      <label>最大值<input type="number" step="any" data-result-axis-max="${escapeHtml(kind)}" value="${escapeHtml(range.max ?? "")}" placeholder="自动"></label>
+      <button type="button" data-result-axis-reset="${escapeHtml(kind)}">自动</button>
+    </div>`;
+}
+
+function applyAxisRange(autoMin, autoMax, range = {}) {
+  let min = Number(range.min);
+  let max = Number(range.max);
+  const hasMin = Number.isFinite(min);
+  const hasMax = Number.isFinite(max);
+  if (hasMin && hasMax && max > min) return { min, max };
+  if (hasMin && !hasMax) return { min, max: Math.max(autoMax, min + 1) };
+  if (!hasMin && hasMax) return { min: Math.min(autoMin, max - 1), max };
+  return { min: autoMin, max: autoMax };
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   state.evaluationCurveViewer = window.ResultCurveViewer
     ? window.ResultCurveViewer.create({
@@ -149,6 +193,7 @@ document.addEventListener("DOMContentLoaded", () => {
     saveLogs: saveEvaluationLogs,
   });
   bindSeriesToggleButtons();
+  bindResultAxisRangeControls();
   bindEvaluationMainResizeHandle();
   window.addEventListener("resize", () => {
     clampEvaluationMainWidth();
@@ -1187,14 +1232,17 @@ function renderGreenDailyChart(points) {
   const upSeries = greenDailySeries.filter((series) => series.direction === "up" && isSeriesVisible("green", series.key));
   const downSeries = greenDailySeries.filter((series) => series.direction === "down" && isSeriesVisible("green", series.key));
   if (!upSeries.length && !downSeries.length) return `${renderGreenChartLegend()}<div class="empty-summary">暂无可显示曲线</div>`;
-  const upMax = Math.max(
+  const autoUpMax = Math.max(
     ...points.map((point) => upSeries.reduce((total, series) => total + numericValue(point[series.key]), 0)),
     1,
   );
-  const downMax = Math.max(
+  const autoDownMax = Math.max(
     ...points.map((point) => downSeries.reduce((total, series) => total + numericValue(point[series.key]), 0)),
     1,
   );
+  const axisRange = applyAxisRange(-autoDownMax, autoUpMax, state.axisRanges.green);
+  const upMax = Math.max(axisRange.max, 0.001);
+  const downMax = Math.max(-axisRange.min, 0.001);
   const zeroY = margin.top + plotHeight * (upMax / (upMax + downMax));
   const topSpan = Math.max(1, zeroY - margin.top);
   const bottomSpan = Math.max(1, margin.top + plotHeight - zeroY);
@@ -1212,6 +1260,7 @@ function renderGreenDailyChart(points) {
   }));
   return `
     ${renderGreenChartLegend()}
+    ${renderResultAxisRangeControls("green")}
     <svg class="green-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="绿电日曲线" data-chart-kind="green" data-chart-width="${width}" data-chart-height="${height}" data-plot-left="${margin.left}" data-plot-right="${width - margin.right}" data-plot-top="${margin.top}" data-plot-bottom="${height - margin.bottom}">
       <line class="green-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
       <line class="green-zero-line" x1="${margin.left}" y1="${zeroY.toFixed(2)}" x2="${width - margin.right}" y2="${zeroY.toFixed(2)}"></line>
@@ -1252,8 +1301,6 @@ function renderSafetyDailyChart(points) {
   const margin = resultChartMargins(width, height);
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const centerY = margin.top + plotHeight / 2;
-  const halfSpan = Math.max(1, plotHeight / 2);
   const visibleSeries = safetyDailySeries.filter((series) => isSeriesVisible("safety", series.key));
   if (!visibleSeries.length) return `${renderSafetyChartLegend()}<div class="empty-summary">暂无可显示曲线</div>`;
   const nominalFrequency = safetyNominalFrequency(points);
@@ -1261,22 +1308,25 @@ function renderSafetyDailyChart(points) {
     ...points.map((point) => Math.max(...visibleSeries.map((series) => Math.abs(numericFrequency(point[series.key]) - nominalFrequency)))),
     0.001,
   );
+  const axisRange = applyAxisRange(nominalFrequency - maxDeviation, nominalFrequency + maxDeviation, state.axisRanges.safety);
+  const yMin = axisRange.min;
+  const yMax = axisRange.max;
+  const centerY = margin.top + ((yMax - nominalFrequency) / Math.max(0.001, yMax - yMin)) * plotHeight;
   const xAt = (index) => margin.left + (points.length === 1 ? plotWidth / 2 : (index / (points.length - 1)) * plotWidth);
-  const yAt = (value) => centerY - ((numericFrequency(value) - nominalFrequency) / maxDeviation) * halfSpan;
+  const yAt = (value) => margin.top + ((yMax - numericFrequency(value)) / Math.max(0.001, yMax - yMin)) * plotHeight;
   const maxPath = linePath(points, (point) => point.frequency_max, xAt, yAt);
   const minPath = linePath(points, (point) => point.frequency_min, xAt, yAt);
-  const upLabel = `+${formatFrequencyDeviation(maxDeviation)}`;
-  const downLabel = `-${formatFrequencyDeviation(maxDeviation)}`;
   return `
     ${renderSafetyChartLegend()}
+    ${renderResultAxisRangeControls("safety")}
     <svg class="safety-chart-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="安全频率日曲线" data-chart-kind="safety" data-chart-width="${width}" data-chart-height="${height}" data-plot-left="${margin.left}" data-plot-right="${width - margin.right}" data-plot-top="${margin.top}" data-plot-bottom="${height - margin.bottom}">
       <line class="safety-axis-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
       <line class="safety-center-line" x1="${margin.left}" y1="${centerY.toFixed(2)}" x2="${width - margin.right}" y2="${centerY.toFixed(2)}"></line>
       <line class="safety-grid-line" x1="${margin.left}" y1="${margin.top}" x2="${width - margin.right}" y2="${margin.top}"></line>
       <line class="safety-grid-line" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
-      <text class="safety-tick-label" x="${margin.left - 8}" y="${margin.top + 2}">${escapeHtml(upLabel)}</text>
-      <text class="safety-tick-label safety-zero-label" x="${margin.left - 8}" y="${centerY.toFixed(2)}">0</text>
-      <text class="safety-tick-label" x="${margin.left - 8}" y="${height - margin.bottom - 2}">${escapeHtml(downLabel)}</text>
+      <text class="safety-tick-label" x="${margin.left - 8}" y="${margin.top + 2}">${escapeHtml(formatAxisNumber(yMax))}</text>
+      <text class="safety-tick-label safety-zero-label" x="${margin.left - 8}" y="${centerY.toFixed(2)}">${escapeHtml(formatAxisNumber(nominalFrequency))}</text>
+      <text class="safety-tick-label" x="${margin.left - 8}" y="${height - margin.bottom - 2}">${escapeHtml(formatAxisNumber(yMin))}</text>
       ${isSeriesVisible("safety", "frequency_max") ? `<path class="safety-frequency-area up" d="${frequencyAreaPath(points, (point) => point.frequency_max, xAt, yAt, centerY)}"></path><path class="safety-frequency-line up" d="${maxPath}"></path>` : ""}
       ${isSeriesVisible("safety", "frequency_min") ? `<path class="safety-frequency-area down" d="${frequencyAreaPath(points, (point) => point.frequency_min, xAt, yAt, centerY)}"></path><path class="safety-frequency-line down" d="${minPath}"></path>` : ""}
       ${renderSafetyXAxis(points, xAt, centerY, height - margin.bottom, width)}
@@ -1461,6 +1511,8 @@ function formatSignedDeviation(value) {
 function renderOptimizationLogs(logs) {
   const box = document.getElementById("evaluationLogs");
   if (!box) return;
+  const shouldStickToBottom = isLogScrolledNearBottom(box);
+  const previousScrollTop = box.scrollTop;
   if (!logs.length) {
     box.innerHTML = '<div class="log-line">暂无评估日志</div>';
     return;
@@ -1468,7 +1520,12 @@ function renderOptimizationLogs(logs) {
   box.innerHTML = logs
     .map((item) => `<div class="log-line ${escapeHtml(item.level || "")}"><span>${escapeHtml(item.time || "")}</span><strong>${escapeHtml(item.message || "")}</strong></div>`)
     .join("");
-  box.scrollTop = box.scrollHeight;
+  box.scrollTop = shouldStickToBottom ? box.scrollHeight : previousScrollTop;
+}
+
+function isLogScrolledNearBottom(box) {
+  const distance = box.scrollHeight - box.scrollTop - box.clientHeight;
+  return distance <= 12;
 }
 
 function bindLogContextMenu({ boxId, emptyText, clearLogs, saveLogs }) {
