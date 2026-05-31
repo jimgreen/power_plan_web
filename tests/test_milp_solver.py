@@ -75,6 +75,36 @@ class MilpSolverTest(unittest.TestCase):
         self.assertEqual(result.solver, "cplex")
         cplex_mock.assert_called_once()
 
+    def test_solver_option_cplex_uses_native_backend(self):
+        args = self._tiny_problem()
+        seen_options = {}
+
+        def fake_cplex(*call_args):
+            seen_options.update(call_args[7])
+            return self._fake_result("cplex")
+
+        with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=AssertionError("unexpected gurobi")), \
+                patch.object(milp_solver, "solve_milp_with_cplex", side_effect=fake_cplex, create=True), \
+                patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
+            milp_solver.solve_milp(*args, options={"solver": "cplex"}, problem_name="测试模型")
+
+        self.assertEqual(seen_options["solver_backend"], "native")
+
+    def test_solver_option_gurobi_uses_native_backend(self):
+        args = self._tiny_problem()
+        seen_options = {}
+
+        def fake_gurobi(*call_args):
+            seen_options.update(call_args[7])
+            return self._fake_result("gurobi")
+
+        with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=fake_gurobi), \
+                patch.object(milp_solver, "solve_milp_with_cplex", side_effect=AssertionError("unexpected cplex"), create=True), \
+                patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
+            milp_solver.solve_milp(*args, options={"solver": "gurobi"}, problem_name="测试模型")
+
+        self.assertEqual(seen_options["solver_backend"], "native")
+
     def test_solver_option_failure_falls_back_to_default_order(self):
         args = self._tiny_problem()
         with patch.object(milp_solver, "solve_milp_with_cplex", side_effect=RuntimeError("no cplex"), create=True) as cplex_mock, \

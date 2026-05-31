@@ -934,10 +934,11 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     dispatch_milp.emit_builder_diagnostics(builder, log, "规划求解MILP")
     preferred_solver = str(model.get("preferred_solver") or "auto").strip().lower()
     effective_solver = preferred_solver if preferred_solver != "auto" else PLANNING_SOLVER
+    backend_label = planning_solver_backend_label(effective_solver)
     emit(
         log,
         "info",
-        f"求解参数：solver={effective_solver}（默认MOSEK原生Task API），time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
+        f"求解参数：solver={effective_solver}，backend={backend_label}，time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
         22,
     )
     emit(log, "info", "求解设备台数和全年运行联合混合整数线性规划", 25)
@@ -1007,6 +1008,15 @@ def normalize_preferred_solver(value: Any) -> str:
         "scipy-highs": "scipy",
     }
     return aliases.get(solver, "auto")
+
+
+def planning_solver_backend_label(solver: Any) -> str:
+    normalized = normalize_preferred_solver(solver)
+    if normalized in {"gurobi", "cplex", "mosek"}:
+        return "原生后端"
+    if normalized == "scipy":
+        return "SciPy HiGHS后端"
+    return "自动选择"
 
 
 def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

@@ -17,8 +17,15 @@ CUSTOM_SOLVER_OPTIONS = {
     "solver_log_prefix",
     "solver_log_line_limit",
     "solver_log_interval",
+    "solver_backend",
 }
 DEFAULT_SOLVER_ORDER = ("gurobi", "cplex", "mosek", "scipy")
+SOLVER_BACKENDS = {
+    "gurobi": "native",
+    "cplex": "native",
+    "mosek": "native",
+    "scipy": "scipy-highs",
+}
 SOLVER_ALIASES = {
     "": "auto",
     "auto": "auto",
@@ -180,7 +187,7 @@ def solve_milp(
                 constraint_matrix,
                 constraint_lower,
                 constraint_upper,
-                options,
+                options_for_solver_backend(options, candidate),
                 log,
                 problem_name,
             )
@@ -196,6 +203,12 @@ def solve_milp(
 def normalize_solver_name(value: Any) -> str:
     solver = str(value or "auto").strip().lower()
     return SOLVER_ALIASES.get(solver, solver)
+
+
+def options_for_solver_backend(options: dict[str, Any], solver: str) -> dict[str, Any]:
+    next_options = dict(options or {})
+    next_options["solver_backend"] = SOLVER_BACKENDS.get(solver, "")
+    return next_options
 
 
 def solve_milp_with_backend(
@@ -409,7 +422,7 @@ def solve_milp_with_gurobi(
 ) -> SimpleNamespace:
     import gurobipy as gp
 
-    emit(log, "info", "调用Gurobi求解器求解混合整数线性规划", None)
+    emit(log, "info", "调用Gurobi原生后端求解混合整数线性规划", None)
     objective = np.asarray(objective, dtype=float)
     integrality = np.asarray(integrality, dtype=int)
     lower_bounds = finite_gurobi_bounds(np.asarray(lower_bounds, dtype=float), gp.GRB.INFINITY)
@@ -454,6 +467,7 @@ def solve_milp_with_gurobi(
         fun=objective_value,
         message=f"Gurobi status {status_name}",
         solver="gurobi",
+        backend=options.get("solver_backend") or "native",
         status=model.Status,
     )
 
@@ -472,7 +486,7 @@ def solve_milp_with_cplex(
 ) -> SimpleNamespace:
     import cplex
 
-    emit(log, "info", "调用CPLEX求解器求解混合整数线性规划", None)
+    emit(log, "info", "调用CPLEX原生后端求解混合整数线性规划", None)
     objective = np.asarray(objective, dtype=float)
     integrality = np.asarray(integrality, dtype=int)
     lower_bounds = finite_cplex_bounds(np.asarray(lower_bounds, dtype=float), cplex.infinity)
@@ -540,6 +554,7 @@ def solve_milp_with_cplex(
         fun=objective_value,
         message=f"CPLEX status {status_string}",
         solver="cplex",
+        backend=options.get("solver_backend") or "native",
         status=status,
     )
 
@@ -607,6 +622,7 @@ def solve_milp_with_mosek(
         fun=objective_value,
         message=f"MOSEK status {status_text}",
         solver="mosek",
+        backend=options.get("solver_backend") or "native",
         status=solution_status,
     )
 
@@ -707,6 +723,7 @@ def solve_milp_with_scipy(
             scipy_options,
         )
     result.solver = "scipy"
+    result.backend = options.get("solver_backend") or "scipy-highs"
     return result
 
 

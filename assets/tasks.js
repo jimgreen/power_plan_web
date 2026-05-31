@@ -97,10 +97,8 @@ function applyTasksPayload(payload, options = {}) {
 }
 
 function renderTasks() {
-  const hadEvaluationSchemeFilter = Boolean(taskState.evaluationSchemeFilter);
-  const hadFrequencySchemeFilter = Boolean(taskState.frequencySchemeFilter);
-  const evaluationFilterReset = renderSchemeFilter("evaluation", "evaluationSchemeFilter", "evaluationSchemeFilter");
-  const frequencyFilterReset = renderSchemeFilter("frequency", "frequencySchemeFilter", "frequencySchemeFilter");
+  renderSchemeFilter("evaluation", "evaluationSchemeFilter", "evaluationSchemeFilter");
+  renderSchemeFilter("frequency", "frequencySchemeFilter", "frequencySchemeFilter");
   renderTaskSection("optimization", "optimizationTaskTable", "暂无规划计算任务");
   renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
   renderTaskSection("frequency", "frequencyTaskTable", "暂无频率计算任务");
@@ -157,16 +155,12 @@ function renderSchemeFilter(taskTypeKey, selectId, stateKey) {
   const schemeNames = Array.from(
     new Set(taskState.tasks.filter((task) => task.task_type_key === taskTypeKey).map((task) => String(task.scheme || "").trim()).filter(Boolean))
   ).sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
-  let filterReset = false;
-  if (taskState[stateKey] && !schemeNames.includes(taskState[stateKey])) {
-    taskState[stateKey] = "";
-    filterReset = true;
-    rememberTasksPageState({ [stateKey]: "" });
-  }
+  const selectedScheme = String(taskState[stateKey] || "").trim();
+  if (selectedScheme && !schemeNames.includes(selectedScheme)) schemeNames.push(selectedScheme);
+  schemeNames.sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
   select.innerHTML = [`<option value="">全部方案</option>`, ...schemeNames.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`)].join("");
-  select.value = taskState[stateKey];
+  select.value = selectedScheme;
   translateNode(select);
-  return filterReset;
 }
 
 function handleEvaluationSchemeFilterChange(event) {
