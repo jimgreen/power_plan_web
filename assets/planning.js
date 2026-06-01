@@ -45,6 +45,7 @@ const state = {
 let activePlanningParameterGroup = "normal";
 let activeDeviceContextTarget = null;
 let activeDeviceEditingCell = null;
+let activeTimeEditingCell = null;
 
 const PLANNING_PAGE_STATE_KEY = "planning";
 const WEATHER_COORDINATE_STORAGE_KEY = "powerPlanWeatherCoordinate";
@@ -99,6 +100,7 @@ const timeSeriesImportSeries = [
   ["load", "负荷", "#64e6a3", "kW"],
 ];
 
+const timeSeriesValueKeys = new Set(["wind_speed", "solar_irradiance", "temperature", "load"]);
 const weatherPreviewSeries = timeSeriesImportSeries.filter(([key]) => key !== "load");
 
 const curveGeneratorSpecs = {
@@ -646,9 +648,13 @@ function bindActions() {
   timeChart.addEventListener("mousemove", onChartMouseMove);
   timeChart.addEventListener("mouseleave", hideChartCursor);
   timeChart.addEventListener("pointerdown", startChartValueDrag);
-  document.getElementById("timeTable")?.addEventListener("input", (event) => {
+  const timeTable = document.getElementById("timeTable");
+  timeTable?.addEventListener("input", (event) => {
     if (event.target?.matches?.("[data-time-index][data-key]")) onTimeInput(event);
   });
+  timeTable?.addEventListener("pointerdown", onTimeCellPointerDown);
+  timeTable?.addEventListener("focusout", onTimeInputFocusOut);
+  timeTable?.addEventListener("keydown", onTimeInputKeydown);
   document.getElementById("timeSeriesImportPreview")?.addEventListener("input", (event) => {
     if (event.target?.matches?.("[data-time-series-import-index][data-time-series-import-key]")) onTimeSeriesImportInput(event);
   });
@@ -739,6 +745,67 @@ function onDeviceInputKeydown(event) {
   if (event.key !== "Enter" && event.key !== "Escape") return;
   event.preventDefault();
   event.target.blur();
+}
+
+function onTimeCellPointerDown(event) {
+  if (event.button !== 0) return;
+  const cell = event.target?.closest?.(".time-cell");
+  if (!cell || !event.currentTarget.contains(cell)) return;
+  enterTimeCellEdit(cell);
+}
+
+function enterTimeCellEdit(cell) {
+  if (!cell || activeTimeEditingCell === cell) return;
+  exitTimeCellEdit();
+  const input = cell.querySelector(".time-cell-input");
+  if (!input) return;
+  cell.classList.add("editing");
+  input.readOnly = false;
+  input.removeAttribute("readonly");
+  input.tabIndex = 0;
+  activeTimeEditingCell = cell;
+  window.requestAnimationFrame(() => {
+    input.focus({ preventScroll: true });
+    input.select?.();
+  });
+}
+
+function exitTimeCellEdit(cell = activeTimeEditingCell) {
+  if (!cell) return;
+  const input = cell.querySelector(".time-cell-input");
+  cell.classList.remove("editing");
+  if (input) {
+    input.readOnly = true;
+    input.setAttribute("readonly", "readonly");
+    input.tabIndex = -1;
+  }
+  if (activeTimeEditingCell === cell) activeTimeEditingCell = null;
+}
+
+function onTimeInputFocusOut(event) {
+  if (!event.target?.matches?.(".time-cell-input")) return;
+  finalizeTimeInput(event.target);
+  exitTimeCellEdit(event.target.closest(".time-cell"));
+}
+
+function onTimeInputKeydown(event) {
+  if (!event.target?.matches?.(".time-cell-input")) return;
+  if (event.key !== "Enter" && event.key !== "Escape") return;
+  event.preventDefault();
+  event.target.blur();
+}
+
+function finalizeTimeInput(input) {
+  if (!input || !state.payload) return;
+  const row = state.payload.time_series?.[Number(input.dataset.timeIndex)];
+  const key = input.dataset.key;
+  if (!row || !key) return;
+  const value = normalizeTimeSeriesCellValue(key, input.value);
+  row[key] = value;
+  const formatted = formatTimeSeriesCellValue(key, value);
+  input.value = formatted;
+  const display = input.closest(".time-cell")?.querySelector(".time-cell-display");
+  if (display) display.textContent = formatted;
 }
 
 function selectDeviceRow(row) {
@@ -1519,7 +1586,7 @@ async function fetchWeatherHistory() {
     setWeatherImportStatus(`历史气象数据小时数应为8760，当前为${rows.length}`, "error");
     return;
   }
-  state.pendingWeatherRows = rows;
+  state.pendingWeatherRows = normalizeTimeSeriesRows(rows);
   state.pendingWeatherMeta = { year, latitude, longitude };
   rememberWeatherCoordinate(latitude, longitude, year, document.getElementById("weatherPlace")?.value || "");
   renderWeatherPreviewChart(rows);
@@ -1550,9 +1617,9 @@ async function applyPendingWeatherHistory() {
     return {
       ...row,
       datetime: weather.datetime || row.datetime,
-      wind_speed: weather.wind_speed,
-      solar_irradiance: weather.solar_irradiance,
-      temperature: weather.temperature,
+      wind_speed: normalizeTimeSeriesCellValue("wind_speed", weather.wind_speed),
+      solar_irradiance: normalizeTimeSeriesCellValue("solar_irradiance", weather.solar_irradiance),
+      temperature: normalizeTimeSeriesCellValue("temperature", weather.temperature),
     };
   });
   if (nextRows.length !== 8760) {
@@ -1605,7 +1672,7 @@ async function onTimeSeriesImportFileChange(event) {
       method: "POST",
       body: JSON.stringify({ filename: file.name, content_base64 }),
     });
-    const rows = result.time_series || [];
+    const rows = normalizeTimeSeriesRows(result.time_series || []);
     state.pendingTimeSeriesImport = rows;
     renderTimeSeriesImportPreview(rows);
     const level = isTimeSeriesImportWarning(result) ? "warning" : "ok";
@@ -1677,8 +1744,9 @@ function applyImportedTimeSeries(rows, message, updateStatus = true) {
     setWeatherImportStatus(`导入失败：时序数据行数应为8760，当前为${Array.isArray(rows) ? rows.length : 0}`, "error");
     return;
   }
-  state.payload.time_series = rows;
-  state.payload.time_series_count = rows.length;
+  const nextRows = normalizeTimeSeriesRows(rows);
+  state.payload.time_series = nextRows;
+  state.payload.time_series_count = nextRows.length;
   state.month = 0;
   markTimeSeriesDirty();
   renderChart();
@@ -1705,7 +1773,7 @@ function renderTimeSeriesImportPreview(rows) {
   ];
   const tableRows = rows
     .map((row, index) => `<tr><td>${index + 1}</td><td>${escapeHtml(row.datetime || "")}</td>${fields
-      .map(([key]) => `<td><input type="number" step="any" inputmode="decimal" data-time-series-import-index="${index}" data-time-series-import-key="${escapeHtml(key)}" value="${escapeHtml(row[key] ?? "")}"></td>`)
+      .map(([key]) => `<td><input type="number" step="any" inputmode="decimal" data-time-series-import-index="${index}" data-time-series-import-key="${escapeHtml(key)}" value="${escapeHtml(formatTimeSeriesCellValue(key, row[key]))}"></td>`)
       .join("")}</tr>`)
     .join("");
   host.innerHTML = `<table><thead><tr><th>小时序号</th><th>时间</th>${fields.map(([, label]) => `<th>${label}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table>`;
@@ -1889,10 +1957,11 @@ function onTimeSeriesImportInput(event) {
   const index = Number(input.dataset.timeSeriesImportIndex);
   const key = input.dataset.timeSeriesImportKey;
   if (!Array.isArray(state.pendingTimeSeriesImport) || !state.pendingTimeSeriesImport[index] || !key) return;
-  const value = coerceInput(input.value);
-  const nextValue = typeof value === "number" ? roundEditedCurveValue(clampEditedCurveValue(value, key)) : value;
+  const value = normalizeTimeSeriesCellValue(key, input.value);
+  const nextValue = typeof value === "number" ? clampEditedCurveValue(value, key) : value;
   state.pendingTimeSeriesImport[index][key] = nextValue;
-  if (input.value !== String(nextValue)) input.value = nextValue;
+  const formatted = formatTimeSeriesCellValue(key, nextValue);
+  if (input.value !== formatted) input.value = formatted;
   scheduleTimeSeriesImportChartRender();
   setTimeSeriesImportHint("导入曲线已调整，请确认后保存。", "ok");
 }
@@ -1907,7 +1976,7 @@ function scheduleTimeSeriesImportChartRender() {
 
 function updateTimeSeriesImportCell(index, key, value) {
   const input = document.querySelector(`[data-time-series-import-index="${index}"][data-time-series-import-key="${key}"]`);
-  if (input) input.value = value;
+  if (input) input.value = formatTimeSeriesCellValue(key, value);
 }
 
 function toggleTimeSeriesImportCurve(curveKey) {
@@ -2336,7 +2405,7 @@ function normalizeCurveRows(rows, key = curveGeneratorSpec().key) {
   return rows
     .map((row, index) => {
       const value = Number(typeof row === "object" && row !== null ? row[key] : row);
-      return Number.isFinite(value) ? { hour_index: index + 1, [key]: value } : null;
+      return Number.isFinite(value) ? { hour_index: index + 1, [key]: normalizeTimeSeriesCellValue(key, value) } : null;
     })
     .filter(Boolean);
 }
@@ -2388,7 +2457,7 @@ function applyGeneratedLoadCurve(rows) {
   }
   state.payload.time_series = state.payload.time_series.map((row, index) => {
     const curve = rows[index];
-    return { ...row, [spec.key]: curve[spec.key] };
+    return { ...row, [spec.key]: normalizeTimeSeriesCellValue(spec.key, curve[spec.key]) };
   });
   markTimeSeriesDirty();
   selectCurve(spec.key);
@@ -3588,7 +3657,7 @@ function clampEditedCurveValue(value, curveKey) {
 }
 
 function roundEditedCurveValue(value) {
-  return Math.round(value * 1000) / 1000;
+  return roundTimeSeriesValue(value);
 }
 
 function interpolatedCurveEditPoints(previousPoint, currentPoint) {
@@ -3613,7 +3682,10 @@ function interpolatedCurveEditPoints(previousPoint, currentPoint) {
 
 function updateVisibleTimeCell(index, key, value) {
   const input = document.querySelector(`[data-time-index="${index}"][data-key="${key}"]`);
-  if (input) input.value = value;
+  const formatted = formatTimeSeriesCellValue(key, value);
+  if (input) input.value = formatted;
+  const display = document.querySelector(`[data-time-display-index="${index}"][data-time-display-key="${key}"]`);
+  if (display) display.textContent = formatted;
 }
 
 function positionFloatingTipInRect(tip, bounds, event) {
@@ -3659,6 +3731,7 @@ function renderMonthTabs() {
 
 function renderTimeTable() {
   const container = document.getElementById("timeTable");
+  exitTimeCellEdit();
   if (!state.payload) {
     container.innerHTML = "";
     return;
@@ -3677,16 +3750,25 @@ function renderTimeTable() {
     .map((row, offset) => {
       const index = start + offset;
       return `<tr><td>${row.hour_index}</td>${fields
-        .map((key) => `<td><input data-time-index="${index}" data-key="${key}" value="${escapeHtml(row[key])}"></td>`)
+        .map((key) => timeCellHtml(index, key, row[key]))
         .join("")}</tr>`;
     })
     .join("")}</tbody></table>`;
 }
 
+function timeCellHtml(index, key, value) {
+  const safeValue = escapeHtml(formatTimeSeriesCellValue(key, value));
+  return `<td class="time-cell" data-time-cell="true"><span class="time-cell-display" data-time-display-index="${index}" data-time-display-key="${escapeHtml(key)}">${safeValue}</span><input class="time-cell-input" data-time-index="${index}" data-key="${escapeHtml(key)}" value="${safeValue}" readonly="readonly" tabindex="-1"></td>`;
+}
+
 function onTimeInput(event) {
   const input = event.target;
   const row = state.payload.time_series[Number(input.dataset.timeIndex)];
-  row[input.dataset.key] = coerceInput(input.value);
+  const key = input.dataset.key;
+  const value = normalizeTimeSeriesCellValue(key, input.value);
+  row[key] = value;
+  const display = input.closest(".time-cell")?.querySelector(".time-cell-display");
+  if (display) display.textContent = formatTimeSeriesCellValue(key, value);
   markTimeSeriesDirty();
   scheduleRenderChart();
   renderLimitSummary();
@@ -4562,6 +4644,9 @@ function schemeNameExists(name, excludedName = "") {
 function normalizePayload(payload) {
   if (!payload) return payload;
   payload.timeSeriesLoaded = Boolean(payload.time_series_loaded || payload.timeSeriesLoaded || payload.time_series);
+  if (Array.isArray(payload.time_series)) {
+    payload.time_series = normalizeTimeSeriesRows(payload.time_series);
+  }
   if (payload.time_series && payload.time_series_count === undefined) {
     payload.time_series_count = payload.time_series.length;
   }
@@ -4570,6 +4655,42 @@ function normalizePayload(payload) {
   }
   payload.planning_parameters[0] = normalizePlanningParameterRow(payload.planning_parameters[0]);
   return payload;
+}
+
+function normalizeTimeSeriesRows(rows) {
+  return Array.isArray(rows) ? rows.map((row) => normalizeTimeSeriesRow(row)) : [];
+}
+
+function normalizeTimeSeriesRow(row) {
+  if (!row || typeof row !== "object") return row;
+  const next = { ...row };
+  timeSeriesValueKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(next, key)) {
+      next[key] = normalizeTimeSeriesCellValue(key, next[key]);
+    }
+  });
+  return next;
+}
+
+function normalizeTimeSeriesCellValue(key, value) {
+  if (!timeSeriesValueKeys.has(key)) return coerceInput(value);
+  const text = String(value ?? "");
+  if (text.trim() === "") return "";
+  const number = Number(text);
+  return Number.isFinite(number) ? roundTimeSeriesValue(number) : text;
+}
+
+function formatTimeSeriesCellValue(key, value) {
+  if (!timeSeriesValueKeys.has(key)) return value ?? "";
+  const text = String(value ?? "");
+  if (text.trim() === "") return "";
+  const number = Number(text);
+  return Number.isFinite(number) ? roundTimeSeriesValue(number).toFixed(3) : text;
+}
+
+function roundTimeSeriesValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.round(number * 1000) / 1000 : value;
 }
 
 function isTimeSeriesLoaded() {

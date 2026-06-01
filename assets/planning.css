@@ -8239,3 +8239,114 @@ body[data-home-theme]:not([data-home-theme="default"]) .device-context-menu {
   background: var(--theme-panel-bg) !important;
   color: var(--theme-text) !important;
 }
+
+/* Compact editable time-series table. */
+#timeTab #timeTable {
+  border-radius: 10px;
+}
+
+#timeTab #timeTable table {
+  width: 100%;
+  min-width: 720px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+#timeTab #timeTable th,
+#timeTab #timeTable td {
+  height: auto;
+  min-width: 0;
+  vertical-align: middle;
+}
+
+#timeTab #timeTable th {
+  padding: 8px 14px;
+  font-size: 14px;
+}
+
+#timeTab #timeTable td {
+  padding: 0;
+}
+
+#timeTab #timeTable td:first-child {
+  width: 96px;
+  padding: 0 14px;
+  font-weight: 800;
+}
+
+.time-cell {
+  cursor: pointer;
+  transition: background 0.14s ease, box-shadow 0.14s ease;
+}
+
+.time-cell-display {
+  display: block;
+  min-height: 40px;
+  padding: 9px 14px;
+  overflow: hidden;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.28;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.time-cell-input {
+  display: none;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 14px;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: inherit !important;
+  caret-color: transparent;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.time-cell-input:focus {
+  outline: 0 !important;
+}
+
+.time-cell-input[readonly] {
+  pointer-events: none;
+  user-select: none;
+}
+
+#timeTab #timeTable tbody tr:hover td {
+  background: rgba(33, 213, 255, 0.05);
+}
+
+.time-cell.editing {
+  background: rgba(33, 213, 255, 0.12) !important;
+  box-shadow: inset 0 0 0 2px rgba(108, 238, 255, 0.86);
+}
+
+.time-cell.editing .time-cell-display {
+  display: none;
+}
+
+.time-cell.editing .time-cell-input {
+  display: block;
+  caret-color: auto;
+  cursor: text;
+  pointer-events: auto;
+  user-select: text;
+}
+
+.time-cell.editing .time-cell-input:focus {
+  background: rgba(33, 213, 255, 0.08) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .time-cell.editing {
+  background: var(--theme-active-bg) !important;
+  box-shadow: inset 0 0 0 2px var(--theme-accent) !important;
+}
+
+body[data-home-theme]:not([data-home-theme="default"]) .time-cell.editing .time-cell-input:focus {
+  background: var(--theme-active-bg) !important;
+}
