@@ -6820,8 +6820,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("min-width: 156px", device_css)
         self.assertIn("border: 0", css)
         self.assertIn("outline: 0", css)
-        self.assertIn("assets/planning.css?v=20260601-curve-generator-tabs", html)
-        self.assertIn("assets/planning.js?v=20260601-curve-generator-tabs", html)
+        self.assertIn("assets/planning.css?v=20260601-summary-switcher-flat", html)
+        self.assertIn("assets/planning.js?v=20260601-summary-switcher-flat", html)
 
     def test_planning_scheme_actions_validate_duplicates_and_delete_current_scheme(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
@@ -6887,6 +6887,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".summary-page", css)
         self.assertIn(".summary-switcher", css)
         self.assertIn(".summary-tab-panel.active", css)
+        summary_switcher_css = css.split("#limitsTab .summary-section.summary-switcher", 1)[1].split("}", 1)[0]
+        self.assertIn("padding: 0", summary_switcher_css)
+        self.assertIn("margin-bottom: 0", summary_switcher_css)
+        self.assertIn("border: 0 !important", summary_switcher_css)
+        self.assertIn("background: transparent !important", summary_switcher_css)
+        self.assertIn("box-shadow: none !important", summary_switcher_css)
         self.assertIn("flex: 1 1 auto", css)
         self.assertIn("overflow: auto", css)
 

@@ -3499,6 +3499,16 @@ button:disabled {
   flex-direction: column;
 }
 
+#limitsTab .summary-section.summary-switcher {
+  padding: 0;
+  margin-bottom: 0;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
 .summary-tabs {
   display: flex;
   gap: 8px;
