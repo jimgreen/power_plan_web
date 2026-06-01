@@ -6532,6 +6532,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("syncPlanningParameterInput(input)", script)
         self.assertIn('document.addEventListener("change", onPlanningParameterInputEvent)', script)
         self.assertIn("参数校验未通过", script)
+        self.assertIn("参数存在警告", script)
+        self.assertIn("是否继续保存", script)
+        self.assertIn("blockingWarnings", script)
+        self.assertIn("advisoryWarnings", script)
         self.assertIn("参数保存成功", script)
         self.assertIn("保存参数失败：", script)
         self.assertIn("buildSchemeSavePayload", script)
@@ -6543,6 +6547,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("数量下限(台)", script)
         self.assertIn("数量上限(台)", script)
         self.assertIn("数量上限不能小于数量下限", script)
+        self.assertIn("collectDuplicateNumericDeviceWarnings", script)
+        self.assertIn("normalizeDeviceNumericSignatureValue", script)
+        self.assertIn("从第2列起所有数值相同", script)
+        self.assertIn('level: "warning"', script)
         self.assertNotIn("频率安全上限不能小于频率安全下限", script)
         self.assertIn("规划求解时间上限(分钟)", script)
         self.assertIn("defaultValue: 60", script)
@@ -6630,6 +6638,98 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("自损耗率(0-1%/天)", script)
         self.assertIn("充电效率(0.0-1.0)", script)
         self.assertIn("放电效率(0.0-1.0)", script)
+        self.assertIn("dieselGeneratorDefaultValues", script)
+        for default_pair in (
+            "cost: 200",
+            "capacity: 300",
+            "power_upper: 250",
+            "power_lower: 80",
+            "fuel_rate: 0.28",
+            "inertia_constant_h: 3.5",
+            "primary_frequency_coefficient_k: 0.4",
+            "damping_coefficient_d: 0.01",
+            "governor_time_constant_t: 0.6",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "diesel_generators"', script)
+        self.assertIn("windTurbineDefaultValues", script)
+        for default_pair in (
+            "cost: 400",
+            "capacity: 100",
+            "cut_in_wind_speed: 3",
+            "rated_wind_speed: 10",
+            "cut_out_wind_speed: 25",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "wind_turbines"', script)
+        self.assertIn("photovoltaicDefaultValues", script)
+        for default_pair in (
+            "cost: 200",
+            "capacity: 100",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "photovoltaics"', script)
+        self.assertIn("storagePcsDefaultValues", script)
+        for default_pair in (
+            "cost: 30",
+            "power_capacity: 100",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "storage_pcs"', script)
+        self.assertIn("storageBatteryPackDefaultValues", script)
+        for default_pair in (
+            "cost: 100",
+            "battery_capacity: 200",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "storage_battery_packs"', script)
+        self.assertIn("hydrogenElectrolyzerDefaultValues", script)
+        for default_pair in (
+            "cost: 400",
+            "power_capacity: 70",
+            "power_lower: 30",
+            "electric_to_hydrogen_efficiency: 0.2",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "hydrogen_electrolyzers"', script)
+        self.assertIn("hydrogenTankDefaultValues", script)
+        for default_pair in (
+            "cost: 100",
+            "hydrogen_tank_capacity: 4000",
+            "quantity_lower: 1",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "hydrogen_tanks"', script)
+        self.assertIn("fuelCellDefaultValues", script)
+        for default_pair in (
+            "cost: 200",
+            "power_capacity: 500",
+            "hydrogen_to_electric_efficiency: 1.5",
+            "quantity_upper: 5",
+            "design_life_years: 20",
+        ):
+            self.assertIn(default_pair, script)
+        self.assertIn('spec[0] === "fuel_cells"', script)
         self.assertIn('["hydrogen_tanks", "储氢罐", ["name", "cost", "hydrogen_tank_capacity", "soc_upper", "soc_lower", "self_discharge_rate"', script)
         self.assertIn('spec[0] === "hydrogen_tanks" && field === "soc_upper"', script)
         self.assertIn("return 0.85", script)
@@ -6644,11 +6744,22 @@ class PowerPlanServerTest(unittest.TestCase):
         html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
         css = (WEB_ROOT / "assets" / "planning.css").read_text(encoding="utf-8")
+        device_css = css.split("/* Compact editable device tables. */", 1)[1]
 
         self.assertIn("device-data-table", script)
         self.assertIn("device-parameter-table", script)
         self.assertIn("device-input", script)
         self.assertIn("device-cell", script)
+        self.assertIn("device-cell-display", script)
+        self.assertIn("device-heading-label", script)
+        self.assertIn("deviceHeadingLabelHtml", script)
+        self.assertIn("deviceTwoLineHeadingHtml", script)
+        self.assertIn("deviceTableColumnCount", script)
+        self.assertIn("deviceEmptyColumnsHtml", script)
+        self.assertIn("sharedColumnCount", script)
+        self.assertIn("device-empty-heading", script)
+        self.assertIn("device-empty-cell", script)
+        self.assertIn("<br>", script)
         self.assertIn("device-row", script)
         self.assertIn("deviceColumnClass", script)
         self.assertIn("device-sticky-col", script)
@@ -6671,6 +6782,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("#devicesTab .device-data-table", css)
         self.assertIn(".device-parameter-table", css)
         self.assertIn(".device-input", css)
+        self.assertIn(".device-cell-display", css)
+        self.assertIn(".device-heading-label", css)
+        self.assertIn(".device-empty-heading", css)
+        self.assertIn(".device-empty-cell", css)
         self.assertIn(".device-cell.editing", css)
         self.assertIn(".device-row.selected .device-cell", css)
         self.assertIn(".device-input[readonly]", css)
@@ -6679,14 +6794,20 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".device-sticky-2", css)
         self.assertIn(".device-sticky-3", css)
         self.assertIn(".device-context-menu", css)
-        self.assertIn("position: sticky", css)
-        self.assertIn("left: 0", css)
-        self.assertIn("width: max-content", css)
-        self.assertIn("min-width: 156px", css)
+        self.assertIn("overflow-x: hidden", device_css)
+        self.assertIn("width: 100%", device_css)
+        self.assertIn("min-width: 0", device_css)
+        self.assertIn("table-layout: fixed", device_css)
+        self.assertIn("white-space: normal", device_css)
+        self.assertIn("overflow-wrap: anywhere", device_css)
+        self.assertIn("-webkit-line-clamp: 2", device_css)
+        self.assertIn("position: static", device_css)
+        self.assertNotIn("width: max-content", device_css)
+        self.assertNotIn("min-width: 156px", device_css)
         self.assertIn("border: 0", css)
         self.assertIn("outline: 0", css)
-        self.assertIn("assets/planning.css?v=20260601-device-table-right-click-menu", html)
-        self.assertIn("assets/planning.js?v=20260601-device-table-right-click-menu", html)
+        self.assertIn("assets/planning.css?v=20260601-hydrogen-electrolyzer-default-warning", html)
+        self.assertIn("assets/planning.js?v=20260601-hydrogen-electrolyzer-default-warning", html)
 
     def test_planning_scheme_actions_validate_duplicates_and_delete_current_scheme(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")

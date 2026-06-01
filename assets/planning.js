@@ -417,6 +417,82 @@ const deviceFieldDefaults = {
   self_discharge_rate: 0.01,
 };
 
+const dieselGeneratorDefaultValues = {
+  cost: 200,
+  capacity: 300,
+  power_upper: 250,
+  power_lower: 80,
+  fuel_rate: 0.28,
+  inertia_constant_h: 3.5,
+  primary_frequency_coefficient_k: 0.4,
+  damping_coefficient_d: 0.01,
+  governor_time_constant_t: 0.6,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const windTurbineDefaultValues = {
+  cost: 400,
+  capacity: 100,
+  cut_in_wind_speed: 3,
+  rated_wind_speed: 10,
+  cut_out_wind_speed: 25,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const photovoltaicDefaultValues = {
+  cost: 200,
+  capacity: 100,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const storagePcsDefaultValues = {
+  cost: 30,
+  power_capacity: 100,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const storageBatteryPackDefaultValues = {
+  cost: 100,
+  battery_capacity: 200,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const hydrogenElectrolyzerDefaultValues = {
+  cost: 400,
+  power_capacity: 70,
+  power_lower: 30,
+  electric_to_hydrogen_efficiency: 0.2,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const hydrogenTankDefaultValues = {
+  cost: 100,
+  hydrogen_tank_capacity: 4000,
+  quantity_lower: 1,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
+const fuelCellDefaultValues = {
+  cost: 200,
+  power_capacity: 500,
+  hydrogen_to_electric_efficiency: 1.5,
+  quantity_upper: 5,
+  design_life_years: 20,
+};
+
 const deviceFieldRules = {
   quantity_lower: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数量上下限必须为非负整数" },
   quantity_upper: { integer: true, nonNegative: true, attrs: ['min="0"', 'step="1"', 'inputmode="numeric"', 'pattern="[0-9]*"'], message: "数量上下限必须为非负整数" },
@@ -1306,9 +1382,15 @@ async function saveScheme() {
     }
     syncPlanningParameterInputs();
     const warnings = collectSaveWarnings();
-    if (warnings.length) {
+    const blockingWarnings = warnings.filter((item) => item.level === "error");
+    const advisoryWarnings = warnings.filter((item) => item.level !== "error");
+    if (blockingWarnings.length) {
       renderSummary();
-      alert(`参数校验未通过：\n${warnings.map((item) => `- ${item.message}`).join("\n")}`);
+      alert(`参数校验未通过：\n${blockingWarnings.map((item) => `- ${item.message}`).join("\n")}`);
+      return;
+    }
+    if (advisoryWarnings.length && !confirm(`参数存在警告：\n${advisoryWarnings.map((item) => `- ${item.message}`).join("\n")}\n是否继续保存？`)) {
+      renderSummary();
       return;
     }
     const savePayload = buildSchemeSavePayload();
@@ -3586,8 +3668,9 @@ function renderDeviceTables() {
     host.innerHTML = "<div class=\"validation-item\">当前未选择任何设备类型。</div>";
     return;
   }
+  const sharedColumnCount = deviceTableColumnCount(shownSpecs);
   host.innerHTML = shownSpecs
-    .map(([key, title, fields]) => `<section id="${key}" class="device-card"><div class="panel-heading"><h2>${title}</h2><button class="add-row" type="button" data-device="${key}">新增行</button></div>${deviceTable(key, fields)}</section>`)
+    .map(([key, title, fields]) => `<section id="${key}" class="device-card"><div class="panel-heading"><h2>${title}</h2><button class="add-row" type="button" data-device="${key}">新增行</button></div>${deviceTable(key, fields, sharedColumnCount)}</section>`)
     .join("");
   host.querySelectorAll(".device-input").forEach((input) => {
     input.addEventListener("input", onDeviceInput);
@@ -3626,11 +3709,52 @@ function renderDeviceFilters() {
   });
 }
 
-function deviceTable(key, fields) {
+function deviceTableColumnCount(specs) {
+  return Math.max(0, ...specs.map(([, , fields]) => fields.length));
+}
+
+function deviceTable(key, fields, columnCount = fields.length) {
   const rows = state.payload[key] || [];
-  return `<div class="data-table device-data-table"><table class="device-parameter-table"><thead><tr>${fields.map((field, columnIndex) => `<th class="${deviceColumnClass(columnIndex)}">${escapeHtml(labels[field] || field)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row, index) => `<tr class="device-row" data-device="${escapeHtml(key)}" data-row="${index}">${fields.map((field, columnIndex) => `<td class="device-cell ${deviceColumnClass(columnIndex)}" data-device-cell-edit="true"><input ${deviceInputAttributes(key, index, field, row[field])}></td>`).join("")}</tr>`)
+  const fillerCount = Math.max(0, columnCount - fields.length);
+  const fillerHeadings = deviceEmptyColumnsHtml(fillerCount, "th", "device-empty-heading");
+  return `<div class="data-table device-data-table"><table class="device-parameter-table"><thead><tr>${fields.map((field, columnIndex) => `<th class="${deviceColumnClass(columnIndex)}"><span class="device-heading-label">${deviceHeadingLabelHtml(field)}</span></th>`).join("")}${fillerHeadings}</tr></thead><tbody>${rows
+    .map((row, index) => `<tr class="device-row" data-device="${escapeHtml(key)}" data-row="${index}">${fields.map((field, columnIndex) => `<td class="device-cell ${deviceColumnClass(columnIndex)}" data-device-cell-edit="true"><span class="device-cell-display">${escapeHtml(row[field])}</span><input ${deviceInputAttributes(key, index, field, row[field])}></td>`).join("")}${deviceEmptyColumnsHtml(fillerCount, "td", "device-empty-cell")}</tr>`)
     .join("")}</tbody></table></div>`;
+}
+
+function deviceEmptyColumnsHtml(count, tagName, className) {
+  return Array.from({ length: count }, () => `<${tagName} class="${className}" aria-hidden="true"></${tagName}>`).join("");
+}
+
+function deviceHeadingLabelHtml(field) {
+  const label = String(labels[field] || field);
+  const symbolMatch = label.match(/^(.+?)([A-Za-z][A-Za-z0-9/_-]*[(（][^)）]+[)）])$/);
+  if (symbolMatch) {
+    if (symbolMatch[1].includes("效率")) {
+      return `${escapeHtml(symbolMatch[1])}<br>${escapeHtml(symbolMatch[2].replace(/[()（）]/g, ""))}`;
+    }
+    return deviceTwoLineHeadingHtml(symbolMatch[1], symbolMatch[2]);
+  }
+  const match = label.match(/^(.+?)([(（][^)）]+[)）])$/);
+  if (match) {
+    if (match[1].includes("效率")) {
+      return `${escapeHtml(match[1])}<br>${escapeHtml(match[2].replace(/[()（）]/g, ""))}`;
+    }
+    return deviceTwoLineHeadingHtml(match[1], match[2]);
+  }
+  const chars = Array.from(label);
+  if (chars.length > 5) {
+    return `${escapeHtml(chars.slice(0, 4).join(""))}<br>${escapeHtml(chars.slice(4).join(""))}`;
+  }
+  return escapeHtml(label);
+}
+
+function deviceTwoLineHeadingHtml(main, suffix) {
+  const chars = Array.from(String(main || ""));
+  if (chars.length > 4) {
+    return `${escapeHtml(chars.slice(0, 4).join(""))}<br>${escapeHtml(`${chars.slice(4).join("")}${suffix}`)}`;
+  }
+  return `${escapeHtml(main)}<br>${escapeHtml(suffix)}`;
 }
 
 function deviceColumnClass(columnIndex) {
@@ -3658,6 +3782,8 @@ function deviceInputAttributes(device, rowIndex, field, value) {
 function onDeviceInput(event) {
   const input = event.target;
   state.payload[input.dataset.device][Number(input.dataset.row)][input.dataset.key] = coerceInput(input.value);
+  const display = input.closest(".device-cell")?.querySelector(".device-cell-display");
+  if (display) display.textContent = input.value;
   renderLimitSummary();
   renderSummary();
 }
@@ -3676,6 +3802,30 @@ function addDeviceRow(event) {
 function defaultDeviceFieldValue(field, spec) {
   if (field === "name") {
     return `${spec[1]}${(state.payload[spec[0]] || []).length + 1}`;
+  }
+  if (spec[0] === "diesel_generators" && Object.prototype.hasOwnProperty.call(dieselGeneratorDefaultValues, field)) {
+    return dieselGeneratorDefaultValues[field];
+  }
+  if (spec[0] === "wind_turbines" && Object.prototype.hasOwnProperty.call(windTurbineDefaultValues, field)) {
+    return windTurbineDefaultValues[field];
+  }
+  if (spec[0] === "photovoltaics" && Object.prototype.hasOwnProperty.call(photovoltaicDefaultValues, field)) {
+    return photovoltaicDefaultValues[field];
+  }
+  if (spec[0] === "storage_pcs" && Object.prototype.hasOwnProperty.call(storagePcsDefaultValues, field)) {
+    return storagePcsDefaultValues[field];
+  }
+  if (spec[0] === "storage_battery_packs" && Object.prototype.hasOwnProperty.call(storageBatteryPackDefaultValues, field)) {
+    return storageBatteryPackDefaultValues[field];
+  }
+  if (spec[0] === "hydrogen_electrolyzers" && Object.prototype.hasOwnProperty.call(hydrogenElectrolyzerDefaultValues, field)) {
+    return hydrogenElectrolyzerDefaultValues[field];
+  }
+  if (spec[0] === "hydrogen_tanks" && Object.prototype.hasOwnProperty.call(hydrogenTankDefaultValues, field)) {
+    return hydrogenTankDefaultValues[field];
+  }
+  if (spec[0] === "fuel_cells" && Object.prototype.hasOwnProperty.call(fuelCellDefaultValues, field)) {
+    return fuelCellDefaultValues[field];
   }
   if (field === "self_discharge_rate") {
     return spec[0] === "hydrogen_tanks" ? 0.001 : 0.01;
@@ -4164,8 +4314,39 @@ function collectSaveWarnings() {
       }
     });
   });
+  messages.push(...collectDuplicateNumericDeviceWarnings());
   messages.push(...collectPlanningParameterWarnings());
   return messages;
+}
+
+function collectDuplicateNumericDeviceWarnings() {
+  if (!state.payload) return [];
+  const messages = [];
+  deviceSpecs.forEach(([key, title, fields]) => {
+    const rows = state.payload[key] || [];
+    const numericFields = fields.filter((field) => field !== "name");
+    if (numericFields.length === 0 || rows.length < 2) return;
+    const seen = new Map();
+    rows.forEach((row, index) => {
+      const signature = numericFields.map((field) => normalizeDeviceNumericSignatureValue(row[field])).join("|");
+      const firstIndex = seen.get(signature);
+      if (firstIndex !== undefined) {
+        messages.push({
+          level: "warning",
+          message: `${title}第${firstIndex + 1}行与第${index + 1}行从第2列起所有数值相同，请确认是否为重复设备参数`,
+        });
+        return;
+      }
+      seen.set(signature, index);
+    });
+  });
+  return messages;
+}
+
+function normalizeDeviceNumericSignatureValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? "").trim();
+  return String(number);
 }
 
 function collectPlanningParameterWarnings() {
