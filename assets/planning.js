@@ -43,6 +43,8 @@ const state = {
 };
 
 let activePlanningParameterGroup = "normal";
+let activeDeviceContextTarget = null;
+let activeDeviceEditingCell = null;
 
 const PLANNING_PAGE_STATE_KEY = "planning";
 const WEATHER_COORDINATE_STORAGE_KEY = "powerPlanWeatherCoordinate";
@@ -456,6 +458,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindWeatherPreviewResizeHandle();
   bindSchemeListResizeHandle();
   bindActions();
+  bindDeviceContextMenu();
   bindAdaptiveLayout();
   syncAdaptiveLayout();
   loadLoadCurveTemplates().catch(showError);
@@ -575,6 +578,127 @@ function bindActions() {
   document.addEventListener("mousemove", onHistogramMouseMove);
   document.addEventListener("mouseleave", hideHistogramTip);
   window.addEventListener("resize", scheduleAdaptiveLayout);
+}
+
+function bindDeviceContextMenu() {
+  ensureDeviceContextMenu();
+  document.addEventListener("click", (event) => {
+    if (!event.target?.closest?.("#deviceRowContextMenu")) hideDeviceContextMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideDeviceContextMenu();
+      exitDeviceCellEdit();
+    }
+  });
+  window.addEventListener("scroll", hideDeviceContextMenu, true);
+  window.addEventListener("resize", hideDeviceContextMenu);
+}
+
+function ensureDeviceContextMenu() {
+  let menu = document.getElementById("deviceRowContextMenu");
+  if (menu) return menu;
+  menu = document.createElement("div");
+  menu.id = "deviceRowContextMenu";
+  menu.className = "device-context-menu";
+  menu.hidden = true;
+  menu.innerHTML = '<button type="button" data-device-context-action="delete">删除该行</button>';
+  menu.addEventListener("click", onDeviceContextMenuClick);
+  document.body.appendChild(menu);
+  return menu;
+}
+
+function onDeviceRowContextMenu(event) {
+  const row = event.currentTarget;
+  if (!row?.dataset) return;
+  event.preventDefault();
+  selectDeviceRow(row);
+  exitDeviceCellEdit();
+  activeDeviceContextTarget = {
+    device: row.dataset.device || "",
+    row: Number(row.dataset.row),
+  };
+  showDeviceContextMenu(event.clientX, event.clientY);
+}
+
+function onDeviceCellPointerDown(event) {
+  if (event.button !== 0) return;
+  enterDeviceCellEdit(event.currentTarget);
+}
+
+function enterDeviceCellEdit(cell) {
+  if (!cell || activeDeviceEditingCell === cell) return;
+  exitDeviceCellEdit();
+  const input = cell.querySelector(".device-input");
+  if (!input) return;
+  cell.classList.add("editing");
+  input.readOnly = false;
+  input.removeAttribute("readonly");
+  input.tabIndex = 0;
+  activeDeviceEditingCell = cell;
+  window.requestAnimationFrame(() => {
+    input.focus({ preventScroll: true });
+    input.select?.();
+  });
+}
+
+function exitDeviceCellEdit(cell = activeDeviceEditingCell) {
+  if (!cell) return;
+  const input = cell.querySelector(".device-input");
+  cell.classList.remove("editing");
+  if (input) {
+    input.readOnly = true;
+    input.setAttribute("readonly", "readonly");
+    input.tabIndex = -1;
+  }
+  if (activeDeviceEditingCell === cell) activeDeviceEditingCell = null;
+}
+
+function onDeviceInputBlur(event) {
+  exitDeviceCellEdit(event.target.closest(".device-cell"));
+}
+
+function onDeviceInputKeydown(event) {
+  if (event.key !== "Enter" && event.key !== "Escape") return;
+  event.preventDefault();
+  event.target.blur();
+}
+
+function selectDeviceRow(row) {
+  document.querySelectorAll(".device-row.selected").forEach((item) => {
+    item.classList.remove("selected");
+    item.removeAttribute("aria-selected");
+  });
+  if (!row) return;
+  row.classList.add("selected");
+  row.setAttribute("aria-selected", "true");
+}
+
+function clearDeviceRowSelection() {
+  selectDeviceRow(null);
+}
+
+function showDeviceContextMenu(clientX, clientY) {
+  const menu = ensureDeviceContextMenu();
+  menu.hidden = false;
+  const rect = menu.getBoundingClientRect();
+  const left = Math.min(clientX, Math.max(0, window.innerWidth - rect.width - 8));
+  const top = Math.min(clientY, Math.max(0, window.innerHeight - rect.height - 8));
+  menu.style.left = `${Math.max(8, left)}px`;
+  menu.style.top = `${Math.max(8, top)}px`;
+}
+
+function hideDeviceContextMenu() {
+  const menu = document.getElementById("deviceRowContextMenu");
+  if (menu) menu.hidden = true;
+  activeDeviceContextTarget = null;
+  clearDeviceRowSelection();
+}
+
+function onDeviceContextMenuClick(event) {
+  const action = event.target?.dataset?.deviceContextAction;
+  if (action !== "delete" || !activeDeviceContextTarget) return;
+  deleteDeviceRowByPosition(activeDeviceContextTarget.device, activeDeviceContextTarget.row);
 }
 
 function bindAdaptiveLayout() {
@@ -3465,9 +3589,16 @@ function renderDeviceTables() {
   host.innerHTML = shownSpecs
     .map(([key, title, fields]) => `<section id="${key}" class="device-card"><div class="panel-heading"><h2>${title}</h2><button class="add-row" type="button" data-device="${key}">新增行</button></div>${deviceTable(key, fields)}</section>`)
     .join("");
-  host.querySelectorAll("input").forEach((input) => input.addEventListener("input", onDeviceInput));
-  host.querySelectorAll(".delete-row").forEach((button) => button.addEventListener("click", deleteDeviceRow));
+  host.querySelectorAll(".device-input").forEach((input) => {
+    input.addEventListener("input", onDeviceInput);
+    input.addEventListener("blur", onDeviceInputBlur);
+    input.addEventListener("keydown", onDeviceInputKeydown);
+  });
+  host.querySelectorAll(".device-cell").forEach((cell) => cell.addEventListener("pointerdown", onDeviceCellPointerDown));
+  host.querySelectorAll(".device-row").forEach((row) => row.addEventListener("contextmenu", onDeviceRowContextMenu));
   host.querySelectorAll(".add-row").forEach((button) => button.addEventListener("click", addDeviceRow));
+  activeDeviceEditingCell = null;
+  hideDeviceContextMenu();
 }
 
 function renderDeviceFilters() {
@@ -3497,17 +3628,24 @@ function renderDeviceFilters() {
 
 function deviceTable(key, fields) {
   const rows = state.payload[key] || [];
-  return `<div class="data-table"><table><thead><tr>${fields.map((field) => `<th>${labels[field] || field}</th>`).join("")}<th>操作</th></tr></thead><tbody>${rows
-    .map((row, index) => `<tr>${fields.map((field) => `<td><input ${deviceInputAttributes(key, index, field, row[field])}></td>`).join("")}<td><button class="delete-row" type="button" data-device="${key}" data-row="${index}">删除</button></td></tr>`)
+  return `<div class="data-table device-data-table"><table class="device-parameter-table"><thead><tr>${fields.map((field, columnIndex) => `<th class="${deviceColumnClass(columnIndex)}">${escapeHtml(labels[field] || field)}</th>`).join("")}</tr></thead><tbody>${rows
+    .map((row, index) => `<tr class="device-row" data-device="${escapeHtml(key)}" data-row="${index}">${fields.map((field, columnIndex) => `<td class="device-cell ${deviceColumnClass(columnIndex)}" data-device-cell-edit="true"><input ${deviceInputAttributes(key, index, field, row[field])}></td>`).join("")}</tr>`)
     .join("")}</tbody></table></div>`;
+}
+
+function deviceColumnClass(columnIndex) {
+  return columnIndex < 3 ? `device-sticky-col device-sticky-${columnIndex + 1}` : "";
 }
 
 function deviceInputAttributes(device, rowIndex, field, value) {
   const rule = deviceFieldRules[field];
   const attrs = [
+    'class="device-input"',
     `data-device="${escapeHtml(device)}"`,
     `data-row="${rowIndex}"`,
     `data-key="${escapeHtml(field)}"`,
+    'readonly="readonly"',
+    'tabindex="-1"',
   ];
   if (rule) {
     attrs.push('type="number"');
@@ -3552,7 +3690,14 @@ function defaultDeviceFieldValue(field, spec) {
 }
 
 function deleteDeviceRow(event) {
-  state.payload[event.target.dataset.device].splice(Number(event.target.dataset.row), 1);
+  deleteDeviceRowByPosition(event.target.dataset.device, Number(event.target.dataset.row));
+}
+
+function deleteDeviceRowByPosition(device, rowIndex) {
+  if (!device || !Array.isArray(state.payload?.[device])) return;
+  if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= state.payload[device].length) return;
+  state.payload[device].splice(rowIndex, 1);
+  hideDeviceContextMenu();
   renderDeviceTables();
   renderLimitSummary();
   renderSummary();
