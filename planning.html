@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260601-hydrogen-electrolyzer-default-warning">
+  <link rel="stylesheet" href="assets/planning.css?v=20260601-curve-generator-tabs">
 </head>
 <body>
   <main class="planning-shell">
@@ -69,9 +69,7 @@
             <div class="time-chart-toolbar">
               <div class="weather-import-bar" aria-label="历史气象数据获取">
                 <button id="importTimeSeriesFile" type="button">文件导入</button>
-                <button id="openWindGenerator" type="button">风速生成</button>
-                <button id="openSolarGenerator" type="button">光照生成</button>
-                <button id="openLoadGenerator" type="button">负荷生成</button>
+                  <button id="openCurveGenerator" type="button">曲线生成</button>
                 <button id="openCoordinatePicker" type="button">坐标选择</button>
               </div>
               <div class="curve-switch-row" aria-label="曲线切换显示">
@@ -135,11 +133,16 @@
           <div id="loadGeneratorModal" class="map-picker-modal" hidden>
             <div class="map-picker-dialog load-generator-dialog" role="dialog" aria-modal="true" aria-labelledby="loadGeneratorTitle" aria-describedby="loadGeneratorHint">
               <div class="map-picker-head">
-                <h2 id="loadGeneratorTitle">负荷生成</h2>
+                <h2 id="loadGeneratorTitle">曲线生成</h2>
                 <div class="coordinate-header-actions">
                   <button id="confirmLoadGenerator" class="primary" type="button">确认</button>
-                  <button id="closeLoadGenerator" type="button" aria-label="取消负荷生成">取消</button>
+                  <button id="closeLoadGenerator" type="button" aria-label="取消曲线生成">取消</button>
                 </div>
+              </div>
+              <div id="curveGeneratorTabs" class="curve-generator-tabs" role="tablist" aria-label="生成曲线类型">
+                <button class="curve-generator-tab active" type="button" role="tab" aria-selected="true" data-curve-generator-target="wind_speed">风速</button>
+                <button class="curve-generator-tab" type="button" role="tab" aria-selected="false" data-curve-generator-target="solar_irradiance">光照辐射</button>
+                <button class="curve-generator-tab" type="button" role="tab" aria-selected="false" data-curve-generator-target="load">负荷</button>
               </div>
               <div class="load-generator-grid">
                 <label>指定模式
@@ -229,9 +232,6 @@
 
         <section id="planningTab" class="tab-panel">
           <div class="planning-parameters-card">
-            <div class="panel-heading">
-              <h1>规划参数</h1>
-            </div>
             <div id="planningParametersTable" class="data-table planning-parameters-table"></div>
           </div>
         </section>
@@ -274,6 +274,6 @@
   <script src="assets/i18n.js?v=20260529-curve-generator"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
   <script src="assets/page_state.js?v=20260530-page-state2"></script>
-  <script src="assets/planning.js?v=20260601-hydrogen-electrolyzer-default-warning"></script>
+  <script src="assets/planning.js?v=20260601-curve-generator-tabs"></script>
 </body>
 </html>

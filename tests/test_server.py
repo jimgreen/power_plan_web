@@ -6406,6 +6406,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('data-tab="planning"', html)
         self.assertIn('id="planningTab"', html)
         self.assertIn('id="planningParametersTable"', html)
+        planning_tab_html = html.split('<section id="planningTab"', 1)[1].split('<section id="limitsTab"', 1)[0]
+        self.assertNotIn('class="panel-heading"', planning_tab_html)
+        self.assertNotIn("<h1>规划参数</h1>", planning_tab_html)
         self.assertNotIn("参数随当前方案保存到 XLSX 文件。", html)
         self.assertLess(html.index('data-tab="devices"'), html.index('data-tab="planning"'))
         self.assertLess(html.index('data-tab="planning"'), html.index('data-tab="limits"'))
@@ -6433,8 +6436,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("planning_parameters", script)
         self.assertIn(".planning-parameters-card", css)
         self.assertIn("#planningTab #planningParametersTable", css)
+        planning_parameters_table_css = css.split("#planningTab #planningParametersTable", 1)[1].split("}", 1)[0]
+        self.assertIn("border: 0 !important", planning_parameters_table_css)
+        self.assertIn("background: transparent !important", planning_parameters_table_css)
         self.assertIn(".planning-parameter-grid", css)
         self.assertIn(".planning-parameter-tabs", css)
+        planning_parameter_tabs_css = css.split(".planning-parameter-tabs", 1)[1].split("}", 1)[0]
+        self.assertIn("padding: 0", planning_parameter_tabs_css)
+        self.assertIn("border: 0 !important", planning_parameter_tabs_css)
+        self.assertIn("background: transparent !important", planning_parameter_tabs_css)
         self.assertIn(".planning-parameter-tab.active", css)
         self.assertIn(".planning-parameter-panel", css)
         self.assertIn(".planning-parameter-group", css)
@@ -6794,6 +6804,10 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".device-sticky-2", css)
         self.assertIn(".device-sticky-3", css)
         self.assertIn(".device-context-menu", css)
+        self.assertIn("#devicesTab .device-card", device_css)
+        self.assertIn("border: 0 !important", device_css)
+        self.assertIn("background: transparent !important", device_css)
+        self.assertIn("box-shadow: none !important", device_css)
         self.assertIn("overflow-x: hidden", device_css)
         self.assertIn("width: 100%", device_css)
         self.assertIn("min-width: 0", device_css)
@@ -6806,8 +6820,8 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("min-width: 156px", device_css)
         self.assertIn("border: 0", css)
         self.assertIn("outline: 0", css)
-        self.assertIn("assets/planning.css?v=20260601-hydrogen-electrolyzer-default-warning", html)
-        self.assertIn("assets/planning.js?v=20260601-hydrogen-electrolyzer-default-warning", html)
+        self.assertIn("assets/planning.css?v=20260601-curve-generator-tabs", html)
+        self.assertIn("assets/planning.js?v=20260601-curve-generator-tabs", html)
 
     def test_planning_scheme_actions_validate_duplicates_and_delete_current_scheme(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
@@ -7003,10 +7017,9 @@ class PowerPlanServerTest(unittest.TestCase):
             "timeSeriesImportSummary",
             "confirmTimeSeriesImport",
             "closeTimeSeriesImport",
-            "openWindGenerator",
-            "openSolarGenerator",
-            "openLoadGenerator",
+            "openCurveGenerator",
             "loadGeneratorModal",
+            "curveGeneratorTabs",
             "loadGeneratorMaxLabel",
             "loadGeneratorMinLabel",
             "loadGeneratorAverageLabel",
@@ -7055,14 +7068,13 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn('id="fetchWeatherHistory"', weather_bar)
         self.assertNotIn('id="weatherImportStatus"', weather_bar)
         self.assertNotIn(">历史数据年<", weather_bar)
-        self.assertIn(">风速生成<", weather_bar)
-        self.assertIn(">光照生成<", weather_bar)
-        self.assertIn(">负荷生成<", weather_bar)
+        self.assertIn(">曲线生成<", weather_bar)
+        self.assertNotIn(">风速生成<", weather_bar)
+        self.assertNotIn(">光照生成<", weather_bar)
+        self.assertNotIn(">负荷生成<", weather_bar)
         self.assertIn(">坐标选择<", weather_bar)
-        self.assertLess(weather_bar.index(">文件导入<"), weather_bar.index(">风速生成<"))
-        self.assertLess(weather_bar.index(">风速生成<"), weather_bar.index(">光照生成<"))
-        self.assertLess(weather_bar.index(">光照生成<"), weather_bar.index(">负荷生成<"))
-        self.assertLess(weather_bar.index(">负荷生成<"), weather_bar.index(">坐标选择<"))
+        self.assertLess(weather_bar.index(">文件导入<"), weather_bar.index(">曲线生成<"))
+        self.assertLess(weather_bar.index(">曲线生成<"), weather_bar.index(">坐标选择<"))
         for label in ("打开文件", "曲线预览", "风速", "太阳辐射", "环境温度", "负荷", "确认", "取消"):
             self.assertIn(label, import_modal)
         self.assertNotIn('id="cancelTimeSeriesImport"', import_modal)
@@ -7073,6 +7085,13 @@ class PowerPlanServerTest(unittest.TestCase):
         for label in ("随机曲线", "负荷最大值", "负荷最小值", "负荷平均值", "文件导入", "保存模板", "确认", "取消"):
             self.assertIn(label, html)
         load_generator_modal = html.split('<div id="loadGeneratorModal"', 1)[1].split('<div id="mapPickerModal"', 1)[0]
+        self.assertIn('id="curveGeneratorTabs"', load_generator_modal)
+        self.assertIn('class="curve-generator-tabs"', load_generator_modal)
+        self.assertIn('data-curve-generator-target="wind_speed"', load_generator_modal)
+        self.assertIn('data-curve-generator-target="solar_irradiance"', load_generator_modal)
+        self.assertIn('data-curve-generator-target="load"', load_generator_modal)
+        for label in ("曲线生成", "风速", "光照辐射", "负荷"):
+            self.assertIn(label, load_generator_modal)
         self.assertIn('<option value="file">文件导入</option>', load_generator_modal)
         self.assertIn('id="loadCurveImportFile"', load_generator_modal)
         self.assertNotIn('id="importLoadCurveFile"', load_generator_modal)
@@ -7162,9 +7181,14 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn('hint.classList.toggle("warning", level === "warning")', script)
         self.assertIn("#timeSeriesImportHint.warning", css)
         self.assertIn("#loadGeneratorHint.warning", css)
-        self.assertIn("openLoadGenerator", script)
-        self.assertIn("openWindGenerator", script)
-        self.assertIn("openSolarGenerator", script)
+        self.assertIn(".curve-generator-tabs", css)
+        self.assertIn(".curve-generator-tab", css)
+        self.assertIn(".curve-generator-tab.active", css)
+        self.assertIn("openCurveGenerator", script)
+        self.assertIn("selectCurveGeneratorTarget", script)
+        self.assertIn("syncCurveGeneratorTabs", script)
+        self.assertIn("resetCurveGeneratorWorkingState", script)
+        self.assertIn("refreshCurveGeneratorForTarget", script)
         self.assertIn("curveGeneratorSpecs", script)
         self.assertIn("curveGeneratorTarget", script)
         self.assertIn("generateLoadCurve", script)

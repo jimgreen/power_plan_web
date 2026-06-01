@@ -38,7 +38,7 @@ const state = {
   originalLoadCurve: null,
   loadGeneratorSourceCurve: null,
   loadGeneratorSourceName: "",
-  curveGeneratorTarget: "load",
+  curveGeneratorTarget: "wind_speed",
   isSwitchingScheme: false,
 };
 
@@ -127,26 +127,26 @@ const curveGeneratorSpecs = {
   },
   solar_irradiance: {
     key: "solar_irradiance",
-    label: "太阳辐射",
-    title: "光照生成",
+    label: "光照辐射",
+    title: "光照辐射生成",
     unit: "W/m2",
-    maxLabel: "光照最大值",
-    minLabel: "光照最小值",
-    averageLabel: "光照平均值",
-    generateLabel: "生成光照曲线",
+    maxLabel: "光照辐射最大值",
+    minLabel: "光照辐射最小值",
+    averageLabel: "光照辐射平均值",
+    generateLabel: "生成光照辐射曲线",
     saveTemplateVisible: false,
-    emptyPreview: "生成后显示光照曲线预览",
-    adjustedMessage: "光照曲线已调整，请检查预览后点击确定。",
-    generatedMessage: "光照曲线已生成，请检查预览后点击确定。",
-    confirmMessage: "光照曲线已确认，请保存方案",
-    cancelMessage: "光照生成已取消",
-    sourceLoadedMessage: "原始光照曲线已载入，请点击生成光照曲线。",
-    importedMessage: "光照文件已导入为原始曲线，请点击生成光照曲线。",
-    importFailedPrefix: "光照文件导入失败：",
-    generationFailedPrefix: "光照生成失败：",
-    selectedFileMessage: "请先选择光照文件",
-    invalidLengthMessage: "光照曲线应为8760点",
-    tableInvalidMessage: "当前时序表不是8760行，未更新光照",
+    emptyPreview: "生成后显示光照辐射曲线预览",
+    adjustedMessage: "光照辐射曲线已调整，请检查预览后点击确定。",
+    generatedMessage: "光照辐射曲线已生成，请检查预览后点击确定。",
+    confirmMessage: "光照辐射曲线已确认，请保存方案",
+    cancelMessage: "光照辐射生成已取消",
+    sourceLoadedMessage: "原始光照辐射曲线已载入，请点击生成光照辐射曲线。",
+    importedMessage: "光照辐射文件已导入为原始曲线，请点击生成光照辐射曲线。",
+    importFailedPrefix: "光照辐射文件导入失败：",
+    generationFailedPrefix: "光照辐射生成失败：",
+    selectedFileMessage: "请先选择光照辐射文件",
+    invalidLengthMessage: "光照辐射曲线应为8760点",
+    tableInvalidMessage: "当前时序表不是8760行，未更新光照辐射",
   },
   load: {
     key: "load",
@@ -609,9 +609,10 @@ function bindActions() {
   const timeSeriesImportChart = document.getElementById("timeSeriesImportChart");
   timeSeriesImportChart.addEventListener("pointerdown", startTimeSeriesImportValueDrag);
   document.getElementById("loadGeneratorMode").addEventListener("change", onLoadGeneratorModeChange);
-  document.getElementById("openLoadGenerator").addEventListener("click", openLoadGenerator);
-  document.getElementById("openWindGenerator").addEventListener("click", openWindGenerator);
-  document.getElementById("openSolarGenerator").addEventListener("click", openSolarGenerator);
+  document.getElementById("openCurveGenerator").addEventListener("click", () => openCurveGenerator());
+  document.querySelectorAll("[data-curve-generator-target]").forEach((button) => {
+    button.addEventListener("click", () => selectCurveGeneratorTarget(button.dataset.curveGeneratorTarget));
+  });
   document.getElementById("closeLoadGenerator").addEventListener("click", cancelLoadGenerator);
   document.getElementById("generateLoadCurve").addEventListener("click", generateLoadCurve);
   document.getElementById("loadCurveImportFile").addEventListener("change", onLoadCurveImportFileChange);
@@ -2009,24 +2010,58 @@ function openSolarGenerator() {
   openCurveGenerator("solar_irradiance");
 }
 
-function openCurveGenerator(target) {
+function openCurveGenerator(target = state.curveGeneratorTarget) {
   if (!state.currentScheme || !state.payload) {
     setWeatherImportStatus("请先选择方案", "error");
     return;
   }
-  state.curveGeneratorTarget = curveGeneratorSpecs[target] ? target : "load";
-  rememberPlanningPageState({ curveGeneratorTarget: state.curveGeneratorTarget });
+  setCurveGeneratorTarget(target);
   configureCurveGeneratorModal();
   prefillLoadGeneratorValues();
+  resetCurveGeneratorWorkingState();
+  showModalInBody(document.getElementById("loadGeneratorModal"));
+  refreshCurveGeneratorForTarget();
+}
+
+function selectCurveGeneratorTarget(target) {
+  if (!curveGeneratorSpecs[target] || target === state.curveGeneratorTarget) {
+    syncCurveGeneratorTabs();
+    return;
+  }
+  setCurveGeneratorTarget(target);
+  configureCurveGeneratorModal();
+  prefillLoadGeneratorValues();
+  resetCurveGeneratorWorkingState();
+  refreshCurveGeneratorForTarget();
+}
+
+function setCurveGeneratorTarget(target) {
+  state.curveGeneratorTarget = curveGeneratorSpecs[target] ? target : "wind_speed";
+  rememberPlanningPageState({ curveGeneratorTarget: state.curveGeneratorTarget });
+}
+
+function resetCurveGeneratorWorkingState() {
   state.originalLoadCurve = currentCurveGeneratorRows();
   state.loadGeneratorSourceCurve = null;
   state.loadGeneratorSourceName = "";
   state.pendingLoadCurve = null;
-  showModalInBody(document.getElementById("loadGeneratorModal"));
-  setLoadGeneratorHint(`输入${curveGeneratorSpec().label}最大值、最小值、平均值，并选择生成模式。`);
+}
+
+function refreshCurveGeneratorForTarget() {
+  const mode = document.getElementById("loadGeneratorMode").value;
+  const spec = curveGeneratorSpec();
+  setLoadGeneratorHint(`输入${spec.label}最大值、最小值、平均值，并选择生成模式。`);
   renderLoadGeneratorPreview(state.originalLoadCurve, []);
-  loadLoadGeneratorModeSource(document.getElementById("loadGeneratorMode").value).catch((error) => {
+  loadLoadGeneratorModeSource(mode).catch((error) => {
     setLoadGeneratorHint(error.message || String(error), "error");
+  });
+}
+
+function syncCurveGeneratorTabs() {
+  document.querySelectorAll("[data-curve-generator-target]").forEach((button) => {
+    const active = button.dataset.curveGeneratorTarget === state.curveGeneratorTarget;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
   });
 }
 
@@ -2037,14 +2072,17 @@ function configureCurveGeneratorModal() {
   const close = document.getElementById("closeLoadGenerator");
   const generate = document.getElementById("generateLoadCurve");
   const save = document.getElementById("saveLoadTemplate");
-  if (title) title.textContent = spec.title;
+  const preview = document.getElementById("loadGeneratorPreview");
+  if (title) title.textContent = "曲线生成";
   if (confirm) confirm.textContent = "确认";
-  if (close) close.setAttribute("aria-label", `取消${spec.title}`);
+  if (close) close.setAttribute("aria-label", "取消曲线生成");
   if (generate) generate.textContent = spec.generateLabel;
   if (save) save.hidden = !spec.saveTemplateVisible;
+  if (preview) preview.setAttribute("aria-label", `生成${spec.label}曲线预览`);
   setLabelText("loadGeneratorMaxLabel", spec.maxLabel);
   setLabelText("loadGeneratorMinLabel", spec.minLabel);
   setLabelText("loadGeneratorAverageLabel", spec.averageLabel);
+  syncCurveGeneratorTabs();
   renderLoadGeneratorModeOptions();
 }
 

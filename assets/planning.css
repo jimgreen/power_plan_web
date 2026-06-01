@@ -4017,6 +4017,15 @@ body.modal-open {
   background: #f6fbfa;
 }
 
+.curve-generator-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(20, 190, 255, 0.34);
+  background: rgba(2, 18, 50, 0.72);
+}
+
 .map-provider-tab {
   padding: 7px 14px;
   border: 1px solid #d7e4e0;
@@ -4027,10 +4036,29 @@ body.modal-open {
   font-weight: 900;
 }
 
+.curve-generator-tab {
+  min-width: 108px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(20, 190, 255, 0.34);
+  border-radius: 8px;
+  background: rgba(2, 20, 48, 0.72);
+  color: var(--hud-muted-strong);
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
 .map-provider-tab.active {
   border-color: #21a8c7;
   background: #dff7fb;
   color: #0d5263;
+}
+
+.curve-generator-tab.active {
+  border-color: rgba(108, 238, 255, 0.72);
+  background: rgba(6, 62, 108, 0.78);
+  color: var(--hud-text);
 }
 
 .map-provider-tab.disabled {
@@ -4744,6 +4772,10 @@ body.modal-open {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .planning-parameter-grid {
@@ -4767,8 +4799,10 @@ body.modal-open {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 2px;
-  border-bottom: 1px solid #d7e6e2;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .planning-parameter-tab {
@@ -6998,6 +7032,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row,
 body[data-home-theme]:not([data-home-theme="default"]) .coordinate-map-hint,
 body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-panel,
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tabs,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-generator-tabs,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-toolbar,
 body[data-home-theme]:not([data-home-theme="default"]) .load-generator-grid,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-chart-panel {
@@ -7024,6 +7059,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .coordinate-search-row bu
 body[data-home-theme]:not([data-home-theme="default"]) .coordinate-weather-row button,
 body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button,
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-generator-tab,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-toolbar button,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle,
 body[data-home-theme]:not([data-home-theme="default"]) .amap-map-controls button,
@@ -7036,6 +7072,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .map-picker-foot button {
 }
 
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-generator-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button.active,
 body[data-home-theme]:not([data-home-theme="default"]) .weather-preview-legend button[aria-pressed="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle.active,
@@ -7286,6 +7323,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .log-view-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button.active,
 body[data-home-theme]:not([data-home-theme="default"]) .curve-button[aria-pressed="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-generator-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle.active,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle[aria-pressed="true"] {
   border-color: var(--theme-accent);
@@ -7728,6 +7766,7 @@ body[data-home-theme]:not([data-home-theme="default"]) .curve-button[aria-presse
 body[data-home-theme]:not([data-home-theme="default"]) .curve-group-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .month-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .map-provider-tab.active,
+body[data-home-theme]:not([data-home-theme="default"]) .curve-generator-tab.active,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle.active,
 body[data-home-theme]:not([data-home-theme="default"]) .time-series-import-curve-toggle[aria-pressed="true"],
 body[data-home-theme]:not([data-home-theme="default"]) .annual-view-toggle.active {
@@ -7938,6 +7977,21 @@ body[data-home-theme]:not([data-home-theme="default"]) .result-curve-tooltip-swa
 }
 
 /* Compact editable device tables. */
+#devicesTab .device-card {
+  padding: 0;
+  margin: 0 0 22px;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+#devicesTab .device-card .panel-heading {
+  padding: 0 2px 10px;
+  margin-bottom: 0;
+}
+
 #devicesTab .device-data-table {
   max-height: none;
   overflow-x: hidden;
