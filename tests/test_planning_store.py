@@ -63,6 +63,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("planning_load_factor", payload["planning_parameters"][0])
         self.assertEqual(payload["planning_parameters"][0]["optimization_time_limit_minutes"], 60)
         self.assertEqual(payload["planning_parameters"][0]["initial_storage_soc_ratio"], 0.5)
+        self.assertEqual(payload["planning_parameters"][0]["storage_balance_mode"], "daily")
         self.assertEqual(payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.5)
         self.assertNotIn("storage_charge_efficiency", payload["planning_parameters"][0])
         self.assertNotIn("storage_discharge_efficiency", payload["planning_parameters"][0])
@@ -143,6 +144,7 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["diesel_price"] = 0.76
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 90
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.25
+        payload["planning_parameters"][0]["storage_balance_mode"] = "monthly"
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.75
         payload["storage_pcs"][0]["storage_charge_efficiency"] = 0.9
         payload["storage_pcs"][0]["storage_discharge_efficiency"] = 0.88
@@ -177,6 +179,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["planning_parameters"][0]["diesel_price"], 0.76)
         self.assertEqual(saved["planning_parameters"][0]["optimization_time_limit_minutes"], 90)
         self.assertEqual(saved["planning_parameters"][0]["initial_storage_soc_ratio"], 0.25)
+        self.assertEqual(saved["planning_parameters"][0]["storage_balance_mode"], "monthly")
         self.assertEqual(saved["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.75)
         self.assertEqual(saved["storage_pcs"][0]["storage_charge_efficiency"], 0.9)
         self.assertEqual(saved["storage_pcs"][0]["storage_discharge_efficiency"], 0.88)
@@ -395,8 +398,12 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("rated_wind_speed", headers)
         self.assertLess(headers.index("cut_in_wind_speed"), headers.index("rated_wind_speed"))
         self.assertLess(headers.index("rated_wind_speed"), headers.index("cut_out_wind_speed"))
+        self.assertIn("is_grid_forming", headers)
+        self.assertLess(headers.index("cut_out_wind_speed"), headers.index("is_grid_forming"))
         self.assertIn("rated_wind_speed", payload["wind_turbines"][0])
         self.assertEqual(payload["wind_turbines"][0]["rated_wind_speed"], 12)
+        self.assertIn("is_grid_forming", payload["wind_turbines"][0])
+        self.assertEqual(payload["wind_turbines"][0]["is_grid_forming"], 0)
 
     def test_read_legacy_time_series_without_temperature_keeps_load(self):
         self.store.create_scheme("方案A")

@@ -1,4 +1,6 @@
+import ast
 import json
+import re
 import shutil
 import sys
 import time
@@ -678,8 +680,35 @@ class PowerPlanServerTest(unittest.TestCase):
 
     def test_optimization_api_start_stop_and_logs(self):
         original_runtime = server.OPTIMIZATION_RUNTIME
+        original_store = server.PLANNING_STORE
+        planning_root = WEB_ROOT / "tests" / "tmp_optimization_api_start_stop"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
         server.OPTIMIZATION_RUNTIME = server.OptimizationRuntimeManager()
+
+        def write_feasible_scheme(name: str) -> None:
+            payload = server.planning_store.default_payload(name)
+            for row in payload["time_series"]:
+                row["wind_speed"] = 0
+                row["solar_irradiance"] = 0
+                row["load"] = 50
+                row["temperature"] = 20
+            payload["diesel_generators"][0].update(
+                {
+                    "capacity": 120,
+                    "power_upper": 120,
+                    "power_lower": 0,
+                    "quantity_lower": 1,
+                    "quantity_upper": 1,
+                }
+            )
+            server.PLANNING_STORE.write_scheme(name, payload)
+
         try:
+            write_feasible_scheme("方案A")
+            write_feasible_scheme("方案B")
+
             status, headers, body = server.handle_api_path("/api/optimization/status?scheme=方案A")
             initial = json.loads(body.decode("utf-8"))
             self.assertEqual(status, 200)
@@ -769,7 +798,12 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertEqual(status, 400)
             self.assertEqual(json.loads(body.decode("utf-8"))["error"], "bad_request")
         finally:
+            for runtime in server.OPTIMIZATION_RUNTIME.runtimes().values():
+                if runtime.status == "运行中":
+                    runtime.apply("stop", scheme=runtime.scheme)
+            server.PLANNING_STORE = original_store
             server.OPTIMIZATION_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
 
     def test_optimization_start_rejects_fast_infeasible_planning_bounds_before_solving(self):
         planning_root = WEB_ROOT / "tests" / "tmp_optimization_fast_infeasible"
@@ -1660,6 +1694,7 @@ class PowerPlanServerTest(unittest.TestCase):
 
         def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
             captured["objective"] = c.copy()
+            captured["upper_bounds"] = upper_bounds.copy()
             return SimpleNamespace(success=True, x=lower_bounds.copy(), fun=0.0, message="ok")
 
         with patch.object(estimate, "solve_milp", side_effect=fake_solve_milp):
@@ -1674,12 +1709,14 @@ class PowerPlanServerTest(unittest.TestCase):
         diesel_device = model["device_rows"]["diesel_generators"][0]
         expected_diesel_cost = diesel_device["fuel_rate"] * model["diesel_objective_price"] / 1000
         self.assertEqual(objective_cost(("diesel_power", 0, 0)), expected_diesel_cost)
-        self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
+        self.assertEqual(objective_cost(("unmet_load", 0)), 0.0)
+        self.assertEqual(captured["upper_bounds"][variables[("unmet_load", 0)]], 0.0)
         self.assertEqual(objective_cost(("diesel_on_count", 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
         self.assertEqual(objective_cost(("electrolyzer_on_count", 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
         for key in (
             ("storage_charge", 0),
             ("storage_discharge", 0),
+            ("storage_charge_mode", 0),
             ("electrolyzer_power", 0, 0),
             ("fuel_cell_power", 0, 0),
             ("wind_curtailed", 0),
@@ -1696,8 +1733,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(("grid_storage_on_count", 0, 0), variables)
         self.assertIn(("grid_storage_up_available_count", 0, 0), variables)
         self.assertIn(("grid_storage_down_available_count", 0, 0), variables)
-        self.assertIn(("storage_charge_on", 0), variables)
-        self.assertIn(("storage_discharge_on", 0), variables)
+        self.assertIn(("storage_charge_mode", 0), variables)
+        self.assertNotIn(("storage_charge_on", 0), variables)
+        self.assertNotIn(("storage_discharge_on", 0), variables)
         self.assertEqual(model["initial_storage_soc_ratio"], 0.2)
         self.assertEqual(model["initial_hydrogen_storage_ratio"], 0.8)
         self.assertEqual(model["storage_charge_efficiency"], 0.91)
@@ -6422,6 +6460,12 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("selectPlanningParameterGroup", script)
         self.assertIn("planningGroupToggle", script)
         self.assertIn("isPlanningGroupEnabled", script)
+        self.assertIn('"storage_balance_mode"', script)
+        self.assertIn('"储能平衡模式"', script)
+        self.assertIn('"daily", "日内平衡"', script)
+        self.assertIn('"monthly", "月度平衡"', script)
+        self.assertIn('"annual", "年度平衡"', script)
+        self.assertIn('"none", "不闭环"', script)
         self.assertNotIn("bindPlanningParameterResizeHandles", script)
         self.assertNotIn("planning-parameter-resize-handle", script)
         self.assertIn("renderPlanningParameterGroupTable", script)
@@ -7580,6 +7624,29 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn('battery_capacity: "电池容量"', script)
         self.assertNotIn('hydrogen_tank_capacity: "氢储容量(Nm3)"', script)
         self.assertNotIn('hydrogen_tank_capacity: "储氢罐容量"', script)
+
+    def test_planning_frontend_device_fields_match_backend_sheet_specs(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        frontend_specs = {}
+        for match in re.finditer(r'^\s*\["([^"]+)",\s*"[^"]+",\s*(\[[^\]]*\])\],?\s*$', script, re.MULTILINE):
+            key = match.group(1)
+            if key in server.planning_store.SHEET_SPECS:
+                frontend_specs[key] = ast.literal_eval(match.group(2))
+
+        for key, (_, backend_fields) in server.planning_store.SHEET_SPECS.items():
+            if key in {"time_series", "planning_parameters"}:
+                continue
+            self.assertEqual(frontend_specs.get(key), backend_fields, key)
+
+    def test_planning_frontend_parameters_match_backend_sheet_specs(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        parameter_block = script.split("const planningParameterSpecs = [", 1)[1].split("];", 1)[0]
+        frontend_parameters = [
+            match.group(1)
+            for match in re.finditer(r'^\s*\["([^"]+)"', parameter_block, re.MULTILINE)
+        ]
+
+        self.assertEqual(frontend_parameters, server.planning_store.SHEET_SPECS["planning_parameters"][1])
 
     def test_planning_device_cost_columns_follow_name(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")

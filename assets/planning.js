@@ -77,7 +77,7 @@ const OSM_TILE_PROVIDERS = [
 
 const deviceSpecs = [
   ["diesel_generators", "柴发", ["name", "cost", "capacity", "power_upper", "power_lower", "fuel_rate", "inertia_constant_h", "primary_frequency_coefficient_k", "damping_coefficient_d", "governor_time_constant_t", "quantity_lower", "quantity_upper", "design_life_years"]],
-  ["wind_turbines", "风机", ["name", "cost", "capacity", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "quantity_lower", "quantity_upper", "design_life_years"]],
+  ["wind_turbines", "风机", ["name", "cost", "capacity", "cut_in_wind_speed", "rated_wind_speed", "cut_out_wind_speed", "is_grid_forming", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["photovoltaics", "光伏", ["name", "cost", "capacity", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_pcs", "储能PCS", ["name", "cost", "power_capacity", "storage_charge_efficiency", "storage_discharge_efficiency", "is_grid_forming", "storage_equivalent_inertia_constant_h", "storage_equivalent_primary_frequency_coefficient_k", "storage_equivalent_damping_coefficient_d", "quantity_lower", "quantity_upper", "design_life_years"]],
   ["storage_battery_packs", "储能电池组", ["name", "cost", "battery_capacity", "soc_upper", "soc_lower", "self_discharge_rate", "quantity_lower", "quantity_upper", "design_life_years"]],
@@ -183,6 +183,7 @@ const planningParameterSpecs = [
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 1440, integer: true, positive: true, defaultValue: 60 }],
   ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "原生MOSEK"], ["scipy", "SciPy HiGHS"]] }],
   ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
+  ["storage_balance_mode", "储能平衡模式", "select", { defaultValue: "daily", options: [["daily", "日内平衡"], ["monthly", "月度平衡"], ["annual", "年度平衡"], ["none", "不闭环"]] }],
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
   ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: 0 }],
@@ -225,6 +226,7 @@ const planningParameterGroups = [
       "optimization_time_limit_minutes",
       "preferred_solver",
       "initial_storage_soc_ratio",
+      "storage_balance_mode",
       "initial_hydrogen_storage_ratio",
     ],
   },
@@ -4012,7 +4014,7 @@ function renderPlanningParameterGroupTable(group, row, editable = false) {
     .map((key) => planningParameterSpecsByKey.get(key))
     .filter(Boolean)
     .map(([key, label, type, options]) => {
-      const value = editable ? planningParameterControl(key, type, options, row[key], group, groupEnabled) : escapeHtml(formatPlanningParameterValue(row[key], type));
+      const value = editable ? planningParameterControl(key, type, options, row[key], group, groupEnabled) : escapeHtml(formatPlanningParameterValue(row[key], type, options));
       return `<tr><td>${label}</td><td>${value}</td><td>${planningParameterRangeText(type, options)}</td></tr>`;
     })
     .join("");
@@ -4143,11 +4145,9 @@ function renderPlanningParameterSummaryTable() {
     .join("")}</div>`;
 }
 
-function formatPlanningParameterValue(value, type) {
+function formatPlanningParameterValue(value, type, options = {}) {
   if (type === "boolean") return truthyPlanningValue(value) ? "是" : "否";
-  if (type === "select") {
-    const spec = Array.from(planningParameterSpecsByKey.values()).find(([key]) => key && false);
-  }
+  if (type === "select") return formatPlanningParameterSelectValue(value, options);
   return value;
 }
 

@@ -15,11 +15,12 @@ from milp_solver import CalculationTimeoutError, is_timeout_result, solve_milp
 
 LogSink = Callable[[dict[str, Any]], None]
 
-LOAD_SHED_PENALTY_COST = 1_000_000.0
 DIESEL_ON_COUNT_PENALTY = 0.0001
 ELECTROLYZER_ON_COUNT_PENALTY = 0.00001
 PLANNING_SOLVER = "mosek"
 FREQUENCY_EPS = 1e-9
+STRICT_POWER_BALANCE_TOLERANCE = 1e-5
+GRID_FORMING_WIND_ON_EPS = 1e-6
 NOMINAL_FREQUENCY_HZ = 50.0
 
 DEVICE_SPECS: dict[str, dict[str, str]] = {
@@ -459,7 +460,10 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     optimization_time_limit_minutes = int(min(1440, max(10, round(numeric(raw_time_limit_minutes, 60)))))
     optimization_time_limit_seconds = optimization_time_limit_minutes * 60
     preferred_solver = normalize_preferred_solver(planning_parameters.get("preferred_solver"))
+    diesel_minimum_on_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_on_hours"), 0)))))
+    diesel_minimum_off_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_off_hours"), 0)))))
     initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))
+    storage_balance_mode = normalize_storage_balance_mode(planning_parameters.get("storage_balance_mode", "daily"))
     initial_hydrogen_storage_ratio = min(
         1.0,
         max(0.0, numeric(planning_parameters.get("initial_hydrogen_storage_ratio"), 0.5)),
@@ -526,7 +530,10 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "optimization_time_limit_minutes": optimization_time_limit_minutes,
         "optimization_time_limit_seconds": optimization_time_limit_seconds,
         "preferred_solver": preferred_solver,
+        "diesel_minimum_on_hours": diesel_minimum_on_hours,
+        "diesel_minimum_off_hours": diesel_minimum_off_hours,
         "initial_storage_soc_ratio": initial_storage_soc_ratio,
+        "storage_balance_mode": storage_balance_mode,
         "initial_hydrogen_storage_ratio": initial_hydrogen_storage_ratio,
         "storage_charge_efficiency": storage_charge_efficiency,
         "storage_discharge_efficiency": storage_discharge_efficiency,
@@ -569,6 +576,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
 
     diesel_devices = active_devices(model, "diesel_generators")
     wind_devices = renewable_candidate_devices(model, "wind_turbines")
+    grid_forming_wind_devices = [device for device in wind_devices if device.get("is_grid_forming")]
     pv_devices = renewable_candidate_devices(model, "photovoltaics")
     renewable_devices = [*wind_devices, *pv_devices]
     storage_pcs_devices = model["device_rows"]["storage_pcs"]
@@ -594,13 +602,13 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         add_renewable_hour_variables(builder, hour, renewable_devices)
         builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper))
         builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper))
+        if storage_power_upper > 0:
+            builder.add_var(("storage_charge_mode", hour), 0.0, 1.0, integer=True)
         builder.add_var(("grid_storage_charge", hour), 0.0, max(0.0, grid_storage_power_upper))
         builder.add_var(("grid_storage_discharge", hour), 0.0, max(0.0, grid_storage_power_upper))
-        builder.add_var(("storage_charge_on", hour), 0.0, 1.0, integer=True)
-        builder.add_var(("storage_discharge_on", hour), 0.0, 1.0, integer=True)
         builder.add_var(("storage_soc", hour), 0.0, max(0.0, storage_energy_upper))
         builder.add_var(("hydrogen_storage", hour), 0.0, max(0.0, hydrogen_tank_upper))
-        builder.add_var(("unmet_load", hour), 0.0, max(0.0, loads[hour]), cost=LOAD_SHED_PENALTY_COST)
+        builder.add_var(("unmet_load", hour), 0.0, 0.0)
 
         for device in diesel_devices:
             builder.add_var(
@@ -615,6 +623,13 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 device["quantity_upper"],
                 integer=True,
                 cost=DIESEL_ON_COUNT_PENALTY,
+            )
+        for device in grid_forming_wind_devices:
+            builder.add_var(
+                ("grid_wind_on_count", hour, device["index"]),
+                0.0,
+                device["quantity_upper"],
+                integer=True,
             )
         for device in grid_storage_pcs_devices:
             builder.add_var(("grid_storage_on_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
@@ -713,14 +728,25 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 power_lower=device["power_lower"],
                 quantity_index=qty_index,
             )
+        grid_wind_on_indices = []
+        for device in grid_forming_wind_devices:
+            qty_index = var(("qty", device["key"], device["index"]))
+            on_index = var(("grid_wind_on_count", hour, device["index"]))
+            product_index = var(("renewable_curtailment_product", hour, device["key"], device["index"]))
+            availability = float(model["wind_available_per_unit"][device["id"]][hour])
+            grid_wind_on_indices.append(on_index)
+            builder.add_constraint({on_index: 1.0, qty_index: -1.0}, -np.inf, 0.0)
+            builder.add_constraint(
+                {on_index: GRID_FORMING_WIND_ON_EPS, qty_index: -availability, product_index: availability},
+                -np.inf,
+                0.0,
+            )
 
         grid_storage_on_indices = []
         grid_storage_up_indices = []
         grid_storage_down_indices = []
         grid_storage_up_on_terms = {}
         grid_storage_down_on_terms = {}
-        grid_storage_up_soc_limits = {}
-        grid_storage_down_soc_limits = {}
         for device in grid_storage_pcs_devices:
             qty_index = var(("qty", device["key"], device["index"]))
             on_index = var(("grid_storage_on_count", hour, device["index"]))
@@ -732,8 +758,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             grid_storage_down_indices.append(down_index)
             grid_storage_up_on_terms[up_index] = device["capacity"]
             grid_storage_down_on_terms[down_index] = device["capacity"]
-            grid_storage_up_soc_limits[up_index] = device["quantity_upper"]
-            grid_storage_down_soc_limits[down_index] = device["quantity_upper"]
             builder.add_constraint({up_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
             builder.add_constraint({down_index: 1.0, on_index: -1.0}, -np.inf, 0.0)
 
@@ -762,12 +786,16 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         following_storage_power_terms = qty_terms(following_storage_pcs_devices)
         storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_pcs_devices)
         storage_energy_terms = qty_terms(storage_battery_devices)
-        storage_flags = dispatch_milp.add_storage_constraints(
+        storage_charge_mode_key = ("storage_charge_mode", hour)
+        dispatch_milp.add_storage_constraints(
             builder,
             charge_index=var(("storage_charge", hour)),
             discharge_index=var(("storage_discharge", hour)),
-            charge_on_index=var(("storage_charge_on", hour)),
-            discharge_on_index=var(("storage_discharge_on", hour)),
+            charge_mode_index=(
+                var(storage_charge_mode_key)
+                if storage_charge_mode_key in builder.variables
+                else None
+            ),
             soc_index=var(("storage_soc", hour)),
             previous_soc_index=var(("storage_soc", hour - 1)) if hour > 0 else None,
             power_capacity_upper=storage_power_upper,
@@ -810,10 +838,6 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             -np.inf,
             0.0,
         )
-        for index, upper_count in grid_storage_up_soc_limits.items():
-            builder.add_constraint({index: 1.0, storage_flags["soc_above_lower"]: -float(upper_count)}, -np.inf, 0.0)
-        for index, upper_count in grid_storage_down_soc_limits.items():
-            builder.add_constraint({index: 1.0, storage_flags["soc_below_upper"]: -float(upper_count)}, -np.inf, 0.0)
 
         all_diesel_on_indices = [
             var(("diesel_on_count", hour, device["index"]))
@@ -823,6 +847,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
             builder,
             diesel_on_indices=all_diesel_on_indices,
             grid_storage_on_indices=grid_storage_on_indices,
+            grid_wind_on_indices=grid_wind_on_indices,
         )
         if model["post_disturbance_power_balance_enabled"]:
             dispatch_milp.add_post_disturbance_balance_constraints(
@@ -879,16 +904,20 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         )
 
     for device in diesel_devices:
-        dispatch_milp.add_daily_constant_count_constraints(
+        on_indices = [var(("diesel_on_count", hour, device["index"])) for hour in range(n)]
+        dispatch_milp.add_minimum_up_down_time_constraints(
             builder,
-            on_indices=[var(("diesel_on_count", hour, device["index"])) for hour in range(n)],
+            on_indices=on_indices,
+            quantity_index=var(("qty", device["key"], device["index"])),
+            minimum_on_hours=model["diesel_minimum_on_hours"],
+            minimum_off_hours=model["diesel_minimum_off_hours"],
         )
 
-    for day_end_hour in range(23, n, 24):
+    for cycle_end_hour in storage_cycle_end_hours(n, model["storage_balance_mode"]):
         storage_energy_terms = qty_terms(storage_battery_devices)
         dispatch_milp.add_storage_cycle_constraint(
             builder,
-            soc_index=var(("storage_soc", day_end_hour)),
+            soc_index=var(("storage_soc", cycle_end_hour)),
             energy_capacity_terms=storage_energy_terms,
             initial_ratio=model["initial_storage_soc_ratio"],
         )
@@ -977,7 +1006,34 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         emit(log, "warn", f"规划优化未达到最优但返回了可行解：{result.message}", 80)
     model["variables"] = builder.variables
     model["objective_value"] = objective_value
+    validate_no_unmet_load_solution(model, result.x)
     return result.x
+
+
+def validate_no_unmet_load_solution(
+    model: dict[str, Any],
+    solution: np.ndarray,
+    *,
+    tolerance: float = STRICT_POWER_BALANCE_TOLERANCE,
+) -> None:
+    """Reject any solver result that violates strict no-load-shedding balance."""
+
+    variables = model.get("variables") or {}
+    max_unmet = 0.0
+    max_hour = 0
+    for hour in range(len(model.get("loads", []))):
+        index = variables.get(("unmet_load", hour))
+        if index is None:
+            continue
+        value = max(0.0, float(solution[index]))
+        if value > max_unmet:
+            max_unmet = value
+            max_hour = hour + 1
+    if max_unmet > float(tolerance):
+        raise ValueError(
+            f"{model.get('problem_name', '规划求解')}失败：功率平衡约束要求无切负荷，"
+            f"但求解结果第{max_hour}小时切负荷为{format_log_number(max_unmet)}kW。"
+        )
 
 
 def raise_if_solver_timed_out(result: Any, problem_name: str = "规划求解") -> None:
@@ -1017,6 +1073,57 @@ def planning_solver_backend_label(solver: Any) -> str:
     if normalized == "scipy":
         return "SciPy HiGHS后端"
     return "自动选择"
+
+
+def normalize_storage_balance_mode(value: Any) -> str:
+    mode = str(value or "daily").strip().lower()
+    aliases = {
+        "": "daily",
+        "day": "daily",
+        "daily": "daily",
+        "日内": "daily",
+        "每日": "daily",
+        "month": "monthly",
+        "monthly": "monthly",
+        "月度": "monthly",
+        "每月": "monthly",
+        "year": "annual",
+        "annual": "annual",
+        "年度": "annual",
+        "期末": "annual",
+        "none": "none",
+        "no": "none",
+        "false": "none",
+        "不闭环": "none",
+        "无": "none",
+    }
+    return aliases.get(mode, "daily")
+
+
+def storage_cycle_end_hours(hour_count: int, mode: str) -> list[int]:
+    n = max(0, int(hour_count))
+    if n <= 0 or mode == "none":
+        return []
+    if mode == "annual":
+        return [n - 1]
+    if mode == "monthly":
+        ends: list[int] = []
+        cumulative_hour = -1
+        for days in (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31):
+            cumulative_hour += days * 24
+            if cumulative_hour < n:
+                ends.append(cumulative_hour)
+        return ends
+    return list(range(23, n, 24))
+
+
+def storage_balance_mode_label(mode: str) -> str:
+    return {
+        "daily": "每日SOC闭环",
+        "monthly": "每月SOC闭环",
+        "annual": "期末SOC闭环",
+        "none": "不设置SOC闭环",
+    }.get(mode, "每日SOC闭环")
 
 
 def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -1060,6 +1167,8 @@ def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, 
                 device["primary_frequency_coefficient_k"] = max(0.0, numeric(source.get("primary_frequency_coefficient_k"), 0.4))
                 device["damping_coefficient_d"] = max(0.0, numeric(source.get("damping_coefficient_d"), 0.01))
                 device["governor_time_constant_t"] = max(FREQUENCY_EPS, numeric(source.get("governor_time_constant_t"), 0.6))
+            elif key == "wind_turbines":
+                device["is_grid_forming"] = truthy_flag(source.get("is_grid_forming"), False)
             elif key == "storage_pcs":
                 device["is_grid_forming"] = truthy_flag(source.get("is_grid_forming"), False)
                 device["storage_charge_efficiency"] = optional_efficiency(source.get("storage_charge_efficiency"))
@@ -1692,13 +1801,15 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"负荷总电量={format_log_number(load_energy)}kWh，"
             f"最大负荷={format_log_number(peak_load)}kW，"
             f"柴油价格={format_log_number(model['diesel_price'])}万元/吨，"
+            f"柴发最小开机={model['diesel_minimum_on_hours']}小时，"
+            f"柴发最小停机={model['diesel_minimum_off_hours']}小时，"
             f"绿电下限={format_log_number(model['green_ratio_lower'] * 100)}%，"
             f"初始电储={format_log_number(model['initial_storage_soc_ratio'] * 100)}%，"
             f"初始氢储={format_log_number(model['initial_hydrogen_storage_ratio'] * 100)}%，"
             f"储能效率={format_log_number(model['storage_charge_efficiency'] * 100)}%/"
             f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
             f"电储自损耗={format_log_number(model['storage_self_discharge_rate'] * 100)}%/天，"
-            "电化学储能按每日SOC闭环，仅参与日内平衡，"
+            f"电化学储能平衡模式={storage_balance_mode_label(model['storage_balance_mode'])}，"
             f"氢储SOC范围={format_log_number(model['hydrogen_soc_lower_ratio'] * 100)}%-"
             f"{format_log_number(model['hydrogen_soc_upper_ratio'] * 100)}%，"
             f"氢储自损耗={format_log_number(model['hydrogen_self_discharge_rate'] * 100)}%/天，"

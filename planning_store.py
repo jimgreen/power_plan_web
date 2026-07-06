@@ -62,6 +62,7 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "cut_in_wind_speed",
             "rated_wind_speed",
             "cut_out_wind_speed",
+            "is_grid_forming",
             "quantity_lower",
             "quantity_upper",
             "design_life_years",
@@ -158,6 +159,7 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "optimization_time_limit_minutes",
             "preferred_solver",
             "initial_storage_soc_ratio",
+            "storage_balance_mode",
             "initial_hydrogen_storage_ratio",
             "post_disturbance_power_balance_enabled",
             "renewable_n_1_enabled",
@@ -215,6 +217,7 @@ DEFAULT_DEVICE_ROWS: dict[str, list[dict[str, Any]]] = {
             "cut_in_wind_speed": 3,
             "rated_wind_speed": 12,
             "cut_out_wind_speed": 25,
+            "is_grid_forming": 0,
             "quantity_lower": 0,
             "quantity_upper": 0,
         }
@@ -300,6 +303,7 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "optimization_time_limit_minutes": 60,
     "preferred_solver": "auto",
     "initial_storage_soc_ratio": 0.5,
+    "storage_balance_mode": "daily",
     "initial_hydrogen_storage_ratio": 0.5,
     "storage_frequency_regulation_enabled": 0,
     "renewable_disturbance_enabled": 0,
@@ -1289,6 +1293,9 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
                     ),
                 }
             )
+    storage_balance_mode = str(row.get("storage_balance_mode", "daily")).strip().lower()
+    if storage_balance_mode not in {"daily", "monthly", "annual", "none", "日内", "每日", "月度", "年度", "不闭环", "无"}:
+        messages.append({"level": "error", "message": "储能平衡模式必须为daily、monthly、annual或none"})
     for key, label in (
         ("storage_frequency_regulation_enabled", "储能是否参与调频"),
         ("frequency_security_constraint_enabled", "是否考虑频率安全约束"),

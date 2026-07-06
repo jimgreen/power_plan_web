@@ -133,6 +133,19 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertNotIn(({key: value for key, value in expected_up_terms.items() if key not in {("wind_power",), ("pv_power",)}}, 10.0, np.inf), constraints)
         self.assertNotIn(({**{key: value for key, value in expected_up_terms.items() if key != ("pv_power",)}, ("wind_power",): -1.0}, 0.0, np.inf), constraints)
 
+    def test_no_unmet_load_solution_validation_rejects_positive_load_shedding(self):
+        model = {
+            "problem_name": "规划求解",
+            "loads": np.array([10.0, 20.0]),
+            "variables": {
+                ("unmet_load", 0): 0,
+                ("unmet_load", 1): 1,
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "功率平衡约束要求无切负荷"):
+            plan_optimizer.validate_no_unmet_load_solution(model, np.array([0.0, 0.001]))
+
     def test_security_curve_fields_use_grid_forming_storage_formula(self):
         fields = plan_optimizer.dispatch_security_curve_fields(
             {
@@ -345,8 +358,8 @@ class PlanOptimizerTest(unittest.TestCase):
         payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.4
         payload["diesel_generators"][0].update(
             {
-                "capacity": 10,
-                "power_upper": 10,
+                "capacity": 20,
+                "power_upper": 20,
                 "power_lower": 0,
                 "fuel_rate": 0.5,
                 "quantity_lower": 1,
@@ -416,6 +429,36 @@ class PlanOptimizerTest(unittest.TestCase):
 
         self.assertEqual(seen_options["solver"], "gurobi")
 
+    def test_planning_optimization_uses_minimum_diesel_commitment_rules(self):
+        payload = self._payload()
+        payload["diesel_generators"][0].update(
+            {
+                "capacity": 10,
+                "power_upper": 10,
+                "power_lower": 0,
+                "quantity_lower": 1,
+                "quantity_upper": 1,
+            }
+        )
+        payload["planning_parameters"][0]["diesel_minimum_on_hours"] = 3
+        payload["planning_parameters"][0]["diesel_minimum_off_hours"] = 2
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:4])
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with (
+            patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp),
+            patch.object(dispatch_milp, "add_daily_constant_count_constraints") as daily_constant,
+            patch.object(dispatch_milp, "add_minimum_up_down_time_constraints") as minimum_up_down,
+        ):
+            plan_optimizer.solve_planning_model(model)
+
+        daily_constant.assert_not_called()
+        minimum_up_down.assert_called()
+        self.assertEqual(minimum_up_down.call_args.kwargs["minimum_on_hours"], 3)
+        self.assertEqual(minimum_up_down.call_args.kwargs["minimum_off_hours"], 2)
+
     def test_planning_optimization_rejects_infeasible_non_success_solution(self):
         payload = self._payload()
         model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
@@ -470,6 +513,7 @@ class PlanOptimizerTest(unittest.TestCase):
         def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
             captured["objective"] = c.copy()
             captured["integrality"] = integrality.copy()
+            captured["upper_bounds"] = upper_bounds.copy()
             return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
 
         with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
@@ -482,7 +526,8 @@ class PlanOptimizerTest(unittest.TestCase):
             return objective[variables[key]]
 
         self.assertEqual(objective_cost(("diesel_power", 0, 0)), 0.001)
-        self.assertEqual(objective_cost(("unmet_load", 0)), plan_optimizer.LOAD_SHED_PENALTY_COST)
+        self.assertEqual(objective_cost(("unmet_load", 0)), 0.0)
+        self.assertEqual(captured["upper_bounds"][variables[("unmet_load", 0)]], 0.0)
         self.assertEqual(objective_cost(("diesel_on_count", 0, 0)), plan_optimizer.DIESEL_ON_COUNT_PENALTY)
         self.assertEqual(objective_cost(("electrolyzer_on_count", 0, 0)), plan_optimizer.ELECTROLYZER_ON_COUNT_PENALTY)
         for key in (
@@ -490,6 +535,7 @@ class PlanOptimizerTest(unittest.TestCase):
             ("pv_curtailed", 0),
             ("storage_charge", 0),
             ("storage_discharge", 0),
+            ("storage_charge_mode", 0),
             ("grid_storage_on_count", 0, 0),
             ("electrolyzer_power", 0, 0),
             ("fuel_cell_power", 0, 0),
@@ -503,12 +549,13 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(captured["integrality"][variables[("diesel_on_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("electrolyzer_on_count", 0, 0)]], 1)
         self.assertEqual(captured["integrality"][variables[("grid_storage_on_count", 0, 0)]], 1)
+        self.assertEqual(captured["integrality"][variables[("storage_charge_mode", 0)]], 1)
         for unit in range(2):
             self.assertNotIn(("diesel_on_unit", 0, 0, unit), variables)
             self.assertNotIn(("electrolyzer_on_unit", 0, 0, unit), variables)
             self.assertNotIn(("grid_storage_on", 0, 0, unit), variables)
-        self.assertIn(("storage_charge_on", 0), variables)
-        self.assertIn(("storage_discharge_on", 0), variables)
+        self.assertNotIn(("storage_charge_on", 0), variables)
+        self.assertNotIn(("storage_discharge_on", 0), variables)
 
     def test_planning_model_avoids_unit_level_variables_for_all_equipment_families(self):
         payload = self._payload()
@@ -567,6 +614,7 @@ class PlanOptimizerTest(unittest.TestCase):
             ("fuel_cell_power", 0, 0),
             ("hydrogen_storage", 0),
             ("storage_soc", 0),
+            ("storage_charge_mode", 0),
         ):
             self.assertIn(key, variables)
         for key in (
@@ -577,8 +625,9 @@ class PlanOptimizerTest(unittest.TestCase):
             ("storage_discharge", 0),
         ):
             self.assertEqual(captured["integrality"][variables[key]], 0)
+        self.assertEqual(captured["integrality"][variables[("storage_charge_mode", 0)]], 1)
 
-    def test_planning_model_keeps_diesel_on_count_constant_within_each_day(self):
+    def test_planning_model_does_not_force_diesel_on_count_constant_within_day(self):
         payload = self._payload()
         payload["diesel_generators"][0].update(
             {"capacity": 10, "power_upper": 10, "power_lower": 2, "quantity_lower": 0, "quantity_upper": 2}
@@ -606,8 +655,8 @@ class PlanOptimizerTest(unittest.TestCase):
             terms = {index_to_key[int(column)]: float(value) for column, value in zip(row.indices, row.data)}
             equality_rows.append(terms)
 
-        self.assertIn({("diesel_on_count", 1, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
-        self.assertIn({("diesel_on_count", 23, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
+        self.assertNotIn({("diesel_on_count", 1, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
+        self.assertNotIn({("diesel_on_count", 23, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
         self.assertNotIn({("diesel_on_count", 24, 0): 1.0, ("diesel_on_count", 0, 0): -1.0}, equality_rows)
 
     def test_planning_model_closes_electrochemical_storage_soc_each_day(self):
@@ -656,6 +705,49 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn(daily_cycle_terms, equality_rows)
         self.assertIn(next_day_cycle_terms, equality_rows)
         self.assertNotIn(non_cycle_midnight_terms, equality_rows)
+
+    def test_planning_model_can_close_electrochemical_storage_soc_each_month(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
+        payload["planning_parameters"][0]["storage_balance_mode"] = "monthly"
+        payload["storage_battery_packs"][0].update(
+            {"battery_capacity": 100, "quantity_lower": 1, "quantity_upper": 2}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:746])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower.copy()
+            captured["constraint_upper"] = constraint_upper.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        index_to_key = {index: key for key, index in variables.items()}
+        equality_rows = []
+        matrix = captured["constraints"]
+        for row_index in range(matrix.shape[0]):
+            if abs(captured["constraint_lower"][row_index]) > 1e-9 or abs(captured["constraint_upper"][row_index]) > 1e-9:
+                continue
+            row = matrix.getrow(row_index)
+            terms = {index_to_key[int(column)]: float(value) for column, value in zip(row.indices, row.data)}
+            equality_rows.append(terms)
+
+        battery_quantity_key = ("qty", "storage_battery_packs", 0)
+        month_cycle_terms = {
+            ("storage_soc", 743): 1.0,
+            battery_quantity_key: -50.0,
+        }
+        daily_cycle_terms = {
+            ("storage_soc", 23): 1.0,
+            battery_quantity_key: -50.0,
+        }
+
+        self.assertIn(month_cycle_terms, equality_rows)
+        self.assertNotIn(daily_cycle_terms, equality_rows)
 
     def test_planning_optimization_applies_storage_and_hydrogen_self_discharge(self):
         payload = self._payload()
@@ -1024,6 +1116,71 @@ class PlanOptimizerTest(unittest.TestCase):
             0.0,
         ))
 
+    def test_grid_forming_wind_can_satisfy_grid_support_when_generating(self):
+        payload = self._payload()
+        payload["wind_turbines"][0].update(
+            {"capacity": 10, "quantity_lower": 0, "quantity_upper": 2, "is_grid_forming": 1}
+        )
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        captured = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            captured["integrality"] = integrality.copy()
+            captured["constraints"] = constraints.tocsr()
+            captured["constraint_lower"] = constraint_lower.copy()
+            captured["constraint_upper"] = constraint_upper.copy()
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        variables = model["variables"]
+        wind_on_key = ("grid_wind_on_count", 0, 0)
+        self.assertTrue(model["device_rows"]["wind_turbines"][0]["is_grid_forming"])
+        self.assertIn(wind_on_key, variables)
+        self.assertEqual(captured["integrality"][variables[wind_on_key]], 1)
+
+        def has_constraint(expected_terms, expected_lower, expected_upper):
+            matrix = captured["constraints"]
+            expected = {variables[key]: coefficient for key, coefficient in expected_terms.items()}
+            for row in range(matrix.shape[0]):
+                vector = matrix.getrow(row)
+                terms = {
+                    int(column): float(value)
+                    for column, value in zip(vector.indices, vector.data)
+                    if abs(value) > 1e-9
+                }
+                if set(terms) != set(expected):
+                    continue
+                if not all(abs(terms[column] - expected[column]) < 1e-9 for column in expected):
+                    continue
+                lower = captured["constraint_lower"][row]
+                upper = captured["constraint_upper"][row]
+                lower_matches = np.isneginf(expected_lower) and np.isneginf(lower) or abs(lower - expected_lower) < 1e-9
+                upper_matches = np.isposinf(expected_upper) and np.isposinf(upper) or abs(upper - expected_upper) < 1e-9
+                if lower_matches and upper_matches:
+                    return True
+            return False
+
+        self.assertTrue(has_constraint(
+            {
+                wind_on_key: 1.0,
+                ("qty", "wind_turbines", 0): -1.0,
+            },
+            -np.inf,
+            0.0,
+        ))
+        self.assertTrue(has_constraint(
+            {
+                wind_on_key: plan_optimizer.GRID_FORMING_WIND_ON_EPS,
+                ("qty", "wind_turbines", 0): -10.0,
+                ("renewable_curtailment_product", 0, "wind_turbines", 0): 10.0,
+            },
+            -np.inf,
+            0.0,
+        ))
+        self.assertTrue(has_constraint({wind_on_key: 1.0}, 1.0, np.inf))
+
     def test_planning_model_tracks_grid_forming_storage_and_soc_limits(self):
         payload = self._payload()
         payload["planning_parameters"][0]["post_disturbance_power_balance_enabled"] = 1
@@ -1159,6 +1316,14 @@ class PlanOptimizerTest(unittest.TestCase):
         )
         self.assertIn(
             ({("storage_discharge", 0): 1.0, ("qty", "storage_pcs", 0): -10.0}, -np.inf, 0.0),
+            keyed_constraints,
+        )
+        self.assertIn(
+            ({("storage_charge", 0): 1.0, ("storage_charge_mode", 0): -20.0}, -np.inf, 0.0),
+            keyed_constraints,
+        )
+        self.assertIn(
+            ({("storage_discharge", 0): 1.0, ("storage_charge_mode", 0): 20.0}, -np.inf, 20.0),
             keyed_constraints,
         )
 
