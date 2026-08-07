@@ -1116,14 +1116,22 @@ def normalize_storage_balance_mode(value: Any) -> str:
         "day": "daily",
         "daily": "daily",
         "日内": "daily",
+        "日内平衡": "daily",
         "每日": "daily",
+        "week": "weekly",
+        "weekly": "weekly",
+        "周内": "weekly",
+        "周内平衡": "weekly",
+        "每周": "weekly",
         "month": "monthly",
         "monthly": "monthly",
         "月度": "monthly",
+        "月度平衡": "monthly",
         "每月": "monthly",
         "year": "annual",
         "annual": "annual",
         "年度": "annual",
+        "年度平衡": "annual",
         "期末": "annual",
         "none": "none",
         "no": "none",
@@ -1140,6 +1148,11 @@ def storage_cycle_end_hours(hour_count: int, mode: str) -> list[int]:
         return []
     if mode == "annual":
         return [n - 1]
+    if mode == "weekly":
+        ends = list(range(7 * 24 - 1, n, 7 * 24))
+        if not ends or ends[-1] != n - 1:
+            ends.append(n - 1)
+        return ends
     if mode == "monthly":
         ends: list[int] = []
         cumulative_hour = -1
@@ -1153,11 +1166,12 @@ def storage_cycle_end_hours(hour_count: int, mode: str) -> list[int]:
 
 def storage_balance_mode_label(mode: str) -> str:
     return {
-        "daily": "每日SOC闭环",
-        "monthly": "每月SOC闭环",
-        "annual": "期末SOC闭环",
+        "daily": "日内SOC闭环",
+        "weekly": "周内SOC闭环",
+        "monthly": "月度SOC闭环",
+        "annual": "年度SOC闭环",
         "none": "不设置SOC闭环",
-    }.get(mode, "每日SOC闭环")
+    }.get(mode, "日内SOC闭环")
 
 
 def normalized_device_rows(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -1910,7 +1924,7 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"储能效率={format_log_number(model['storage_charge_efficiency'] * 100)}%/"
             f"{format_log_number(model['storage_discharge_efficiency'] * 100)}%，"
             f"电储自损耗={format_log_number(model['storage_self_discharge_rate'] * 100)}%/天，"
-            f"电化学储能平衡模式={storage_balance_mode_label(model['storage_balance_mode'])}，"
+            f"电储能平衡模式={storage_balance_mode_label(model['storage_balance_mode'])}，"
             f"氢储SOC范围={format_log_number(model['hydrogen_soc_lower_ratio'] * 100)}%-"
             f"{format_log_number(model['hydrogen_soc_upper_ratio'] * 100)}%，"
             f"氢储自损耗={format_log_number(model['hydrogen_self_discharge_rate'] * 100)}%/天，"

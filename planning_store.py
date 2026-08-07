@@ -1348,8 +1348,26 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
                 }
             )
     storage_balance_mode = str(row.get("storage_balance_mode", "daily")).strip().lower()
-    if storage_balance_mode not in {"daily", "monthly", "annual", "none", "日内", "每日", "月度", "年度", "不闭环", "无"}:
-        messages.append({"level": "error", "message": "储能平衡模式必须为daily、monthly、annual或none"})
+    if storage_balance_mode not in {
+        "daily",
+        "weekly",
+        "monthly",
+        "annual",
+        "none",
+        "日内",
+        "日内平衡",
+        "每日",
+        "周内",
+        "周内平衡",
+        "每周",
+        "月度",
+        "月度平衡",
+        "年度",
+        "年度平衡",
+        "不闭环",
+        "无",
+    }:
+        messages.append({"level": "error", "message": "电储能平衡模式必须为daily、weekly、monthly、annual或none"})
     for key, label in (
         ("storage_frequency_regulation_enabled", "储能是否参与调频"),
         ("frequency_security_constraint_enabled", "是否考虑频率安全约束"),

@@ -183,7 +183,7 @@ const planningParameterSpecs = [
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 1440, integer: true, positive: true, defaultValue: 60 }],
   ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "原生MOSEK"], ["scipy", "SciPy HiGHS"]] }],
   ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
-  ["storage_balance_mode", "储能平衡模式", "select", { defaultValue: "daily", options: [["daily", "日内平衡"], ["monthly", "月度平衡"], ["annual", "年度平衡"], ["none", "不闭环"]] }],
+  ["storage_balance_mode", "电储能平衡模式", "select", { defaultValue: "daily", options: [["daily", "日内平衡"], ["weekly", "周内平衡"], ["monthly", "月度平衡"], ["annual", "年度平衡"], ["none", "不闭环"]] }],
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["post_disturbance_power_balance_enabled", "是否考虑扰动后平衡约束", "boolean", { defaultValue: 1 }],
   ["renewable_n_1_enabled", "是否考虑新能源N-1", "boolean", { defaultValue: 0 }],
