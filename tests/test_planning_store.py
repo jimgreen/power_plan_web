@@ -144,7 +144,7 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["diesel_price"] = 0.76
         payload["planning_parameters"][0]["optimization_time_limit_minutes"] = 90
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.25
-        payload["planning_parameters"][0]["storage_balance_mode"] = "monthly"
+        payload["planning_parameters"][0]["storage_balance_mode"] = "weekly"
         payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"] = 0.75
         payload["storage_pcs"][0]["storage_charge_efficiency"] = 0.9
         payload["storage_pcs"][0]["storage_discharge_efficiency"] = 0.88
@@ -179,7 +179,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["planning_parameters"][0]["diesel_price"], 0.76)
         self.assertEqual(saved["planning_parameters"][0]["optimization_time_limit_minutes"], 90)
         self.assertEqual(saved["planning_parameters"][0]["initial_storage_soc_ratio"], 0.25)
-        self.assertEqual(saved["planning_parameters"][0]["storage_balance_mode"], "monthly")
+        self.assertEqual(saved["planning_parameters"][0]["storage_balance_mode"], "weekly")
         self.assertEqual(saved["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.75)
         self.assertEqual(saved["storage_pcs"][0]["storage_charge_efficiency"], 0.9)
         self.assertEqual(saved["storage_pcs"][0]["storage_discharge_efficiency"], 0.88)

@@ -858,6 +858,12 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertIn(next_day_cycle_terms, equality_rows)
         self.assertNotIn(non_cycle_midnight_terms, equality_rows)
 
+    def test_storage_balance_mode_can_close_electrochemical_storage_soc_each_week(self):
+        self.assertEqual(plan_optimizer.normalize_storage_balance_mode("周内"), "weekly")
+        self.assertEqual(plan_optimizer.normalize_storage_balance_mode("weekly"), "weekly")
+        self.assertEqual(plan_optimizer.storage_cycle_end_hours(15 * 24, "weekly"), [167, 335, 359])
+        self.assertEqual(plan_optimizer.storage_cycle_end_hours(8760, "weekly")[-2:], [8735, 8759])
+
     def test_planning_model_can_close_electrochemical_storage_soc_each_month(self):
         payload = self._payload()
         payload["planning_parameters"][0]["initial_storage_soc_ratio"] = 0.5
