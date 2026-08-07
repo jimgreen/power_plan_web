@@ -617,9 +617,12 @@ def add_post_disturbance_balance_constraints(
     grid_storage_down_on_terms: dict[int, float],
     wind_power_indices: list[int],
     pv_power_indices: list[int],
+    renewable_n1_event_terms: list[dict[int, float]] | None = None,
 ) -> None:
     # This block turns the disturbance-security rules into linear reserve
-    # inequalities for each hour.
+    # inequalities for each hour. Renewable-down and renewable-N-1 are
+    # separate events: each receives its own reserve row instead of being
+    # added together.
     renewable_power_indices = [*wind_power_indices, *pv_power_indices]
     up_terms: dict[int, float] = {}
     down_terms: dict[int, float] = {}
@@ -638,10 +641,17 @@ def add_post_disturbance_balance_constraints(
     down_terms[grid_storage_charge_index] = down_terms.get(grid_storage_charge_index, 0.0) - 1.0
 
     load_up_requirement = max(0.0, float(load) * float(load_up_factor))
-    if load_up_requirement > 0 or (renewable_down_factor > 0 and renewable_power_indices):
+    renewable_down_enabled = renewable_down_factor > 0 and bool(renewable_power_indices)
+    if load_up_requirement > 0 or renewable_down_enabled:
         terms = dict(up_terms)
-        for index in renewable_power_indices:
-            terms[index] = terms.get(index, 0.0) - float(renewable_down_factor)
+        if renewable_down_enabled:
+            for index in renewable_power_indices:
+                terms[index] = terms.get(index, 0.0) - float(renewable_down_factor)
+        builder.add_constraint(terms, load_up_requirement, np.inf)
+    for event_terms in renewable_n1_event_terms or []:
+        terms = dict(up_terms)
+        for index, coefficient in event_terms.items():
+            terms[index] = terms.get(index, 0.0) - float(coefficient)
         builder.add_constraint(terms, load_up_requirement, np.inf)
     if load_down_factor > 0:
         builder.add_constraint(down_terms, max(0.0, float(load) * float(load_down_factor)), np.inf)

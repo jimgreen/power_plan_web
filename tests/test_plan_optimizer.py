@@ -133,6 +133,69 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertNotIn(({key: value for key, value in expected_up_terms.items() if key not in {("wind_power",), ("pv_power",)}}, 10.0, np.inf), constraints)
         self.assertNotIn(({**{key: value for key, value in expected_up_terms.items() if key != ("pv_power",)}, ("wind_power",): -1.0}, 0.0, np.inf), constraints)
 
+    def test_post_disturbance_constraints_treat_renewable_n1_as_independent_event(self):
+        builder = dispatch_milp.MilpModelBuilder()
+        variable_keys = [
+            ("diesel_power",),
+            ("diesel_on",),
+            ("storage_charge",),
+            ("storage_discharge",),
+            ("grid_storage_up",),
+            ("grid_storage_down",),
+            ("wind_power",),
+            ("pv_power",),
+            ("n1_built",),
+            ("n1_rate_product",),
+        ]
+        for key in variable_keys:
+            builder.add_var(key)
+        dispatch_milp.add_post_disturbance_balance_constraints(
+            builder,
+            load=100,
+            load_up_factor=0.1,
+            load_down_factor=0.0,
+            renewable_down_factor=0.2,
+            diesel_power_indices=[builder.var(("diesel_power",))],
+            diesel_on_terms={builder.var(("diesel_on",)): 100},
+            grid_storage_charge_index=builder.var(("storage_charge",)),
+            grid_storage_discharge_index=builder.var(("storage_discharge",)),
+            grid_storage_up_on_terms={builder.var(("grid_storage_up",)): 50},
+            grid_storage_down_on_terms={builder.var(("grid_storage_down",)): 50},
+            wind_power_indices=[builder.var(("wind_power",))],
+            pv_power_indices=[builder.var(("pv_power",))],
+            renewable_n1_event_terms=[
+                {
+                    builder.var(("n1_built",)): 40,
+                    builder.var(("n1_rate_product",)): -40,
+                }
+            ],
+        )
+        index_to_key = {index: key for key, index in builder.variables.items()}
+        matrix = builder.constraint_matrix().tocoo()
+        constraints = []
+        for row_index in range(builder.constraint_count):
+            terms = {
+                index_to_key[column]: value
+                for row, column, value in zip(matrix.row, matrix.col, matrix.data)
+                if row == row_index
+            }
+            constraints.append((terms, builder.constraint_lower[row_index], builder.constraint_upper[row_index]))
+
+        base_up_terms = {
+            ("diesel_on",): 100.0,
+            ("diesel_power",): -1.0,
+            ("grid_storage_up",): 50.0,
+            ("storage_discharge",): -1.0,
+            ("storage_charge",): 1.0,
+        }
+        renewable_down_terms = {**base_up_terms, ("wind_power",): -0.2, ("pv_power",): -0.2}
+        renewable_n1_terms = {**base_up_terms, ("n1_built",): -40.0, ("n1_rate_product",): 40.0}
+        combined_terms = {**renewable_down_terms, ("n1_built",): -40.0, ("n1_rate_product",): 40.0}
+
+        self.assertIn((renewable_down_terms, 10.0, np.inf), constraints)
+        self.assertIn((renewable_n1_terms, 10.0, np.inf), constraints)
+        self.assertNotIn((combined_terms, 10.0, np.inf), constraints)
+
     def test_green_ratio_constraint_limits_diesel_energy_by_load(self):
         builder = dispatch_milp.MilpModelBuilder()
         first = builder.add_var(("diesel_power", 1))
@@ -214,6 +277,28 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertEqual(fields["grid_up_regulation_capacity"], 96)
         self.assertEqual(fields["grid_down_regulation_capacity"], -44)
         self.assertEqual(fields["grid_up_regulation_requirement"], 19)
+        self.assertEqual(fields["grid_down_regulation_requirement"], -20)
+
+    def test_security_curve_fields_use_larger_of_renewable_disturbance_and_n1(self):
+        fields = plan_optimizer.dispatch_security_curve_fields(
+            {
+                "load_up_disturbance_factor": 0.1,
+                "load_down_disturbance_factor": 0.2,
+                "renewable_down_disturbance_factor": 0.3,
+                "renewable_n_1_enabled": True,
+            },
+            load=100,
+            wind_power=20,
+            pv_power=10,
+            renewable_single_unit_power_max=12,
+            diesel_capacity=120,
+            diesel_power=40,
+            grid_storage_power=-6,
+            grid_storage_up_capacity=10,
+            grid_storage_down_capacity=10,
+        )
+
+        self.assertEqual(fields["grid_up_regulation_requirement"], 22)
         self.assertEqual(fields["grid_down_regulation_requirement"], -20)
 
     def test_build_results_safety_table_summarizes_hourly_disturbance_requirements(self):
@@ -325,6 +410,25 @@ class PlanOptimizerTest(unittest.TestCase):
         }
 
         self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "min"), 0.031)
+        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "max"), -0.02)
+
+    def test_frequency_delta_p_uses_larger_of_renewable_disturbance_and_n1(self):
+        model = {
+            "frequency": {},
+            "loads": np.array([100.0]),
+            "load_up_disturbance_factor": 0.1,
+            "load_down_disturbance_factor": 0.2,
+            "renewable_down_disturbance_factor": 0.1,
+            "renewable_n_1_enabled": True,
+            "device_rows": {
+                "wind_turbines": [{"id": "wind:0", "capacity": 100, "quantity_upper": 1}],
+                "photovoltaics": [{"id": "pv:0", "capacity": 10, "quantity_upper": 3}],
+            },
+            "wind_available_per_unit": {"wind:0": np.array([100.0])},
+            "pv_available_per_unit": {"pv:0": np.array([10.0])},
+        }
+
+        self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "min"), 0.11)
         self.assertAlmostEqual(plan_optimizer.frequency_delta_p_mw(model, 0, "max"), -0.02)
 
     def test_planning_optimization_optimizes_equipment_counts_and_cost_terms(self):

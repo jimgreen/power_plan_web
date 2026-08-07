@@ -250,12 +250,38 @@ def renewable_available_upper_kw(model: dict[str, Any], hour: int) -> float:
     return max(total, 0.0)
 
 
+def renewable_available_per_unit_kw(model: dict[str, Any], device: dict[str, Any], hour: int) -> float:
+    device_key = str(device.get("key") or "")
+    if not device_key:
+        device_id = str(device.get("id") or "")
+        if device_id.startswith("wind:"):
+            device_key = "wind_turbines"
+        elif device_id.startswith("pv:"):
+            device_key = "photovoltaics"
+    if device_key == "wind_turbines":
+        return max(0.0, float(model["wind_available_per_unit"][device["id"]][hour]))
+    if device_key == "photovoltaics":
+        return max(0.0, float(model["pv_available_per_unit"][device["id"]][hour]))
+    return 0.0
+
+
+def renewable_n1_available_upper_kw(model: dict[str, Any], hour: int) -> float:
+    if not model.get("renewable_n_1_enabled"):
+        return 0.0
+    maximum = 0.0
+    for device in renewable_candidate_devices(model, "wind_turbines"):
+        maximum = max(maximum, renewable_available_per_unit_kw(model, device, hour))
+    for device in renewable_candidate_devices(model, "photovoltaics"):
+        maximum = max(maximum, renewable_available_per_unit_kw(model, device, hour))
+    return max(maximum, 0.0)
+
+
 def frequency_delta_p_mw(model: dict[str, Any], hour: int, seek: str) -> float:
     if seek == "min":
-        disturbance_kw = (
-            float(model["loads"][hour]) * float(model.get("load_up_disturbance_factor", 0.0))
-            + renewable_available_upper_kw(model, hour) * float(model.get("renewable_down_disturbance_factor", 0.0))
-        )
+        load_up_kw = float(model["loads"][hour]) * float(model.get("load_up_disturbance_factor", 0.0))
+        renewable_down_kw = renewable_available_upper_kw(model, hour) * float(model.get("renewable_down_disturbance_factor", 0.0))
+        renewable_n1_kw = renewable_n1_available_upper_kw(model, hour)
+        disturbance_kw = load_up_kw + max(renewable_down_kw, renewable_n1_kw)
         return max(disturbance_kw, FREQUENCY_EPS) / 1000.0
     disturbance_kw = float(model["loads"][hour]) * float(model.get("load_down_disturbance_factor", 0.0))
     return -max(disturbance_kw, FREQUENCY_EPS) / 1000.0
@@ -470,6 +496,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     )
     post_disturbance_power_balance_enabled = truthy_flag(planning_parameters.get("post_disturbance_power_balance_enabled"), True)
     load_disturbance_enabled = truthy_flag(planning_parameters.get("load_disturbance_enabled"), False)
+    renewable_n_1_enabled = truthy_flag(planning_parameters.get("renewable_n_1_enabled"), False)
     renewable_disturbance_enabled = truthy_flag(planning_parameters.get("renewable_disturbance_enabled"), False)
     load_up_disturbance_factor = (
         max(0.0, numeric(planning_parameters.get("load_up_disturbance_factor"), numeric(planning_parameters.get("load_disturbance_factor"), 0.0)))
@@ -541,6 +568,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
         "hydrogen_self_discharge_rate": hydrogen_self_discharge_rate,
         "post_disturbance_power_balance_enabled": post_disturbance_power_balance_enabled,
         "load_disturbance_enabled": load_disturbance_enabled,
+        "renewable_n_1_enabled": renewable_n_1_enabled,
         "renewable_disturbance_enabled": renewable_disturbance_enabled,
         "load_up_disturbance_factor": load_up_disturbance_factor,
         "load_down_disturbance_factor": load_down_disturbance_factor,
@@ -587,6 +615,10 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     hydrogen_tank_devices = model["device_rows"]["hydrogen_tanks"]
     fuel_cell_devices = active_devices(model, "fuel_cells")
 
+    if model["renewable_n_1_enabled"]:
+        for device in renewable_devices:
+            builder.add_var(("renewable_built_indicator", device["key"], device["index"]), 0.0, 1.0, integer=True)
+
     for hour in range(n):
         wind_upper = sum(model["wind_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in wind_devices)
         pv_upper = sum(model["pv_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in pv_devices)
@@ -600,6 +632,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         builder.add_var(("pv_power", hour), 0.0, max(0.0, pv_upper))
         builder.add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper))
         add_renewable_hour_variables(builder, hour, renewable_devices)
+        if model["renewable_n_1_enabled"]:
+            add_renewable_n1_hour_variables(builder, hour, renewable_devices)
         builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper))
         builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper))
         if storage_power_upper > 0:
@@ -681,6 +715,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     discharge_efficiency = model["storage_discharge_efficiency"]
     storage_self_discharge_per_hour = model["storage_self_discharge_rate"] / 24.0
     hydrogen_self_discharge_per_hour = model["hydrogen_self_discharge_rate"] / 24.0
+    if model["renewable_n_1_enabled"]:
+        add_renewable_n1_indicator_constraints(builder, renewable_devices)
 
     for hour in range(n):
         dispatch_milp.add_power_balance_constraint(
@@ -699,6 +735,8 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         )
 
         add_renewable_curtailment_linearization(builder, hour, renewable_devices)
+        if model["renewable_n_1_enabled"]:
+            add_renewable_n1_curtailment_linearization(builder, hour, renewable_devices)
         add_exact_renewable_aggregate_constraints(
             builder,
             model=model,
@@ -867,6 +905,11 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
                 grid_storage_down_on_terms=grid_storage_down_on_terms,
                 wind_power_indices=[var(("wind_power", hour))],
                 pv_power_indices=[var(("pv_power", hour))],
+                renewable_n1_event_terms=(
+                    renewable_n1_event_terms(builder, model=model, hour=hour, devices=renewable_devices)
+                    if model["renewable_n_1_enabled"]
+                    else None
+                ),
             )
         if model["frequency"]["enabled"]:
             add_frequency_security_constraints(
@@ -1367,6 +1410,12 @@ def dispatch_security_curve_fields(
     load_up_disturbance = max(0.0, float(load)) * model["load_up_disturbance_factor"]
     load_down_disturbance = -1.0 * max(0.0, float(load)) * model["load_down_disturbance_factor"]
     renewable_down_disturbance = renewable_power * model["renewable_down_disturbance_factor"]
+    renewable_n1_disturbance = (
+        max(0.0, float(renewable_single_unit_power_max))
+        if model.get("renewable_n_1_enabled")
+        else 0.0
+    )
+    renewable_up_disturbance = max(renewable_down_disturbance, renewable_n1_disturbance)
     grid_up_capacity = (
         float(diesel_capacity)
         - float(diesel_power)
@@ -1385,7 +1434,7 @@ def dispatch_security_curve_fields(
         "renewable_single_unit_power_max": round(max(0.0, float(renewable_single_unit_power_max)), 4),
         "grid_up_regulation_capacity": round(grid_up_capacity, 4),
         "grid_down_regulation_capacity": round(grid_down_capacity, 4),
-        "grid_up_regulation_requirement": round(load_up_disturbance + renewable_down_disturbance, 4),
+        "grid_up_regulation_requirement": round(load_up_disturbance + renewable_up_disturbance, 4),
         "grid_down_regulation_requirement": round(load_down_disturbance, 4),
     }
 
@@ -1564,6 +1613,21 @@ def add_renewable_hour_variables(
         )
 
 
+def add_renewable_n1_hour_variables(
+    builder: dispatch_milp.MilpModelBuilder,
+    hour: int,
+    devices: list[dict[str, Any]],
+) -> None:
+    if not devices:
+        return
+    for device in devices:
+        builder.add_var(
+            ("renewable_built_curtailment_product", hour, device["key"], device["index"]),
+            0.0,
+            1.0,
+        )
+
+
 def add_renewable_curtailment_linearization(
     builder: dispatch_milp.MilpModelBuilder,
     hour: int,
@@ -1579,6 +1643,52 @@ def add_renewable_curtailment_linearization(
         builder.add_constraint({product_index: 1.0, rate_index: -quantity_upper}, -np.inf, 0.0)
         builder.add_constraint({product_index: 1.0, qty_index: -1.0}, -np.inf, 0.0)
         builder.add_constraint({product_index: 1.0, rate_index: -quantity_upper, qty_index: -1.0}, -quantity_upper, np.inf)
+
+
+def add_renewable_n1_indicator_constraints(
+    builder: dispatch_milp.MilpModelBuilder,
+    devices: list[dict[str, Any]],
+) -> None:
+    for device in devices:
+        quantity_upper = max(1.0, float(device["quantity_upper"]))
+        qty_index = builder.var(("qty", device["key"], device["index"]))
+        built_index = builder.var(("renewable_built_indicator", device["key"], device["index"]))
+        builder.add_constraint({qty_index: 1.0, built_index: -quantity_upper}, -np.inf, 0.0)
+        builder.add_constraint({qty_index: 1.0, built_index: -1.0}, 0.0, np.inf)
+
+
+def add_renewable_n1_curtailment_linearization(
+    builder: dispatch_milp.MilpModelBuilder,
+    hour: int,
+    devices: list[dict[str, Any]],
+) -> None:
+    if not devices:
+        return
+    rate_index = builder.var(("renewable_curtailment_rate", hour))
+    for device in devices:
+        built_index = builder.var(("renewable_built_indicator", device["key"], device["index"]))
+        product_index = builder.var(("renewable_built_curtailment_product", hour, device["key"], device["index"]))
+        builder.add_constraint({product_index: 1.0, rate_index: -1.0}, -np.inf, 0.0)
+        builder.add_constraint({product_index: 1.0, built_index: -1.0}, -np.inf, 0.0)
+        builder.add_constraint({product_index: 1.0, rate_index: -1.0, built_index: -1.0}, -1.0, np.inf)
+
+
+def renewable_n1_event_terms(
+    builder: dispatch_milp.MilpModelBuilder,
+    *,
+    model: dict[str, Any],
+    hour: int,
+    devices: list[dict[str, Any]],
+) -> list[dict[int, float]]:
+    events = []
+    for device in devices:
+        availability = renewable_available_per_unit_kw(model, device, hour)
+        if availability <= 0:
+            continue
+        built_index = builder.var(("renewable_built_indicator", device["key"], device["index"]))
+        product_index = builder.var(("renewable_built_curtailment_product", hour, device["key"], device["index"]))
+        events.append({built_index: availability, product_index: -availability})
+    return events
 
 
 def add_exact_renewable_aggregate_constraints(
@@ -1808,6 +1918,8 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"负荷向上扰动系数={format_log_number(model['load_up_disturbance_factor'])}，"
             f"负荷向下扰动系数={format_log_number(model['load_down_disturbance_factor'])}，"
             f"新能源向下扰动系数={format_log_number(model['renewable_down_disturbance_factor'])}，"
+            f"新能源N-1={'开启' if model['renewable_n_1_enabled'] else '关闭'}，"
+            "新能源下扰动与N-1按独立事件取较大值，"
             f"频率安全={'开启' if model['frequency']['enabled'] else '关闭'}，"
             f"求解上限={model['optimization_time_limit_seconds']}秒"
         ),

@@ -1338,7 +1338,8 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
             )
         if truthy_flag(row.get("renewable_disturbance_enabled")):
             renewable_factor = max(0.0, numeric(row.get("renewable_down_disturbance_factor"), 0.0))
-        if load_factor_sum <= 0 and renewable_factor <= 0:
+        renewable_n_1_enabled = truthy_flag(row.get("renewable_n_1_enabled"))
+        if load_factor_sum <= 0 and renewable_factor <= 0 and not renewable_n_1_enabled:
             messages.append(
                 {
                     "level": "warn",
