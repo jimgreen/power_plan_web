@@ -1,3 +1,4 @@
+import base64
 import json
 import shutil
 import sys
@@ -243,6 +244,59 @@ class PlanningSchemeAccessTest(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(self.json_body(body)["shared_with_usernames"], [])
+
+    def test_shared_user_can_export_and_import_archive_as_owned_scheme(self):
+        server.PLANNING_STORE.create_scheme("Alice方案", owner_username="alice")
+        server.PLANNING_STORE.share_scheme("Alice方案", "bob")
+        (self.tmp_dir / "Alice方案" / "case_results.xlsx").write_bytes(b"result workbook bytes")
+
+        status, headers, body = server.handle_planning_api_path(
+            "/api/planning/schemes/Alice方案/export",
+            "GET",
+            b"",
+            current_user=self.bob,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/zip")
+        self.assertIn("Alice%E6%96%B9%E6%A1%88.zip", headers["Content-Disposition"])
+        self.assertGreater(len(body), 0)
+
+        status, headers, response_body = server.handle_planning_api_path(
+            "/api/planning/schemes/import",
+            "POST",
+            json.dumps(
+                {
+                    "filename": "Alice方案.zip",
+                    "name": "Bob导入方案",
+                    "content_base64": base64.b64encode(body).decode("ascii"),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            current_user=self.bob,
+        )
+        imported = self.json_body(response_body)
+        self.assertEqual(status, 200)
+        self.assertEqual(imported["scheme"], "Bob导入方案")
+        self.assertEqual(server.PLANNING_STORE.scheme_owner_username("Bob导入方案"), "bob")
+        self.assertEqual(server.PLANNING_STORE.scheme_shared_usernames("Bob导入方案"), [])
+        self.assertTrue((self.tmp_dir / "Bob导入方案" / "case_results.xlsx").exists())
+
+        status, headers, response_body = server.handle_planning_api_path(
+            "/api/planning/schemes/import",
+            "POST",
+            json.dumps(
+                {
+                    "filename": "Alice方案.zip",
+                    "name": "Alice方案",
+                    "overwrite": True,
+                    "content_base64": base64.b64encode(body).decode("ascii"),
+                },
+                ensure_ascii=False,
+            ).encode("utf-8"),
+            current_user=self.bob,
+        )
+        self.assertEqual(status, 404)
+        self.assertEqual(self.json_body(response_body)["error"], "not_found")
 
 
 if __name__ == "__main__":

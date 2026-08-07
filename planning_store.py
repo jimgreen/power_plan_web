@@ -7,10 +7,13 @@ import unicodedata
 import zipfile
 import gc
 import json
+import shutil
+import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from io import BytesIO
+from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree
 
@@ -25,6 +28,8 @@ DEFAULT_SCHEME_ROOT = WEB_ROOT / "planning_schemes"
 WORKBOOK_NAME = "parameters.xlsx"
 TIME_SERIES_WORKBOOK_NAME = "time_series.xlsx"
 SCHEME_META_NAME = "scheme_meta.json"
+SCHEME_ARCHIVE_MAX_FILES = 2000
+SCHEME_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 WORKBOOK_XML = "xl/workbook.xml"
 WORKBOOK_RELS_XML = "xl/_rels/workbook.xml.rels"
 MAIN_XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -546,6 +551,26 @@ def normalize_shared_usernames(usernames: Any) -> list[str]:
     return result
 
 
+def safe_archive_member_parts(filename: str) -> list[str]:
+    raw = str(filename or "").replace("\\", "/")
+    if "\x00" in raw:
+        raise ValueError("方案压缩包包含非法路径")
+    path = PurePosixPath(raw)
+    if path.is_absolute():
+        raise ValueError("方案压缩包包含非法路径")
+    parts = [part for part in path.parts if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        raise ValueError("方案压缩包包含非法路径")
+    return parts
+
+
+def archive_strip_root_prefix(member_parts: list[list[str]]) -> str:
+    if not member_parts or not all(len(parts) > 1 for parts in member_parts):
+        return ""
+    first_parts = {parts[0] for parts in member_parts}
+    return next(iter(first_parts)) if len(first_parts) == 1 else ""
+
+
 @dataclass
 class PlanningStore:
     root: Path = DEFAULT_SCHEME_ROOT
@@ -681,6 +706,99 @@ class PlanningStore:
         if owner_username is not None:
             self.write_scheme_meta(target, self.build_scheme_meta(owner_username))
         return self.read_scheme(target)
+
+    def export_scheme_archive(self, name: str) -> bytes:
+        clean = validate_scheme_name(name)
+        folder = self.scheme_dir(clean)
+        if not folder.exists() or not folder.is_dir():
+            raise FileNotFoundError(f"方案不存在: {clean}")
+        stream = BytesIO()
+        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for path in sorted(folder.rglob("*"), key=lambda item: item.relative_to(folder).as_posix()):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(folder)
+                if relative.name == SCHEME_META_NAME or relative.name.startswith("."):
+                    continue
+                archive.write(path, f"{clean}/{relative.as_posix()}")
+        return stream.getvalue()
+
+    def import_scheme_archive(
+        self,
+        content: bytes,
+        target: str,
+        owner_username: str | None = None,
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        clean = validate_scheme_name(target)
+        target_dir = self.scheme_dir(clean)
+        if target_dir.exists() and not overwrite:
+            raise FileExistsError(f"方案已存在: {clean}")
+        tmp_dir = Path(tempfile.mkdtemp(prefix=".scheme-import-", dir=self.root))
+        try:
+            self.extract_scheme_archive(content, tmp_dir)
+            parameter_path = tmp_dir / WORKBOOK_NAME
+            if not parameter_path.exists():
+                raise ValueError(f"方案压缩包缺少{WORKBOOK_NAME}")
+            self.validate_imported_workbook(parameter_path)
+            time_series_path = tmp_dir / TIME_SERIES_WORKBOOK_NAME
+            if time_series_path.exists():
+                self.validate_imported_workbook(time_series_path)
+            if target_dir.exists():
+                file_ops.delete_directory_with_retry(target_dir, "已有方案目录")
+            file_ops.replace_directory_with_retry(tmp_dir, target_dir, "导入方案目录")
+            tmp_dir = target_dir
+            if owner_username is not None:
+                self.write_scheme_meta(clean, self.build_scheme_meta(owner_username))
+            return self.read_scheme_overview(clean)
+        finally:
+            if tmp_dir.exists() and tmp_dir.name.startswith(".scheme-import-"):
+                file_ops.delete_directory_with_retry(tmp_dir, "临时导入目录")
+
+    def extract_scheme_archive(self, content: bytes, target_dir: Path) -> None:
+        try:
+            archive = zipfile.ZipFile(BytesIO(content))
+        except zipfile.BadZipFile as exc:
+            raise ValueError("方案压缩包无法读取") from exc
+        with archive:
+            member_infos = [info for info in archive.infolist() if not info.is_dir()]
+            if len(member_infos) > SCHEME_ARCHIVE_MAX_FILES:
+                raise ValueError("方案压缩包文件数量过多")
+            total_size = sum(max(0, int(info.file_size or 0)) for info in member_infos)
+            if total_size > SCHEME_ARCHIVE_MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("方案压缩包过大")
+            member_parts = [safe_archive_member_parts(info.filename) for info in member_infos]
+            strip_prefix = archive_strip_root_prefix([parts for parts in member_parts if parts])
+            extracted = 0
+            for info, parts in zip(member_infos, member_parts):
+                if not parts:
+                    continue
+                relative_parts = parts[1:] if strip_prefix and parts[0] == strip_prefix else parts
+                if not relative_parts:
+                    continue
+                if relative_parts[0] == "__MACOSX" or relative_parts[-1] in {".DS_Store", SCHEME_META_NAME}:
+                    continue
+                target_path = target_dir.joinpath(*relative_parts)
+                resolved_target = target_path.resolve()
+                if target_dir.resolve() not in resolved_target.parents and resolved_target != target_dir.resolve():
+                    raise ValueError("方案压缩包包含非法路径")
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(info) as source, target_path.open("wb") as target_file:
+                    shutil.copyfileobj(source, target_file)
+                extracted += 1
+            if extracted == 0:
+                raise ValueError("方案压缩包为空")
+
+    @staticmethod
+    def validate_imported_workbook(path: Path) -> None:
+        workbook = None
+        try:
+            workbook = load_workbook(path, read_only=True, data_only=True)
+        except Exception as exc:
+            raise ValueError(f"方案压缩包中的工作簿无法读取: {path.name}") from exc
+        finally:
+            if workbook is not None:
+                workbook.close()
 
     def share_scheme(self, name: str, username: str) -> dict[str, Any]:
         clean = validate_scheme_name(name)

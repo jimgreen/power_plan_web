@@ -3,6 +3,7 @@ import struct
 import sys
 import unittest
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -142,6 +143,28 @@ class PlanningStoreTest(unittest.TestCase):
 
         self.assertEqual(self.store.scheme_owner_username("方案A"), "alice")
         self.assertEqual(self.store.scheme_owner_username("方案B"), "bob")
+
+    def test_scheme_archive_export_import_copies_files_and_resets_metadata(self):
+        self.store.create_scheme("方案A", owner_username="alice")
+        self.store.share_scheme("方案A", "bob")
+        result_path = self.tmp_dir / "方案A" / "case_results.xlsx"
+        result_path.write_bytes(b"result workbook bytes")
+
+        archive_bytes = self.store.export_scheme_archive("方案A")
+
+        with zipfile.ZipFile(BytesIO(archive_bytes)) as archive:
+            names = set(archive.namelist())
+        self.assertIn("方案A/parameters.xlsx", names)
+        self.assertIn("方案A/time_series.xlsx", names)
+        self.assertIn("方案A/case_results.xlsx", names)
+        self.assertNotIn("方案A/scheme_meta.json", names)
+
+        imported = self.store.import_scheme_archive(archive_bytes, "方案B", owner_username="carol")
+
+        self.assertEqual(imported["scheme"], "方案B")
+        self.assertEqual(self.store.scheme_owner_username("方案B"), "carol")
+        self.assertEqual(self.store.scheme_shared_usernames("方案B"), [])
+        self.assertTrue((self.tmp_dir / "方案B" / "case_results.xlsx").exists())
 
     def test_copy_scheme_can_overwrite_existing_target_when_requested(self):
         source = self.store.create_scheme("方案A")

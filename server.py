@@ -72,7 +72,7 @@ def _ensure_project_virtualenv() -> None:
 _ensure_project_virtualenv()
 from contextlib import closing
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlencode, unquote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
 from urllib.request import urlopen
 from zipfile import BadZipFile
 
@@ -6356,6 +6356,19 @@ def _json_response(payload: dict, status: int = 200, extra_headers: dict[str, st
     return status, headers, body
 
 
+def _download_response(body: bytes, filename: str, content_type: str) -> tuple[int, dict[str, str], bytes]:
+    safe_filename = re.sub(r"[^A-Za-z0-9._-]+", "_", str(filename or "").strip()) or "download"
+    return (
+        HTTPStatus.OK,
+        {
+            "Content-Type": content_type,
+            "Cache-Control": "no-store",
+            "Content-Disposition": f"attachment; filename=\"{safe_filename}\"; filename*=UTF-8''{quote(filename)}",
+        },
+        body,
+    )
+
+
 def response_is_compressible(headers: dict[str, str], body: bytes) -> bool:
     if len(body) < MIN_GZIP_RESPONSE_BYTES:
         return False
@@ -8298,6 +8311,24 @@ def handle_planning_api_path(
                     owner_username=new_scheme_owner_for_user(current_user),
                 )
             )
+        if path == f"{prefix}/import" and method == "POST":
+            payload = _read_json_body(body)
+            filename = str(payload.get("filename", ""))
+            target_name = str(payload.get("name") or Path(filename).stem or "").strip()
+            target = ensure_planning_copy_target_access(target_name, current_user)
+            content_base64 = str(payload.get("content_base64", ""))
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except (binascii.Error, ValueError) as exc:
+                raise ValueError("导入失败，方案压缩包内容无法解析") from exc
+            return _json_response(
+                PLANNING_STORE.import_scheme_archive(
+                    content,
+                    target,
+                    owner_username=new_scheme_owner_for_user(current_user),
+                    overwrite=truthy_json_value(payload.get("overwrite")),
+                )
+            )
         if path == f"{prefix}/share" and method == "POST":
             payload = _read_json_body(body)
             name = ensure_planning_scheme_manage_access(str(payload.get("scheme", "")), current_user)
@@ -8320,6 +8351,14 @@ def handle_planning_api_path(
             name = unquote(path[len(prefix) + 1 : -len("/shares")])
             name = ensure_planning_scheme_manage_access(name, current_user)
             return _json_response(planning_scheme_share_payload(name))
+        if path.startswith(f"{prefix}/") and path.endswith("/export") and method == "GET":
+            name = unquote(path[len(prefix) + 1 : -len("/export")])
+            name = ensure_planning_scheme_access(name, current_user)
+            return _download_response(
+                PLANNING_STORE.export_scheme_archive(name),
+                f"{name}.zip",
+                "application/zip",
+            )
         if path.startswith(f"{prefix}/") and path.endswith("/overview") and method == "GET":
             name = unquote(path[len(prefix) + 1 : -len("/overview")])
             ensure_planning_scheme_access(name, current_user)

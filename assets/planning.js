@@ -601,6 +601,9 @@ function bindActions() {
   document.getElementById("copyScheme").addEventListener("click", copyScheme);
   document.getElementById("renameScheme").addEventListener("click", renameScheme);
   document.getElementById("shareScheme").addEventListener("click", shareScheme);
+  document.getElementById("importScheme").addEventListener("click", importScheme);
+  document.getElementById("exportScheme").addEventListener("click", exportScheme);
+  document.getElementById("schemeImportFile").addEventListener("change", onSchemeImportFileChange);
   document.getElementById("saveScheme").addEventListener("click", saveScheme);
   document.getElementById("deleteScheme").addEventListener("click", deleteScheme);
   document.getElementById("importTimeSeriesFile").addEventListener("click", importTimeSeriesFile);
@@ -1434,6 +1437,61 @@ async function copyScheme() {
   await selectScheme(state.currentScheme);
 }
 
+function importScheme() {
+  const input = document.getElementById("schemeImportFile");
+  input.value = "";
+  input.click();
+}
+
+async function onSchemeImportFileChange(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  try {
+    const defaultName = normalizeSchemeName(file.name.replace(/\.zip$/i, "")) || "导入方案";
+    const target = normalizeSchemeName(prompt("请输入导入后的方案名称", defaultName));
+    if (!target) return;
+    const existingTarget = schemeItemByName(target);
+    if (existingTarget?.can_manage === false) {
+      alert("同名方案来自他人分享，不能覆盖，请换一个名称");
+      return;
+    }
+    const payload = { filename: file.name, name: target };
+    if (existingTarget || schemeNameExists(target)) {
+      const confirmed = confirm(`方案名称已存在：${target}\n是否覆盖？`);
+      if (!confirmed) return;
+      payload.overwrite = true;
+    }
+    payload.content_base64 = await arrayBufferToBase64(await file.arrayBuffer());
+    const imported = await api("/api/planning/schemes/import", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    state.currentScheme = imported.scheme;
+    await loadSchemes();
+    await selectScheme(state.currentScheme);
+    alert("方案导入成功");
+  } catch (error) {
+    alert(`方案导入失败：${error.message || String(error)}`);
+  } finally {
+    event.target.value = "";
+  }
+}
+
+async function exportScheme() {
+  if (!state.currentScheme) return alert("请先选择方案");
+  try {
+    const response = await fetch(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}/export`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || data.error || "导出失败");
+    }
+    const blob = await response.blob();
+    downloadBlob(blob, filenameFromContentDisposition(response.headers.get("Content-Disposition")) || `${state.currentScheme}.zip`);
+  } catch (error) {
+    alert(`方案导出失败：${error.message || String(error)}`);
+  }
+}
+
 async function renameScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
   if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能修改名称");
@@ -2052,6 +2110,31 @@ function arrayBufferToBase64(buffer) {
     binary += String.fromCharCode(...chunk);
   }
   return btoa(binary);
+}
+
+function filenameFromContentDisposition(header) {
+  const text = String(header || "");
+  const utf8Match = text.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch (error) {
+      return utf8Match[1];
+    }
+  }
+  const asciiMatch = text.match(/filename="([^"]+)"/i);
+  return asciiMatch ? asciiMatch[1] : "";
+}
+
+function downloadBlob(blob, filename) {
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = filename || "scheme.zip";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function showModalInBody(modal) {
@@ -4702,6 +4785,7 @@ function syncSchemeActionState() {
   const canManage = currentSchemeCanManage();
   const states = {
     copyScheme: !hasScheme,
+    exportScheme: !hasScheme,
     deleteScheme: !hasScheme || !canManage,
     renameScheme: !hasScheme || !canManage,
     saveScheme: !hasScheme || !canManage,
