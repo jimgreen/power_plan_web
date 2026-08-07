@@ -2564,6 +2564,83 @@ class PowerPlanServerTest(unittest.TestCase):
             server.OPTIMIZATION_RUNTIME = original_runtime
             shutil.rmtree(planning_root, ignore_errors=True)
 
+    def test_evaluation_report_api_exports_word_document(self):
+        from docx import Document
+
+        planning_root = WEB_ROOT / "tests" / "tmp_evaluation_report_export"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        try:
+            server.PLANNING_STORE.create_scheme("方案A", owner_username="alice")
+            result_path = planning_root / "方案A" / "opt_results.xlsx"
+            workbook = Workbook()
+            workbook.active.title = "总体指标"
+            workbook.active.append(["指标", "数值", "单位"])
+            workbook.active.append(["度电成本", 9.99, "元/kWh"])
+            workbook.active.append(["绿电占比", 0.62, "%"])
+            planning_sheet = workbook.create_sheet("规划结果")
+            planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+            planning_sheet.append(["工作簿柴发", 3, 111, 333, "kW"])
+            annual_sheet = workbook.create_sheet("规划年指标")
+            annual_sheet.append(["指标", "数值", "单位"])
+            annual_sheet.append(["年柴油成本", 12.5, "万元"])
+            annual_sheet.append(["年均建设成本", 8.2, "万元"])
+            green_sheet = workbook.create_sheet("供能分析")
+            green_sheet.append(["指标", "数值", "单位"])
+            green_sheet.append(["新能源实发电量", 5678, "kWh"])
+            safety_sheet = workbook.create_sheet("安全评估")
+            safety_sheet.append(["指标", "数值", "单位"])
+            safety_sheet.append(["最低频率", 49.8, "Hz"])
+            daily_sheet = workbook.create_sheet("供能日曲线")
+            daily_sheet.append(["day", "load_energy", "diesel_energy", "renewable_energy"])
+            daily_sheet.append([1, 100, 30, 70])
+            daily_sheet.append([2, 120, 36, 84])
+            safety_daily_sheet = workbook.create_sheet("安全日曲线")
+            safety_daily_sheet.append(["day", "frequency_min", "frequency_max"])
+            safety_daily_sheet.append([1, 49.8, 50.15])
+            safety_daily_sheet.append([2, 49.82, 50.12])
+            workbook.save(result_path)
+            workbook.close()
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/report",
+                "GET",
+                b"",
+                "scheme=方案A&filename=opt_results.xlsx",
+                current_user={"id": 1, "username": "alice", "role": "user"},
+            )
+
+            self.assertEqual(status, 200)
+            self.assertEqual(headers["Content-Type"], server.EVALUATION_REPORT_CONTENT_TYPE)
+            self.assertIn(".docx", headers["Content-Disposition"])
+            self.assertTrue(body.startswith(b"PK"))
+            document = Document(BytesIO(body))
+            paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+            table_text = "\n".join(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+            self.assertIn("方案结果报告", paragraph_text)
+            self.assertIn("方案A / opt", paragraph_text)
+            self.assertIn("方案名称", table_text)
+            self.assertIn("度电成本", table_text)
+            self.assertIn("工作簿柴发", table_text)
+            self.assertGreaterEqual(len(document.inline_shapes), 1)
+
+            status, headers, body = server.handle_evaluation_results_api_path(
+                "/api/evaluation/report",
+                "GET",
+                b"",
+                "scheme=方案A&filename=missing_results.xlsx",
+                current_user={"id": 1, "username": "alice", "role": "user"},
+            )
+            error_payload = json.loads(body.decode("utf-8"))
+            self.assertEqual(status, 404)
+            self.assertEqual(error_payload["error"], "not_found")
+            self.assertIn("missing_results.xlsx", error_payload["message"])
+        finally:
+            server.PLANNING_STORE = original_store
+            shutil.rmtree(planning_root, ignore_errors=True)
+
     def test_result_workbook_display_payload_uses_file_cache_until_file_changes(self):
         planning_root = WEB_ROOT / "tests" / "tmp_result_workbook_cache"
         shutil.rmtree(planning_root, ignore_errors=True)
@@ -5250,6 +5327,19 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn(".optimization-workspace:not(.evaluation-workspace) > .scheme-rail", css)
         self.assertIn("grid-template-rows: auto minmax(0, 1fr)", css)
         self.assertIn(".optimization-workspace:not(.evaluation-workspace) > .scheme-rail .scheme-list", css)
+
+    def test_evaluation_page_has_report_export_action(self):
+        html = (WEB_ROOT / "evaluation.html").read_text(encoding="utf-8")
+        script = (WEB_ROOT / "assets" / "evaluation.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="exportEvaluationReport"', html)
+        self.assertIn(">导出报告</button>", html)
+        self.assertIn("20260807-report-export", html)
+        self.assertIn("exportEvaluationReport", script)
+        self.assertIn("/api/evaluation/report", script)
+        self.assertIn("filenameFromContentDisposition", script)
+        self.assertIn("downloadBlob", script)
+        self.assertIn("reportButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection", script)
 
     def test_evaluation_page_uses_optimization_layout_as_editable_base(self):
         html = (WEB_ROOT / "evaluation.html").read_text(encoding="utf-8")

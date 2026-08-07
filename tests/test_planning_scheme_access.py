@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from openpyxl import Workbook
+
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WEB_ROOT))
@@ -111,6 +113,16 @@ class PlanningSchemeAccessTest(unittest.TestCase):
 
     def test_shared_user_can_read_results_and_copy_but_cannot_manage_source(self):
         server.PLANNING_STORE.create_scheme("Alice方案", owner_username="alice")
+        result_path = self.tmp_dir / "Alice方案" / "opt_results.xlsx"
+        workbook = Workbook()
+        workbook.active.title = "总体指标"
+        workbook.active.append(["指标", "数值", "单位"])
+        workbook.active.append(["度电成本", 1.23, "元"])
+        planning_sheet = workbook.create_sheet("规划结果")
+        planning_sheet.append(["设备类型", "设计台数", "单台容量", "总容量", "单位"])
+        planning_sheet.append(["柴发", 1, 100, 100, "kW"])
+        workbook.save(result_path)
+        workbook.close()
 
         with patch.object(server.USER_STORE, "get_user_by_username", side_effect=self.lookup_user):
             status, headers, body = server.handle_planning_api_path(
@@ -156,6 +168,28 @@ class PlanningSchemeAccessTest(unittest.TestCase):
         result_payload = self.json_body(body)
         self.assertEqual(status, 200)
         self.assertIn("results", result_payload)
+
+        status, headers, body = server.handle_evaluation_results_api_path(
+            "/api/evaluation/report",
+            "GET",
+            b"",
+            "scheme=Alice方案&filename=opt_results.xlsx",
+            current_user=self.bob,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], server.EVALUATION_REPORT_CONTENT_TYPE)
+        self.assertTrue(body.startswith(b"PK"))
+
+        status, headers, body = server.handle_evaluation_results_api_path(
+            "/api/evaluation/report",
+            "GET",
+            b"",
+            "scheme=Alice方案&filename=opt_results.xlsx",
+            current_user={"id": 4, "username": "charlie", "role": "user"},
+        )
+        denied_report = self.json_body(body)
+        self.assertEqual(status, 404)
+        self.assertEqual(denied_report["error"], "not_found")
 
         status, headers, body = server.handle_planning_api_path(
             "/api/planning/schemes/copy",

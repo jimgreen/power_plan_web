@@ -500,6 +500,7 @@ function bindEvaluationResultActions() {
   document.getElementById("deleteEvaluationResult").addEventListener("click", () => manageEvaluationResult("delete"));
   document.getElementById("copyEvaluationResult").addEventListener("click", copyEvaluationResult);
   document.getElementById("saveEvaluationResult").addEventListener("click", saveEvaluationResult);
+  document.getElementById("exportEvaluationReport").addEventListener("click", exportEvaluationReport);
   document.getElementById("renameEvaluationResult").addEventListener("click", renameEvaluationResult);
 }
 
@@ -739,12 +740,14 @@ function updateEvaluationResultActions() {
   const deleteButton = document.getElementById("deleteEvaluationResult");
   const copyButton = document.getElementById("copyEvaluationResult");
   const saveButton = document.getElementById("saveEvaluationResult");
+  const reportButton = document.getElementById("exportEvaluationReport");
   const renameButton = document.getElementById("renameEvaluationResult");
   deleteButton.disabled = selectedResultIsDefault() || !hasScheme || !hasSelection;
   saveButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection;
   copyButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection;
+  reportButton.disabled = !selectedResultIsReadable() || !hasScheme || !hasSelection;
   renameButton.disabled = !canEditWorkbook || !hasScheme || !hasSelection;
-  [deleteButton, copyButton, saveButton, renameButton].forEach((button) => {
+  [deleteButton, copyButton, saveButton, reportButton, renameButton].forEach((button) => {
     button.classList.toggle("is-disabled", button.disabled);
     button.setAttribute("aria-disabled", String(button.disabled));
   });
@@ -775,6 +778,35 @@ async function renameEvaluationResult() {
   const targetName = prompt("请输入新的结果名称", resultDisplayName(state.selectedResultFile) || "");
   if (targetName === null) return;
   await manageEvaluationResult("rename", { target_name: targetName.trim() });
+}
+
+async function exportEvaluationReport() {
+  if (!state.currentScheme) {
+    alert("请先选择方案");
+    return;
+  }
+  if (!state.selectedResultFile) {
+    alert("请先选择结果文件");
+    return;
+  }
+  try {
+    const response = await fetch(
+      `/api/evaluation/report?scheme=${encodeURIComponent(state.currentScheme)}&filename=${encodeURIComponent(state.selectedResultFile)}`,
+    );
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const error = new Error(data.message || data.error || "导出报告失败");
+      error.payload = data;
+      error.status = response.status;
+      throw error;
+    }
+    const blob = await response.blob();
+    const fallbackName = `${state.currentScheme}_${resultDisplayName(state.selectedResultFile) || "结果"}_报告.docx`;
+    downloadBlob(blob, filenameFromContentDisposition(response.headers.get("Content-Disposition")) || fallbackName);
+  } catch (error) {
+    const data = error.payload || {};
+    alert(data.message || error.message || "导出报告失败");
+  }
 }
 
 async function manageEvaluationResult(action, extra = {}) {
@@ -2318,6 +2350,31 @@ function cssNumber(value) {
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+}
+
+function filenameFromContentDisposition(header) {
+  const text = String(header || "");
+  const utf8Match = text.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch (error) {
+      return utf8Match[1];
+    }
+  }
+  const asciiMatch = text.match(/filename="([^"]+)"/i);
+  return asciiMatch ? asciiMatch[1] : "";
+}
+
+function downloadBlob(blob, filename) {
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = filename || "方案结果报告.docx";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function showError(error) {

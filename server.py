@@ -2167,6 +2167,379 @@ def read_result_workbook_metrics(workbook) -> list[dict]:
     return metrics
 
 
+EVALUATION_REPORT_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+EVALUATION_REPORT_CJK_FONT_PATHS = [
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+]
+EVALUATION_REPORT_CJK_FONT_NAMES = [
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "Noto Sans CJK TC",
+    "Droid Sans Fallback",
+    "SimHei",
+    "Microsoft YaHei",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+]
+EVALUATION_REPORT_DEVICE_SECTIONS = [
+    ("diesel_generators", "柴发类型数"),
+    ("wind_turbines", "风机类型数"),
+    ("photovoltaics", "光伏类型数"),
+    ("storage_pcs", "储能PCS类型数"),
+    ("storage_battery_packs", "储能电池组类型数"),
+    ("hydrogen_electrolyzers", "电解槽类型数"),
+    ("hydrogen_tanks", "储氢罐类型数"),
+    ("fuel_cells", "燃料电池类型数"),
+]
+EVALUATION_REPORT_GREEN_SERIES = [
+    ("load_energy", "负荷"),
+    ("diesel_energy", "柴发"),
+    ("wind_energy", "风机"),
+    ("pv_energy", "光伏"),
+    ("renewable_energy", "新能源"),
+    ("storage_discharge_energy", "储能放电"),
+    ("fuel_cell_energy", "燃料电池"),
+]
+EVALUATION_REPORT_SAFETY_SERIES = [
+    ("frequency_min", "最低频率"),
+    ("frequency_max", "最高频率"),
+]
+
+
+def build_evaluation_report_docx(scheme: str, filename: str) -> bytes:
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
+
+    clean_scheme = planning_store.validate_scheme_name(scheme)
+    selected = resolve_evaluation_report_result_filename(clean_scheme, filename)
+    if not selected:
+        raise FileNotFoundError(f"结果文件不存在: {filename or OPTIMIZATION_RESULT_WORKBOOK_NAME}")
+    result_path = evaluation_result_path(clean_scheme, selected)
+    if not result_path.exists():
+        raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
+
+    payload = read_result_workbook_display_payload(result_path, include_hourly_curves=False)
+    overview = read_evaluation_report_scheme_overview(clean_scheme)
+    meta = PLANNING_STORE.read_scheme_meta(clean_scheme)
+    results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
+
+    document = Document()
+    normal_style = document.styles["Normal"]
+    normal_style.font.name = "Microsoft YaHei"
+    normal_style.font.size = Pt(10)
+
+    title = document.add_heading("方案结果报告", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    subtitle = document.add_paragraph(f"{clean_scheme} / {result_display_name_from_filename(selected) or selected}")
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    document.add_heading("基本信息", level=1)
+    report_add_key_value_table(
+        document,
+        evaluation_report_basic_rows(clean_scheme, selected, result_path, overview, meta),
+    )
+
+    document.add_heading("关键指标", level=1)
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
+    if metrics:
+        report_add_rows_table(
+            document,
+            [{"指标": item.get("label", ""), "数值": item.get("value", ""), "单位": item.get("unit", "")} for item in metrics],
+            headers=["指标", "数值", "单位"],
+        )
+    else:
+        document.add_paragraph("暂无关键指标。")
+
+    document.add_heading("结果表格", level=1)
+    for table in results.get("overview_tables", []):
+        rows = table.get("rows", []) if isinstance(table, dict) else []
+        document.add_heading(str(table.get("title") or "结果表格"), level=2)
+        report_add_rows_table(document, rows, empty_text="暂无数据。")
+
+    green_table = results.get("green_table", [])
+    if green_table:
+        document.add_heading("经济性指标", level=2)
+        report_add_rows_table(document, green_table, empty_text="暂无经济性指标。")
+    safety_table = results.get("safety_table", [])
+    if safety_table:
+        document.add_heading("安全性指标", level=2)
+        report_add_rows_table(document, safety_table, empty_text="暂无安全性指标。")
+
+    document.add_heading("图表展示", level=1)
+    charts_added = 0
+    charts_added += report_add_overview_composition_charts(document, results.get("overview_disks", []))
+    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
+    if report_add_line_chart(
+        document,
+        "供能日曲线",
+        curves.get("green_daily", []),
+        "day",
+        EVALUATION_REPORT_GREEN_SERIES,
+        "电量",
+    ):
+        charts_added += 1
+    if report_add_line_chart(
+        document,
+        "供能月曲线",
+        curves.get("green_monthly", []),
+        "month",
+        EVALUATION_REPORT_GREEN_SERIES,
+        "电量",
+    ):
+        charts_added += 1
+    if report_add_line_chart(
+        document,
+        "频率安全日曲线",
+        curves.get("safety_daily", []),
+        "day",
+        EVALUATION_REPORT_SAFETY_SERIES,
+        "频率/裕度",
+    ):
+        charts_added += 1
+    if charts_added == 0:
+        document.add_paragraph("暂无可展示图表。")
+
+    output = BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def resolve_evaluation_report_result_filename(scheme: str, filename: str = "") -> str:
+    requested = str(filename or "").strip()
+    selected = selected_evaluation_result_filename(scheme, requested)
+    if requested and selected != requested:
+        raise FileNotFoundError(f"结果文件不存在: {requested}")
+    return selected
+
+
+def read_evaluation_report_scheme_overview(scheme: str) -> dict:
+    try:
+        return PLANNING_STORE.read_scheme_overview(scheme)
+    except (FileNotFoundError, ValueError):
+        return {"scheme": scheme}
+
+
+def evaluation_report_basic_rows(
+    scheme: str,
+    filename: str,
+    result_path: Path,
+    overview: dict,
+    meta: dict,
+) -> list[tuple[str, object]]:
+    rows: list[tuple[str, object]] = [
+        ("方案名称", overview.get("scheme") or scheme),
+        ("结果名称", result_display_name_from_filename(filename) or filename),
+        ("结果文件", filename),
+        ("报告生成时间", datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        ("结果更新时间", datetime.fromtimestamp(result_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")),
+        ("方案归属", meta.get("owner_username") or "未设置"),
+        ("创建人", meta.get("created_by") or meta.get("owner_username") or "未设置"),
+        ("方案创建时间", meta.get("created_at") or ""),
+        ("时序数据行数", overview.get("time_series_count", "")),
+    ]
+    for key, label in EVALUATION_REPORT_DEVICE_SECTIONS:
+        value = overview.get(key)
+        if isinstance(value, list):
+            rows.append((label, len(value)))
+    return rows
+
+
+def report_add_key_value_table(document, rows: list[tuple[str, object]]) -> None:
+    table = document.add_table(rows=0, cols=2)
+    table.style = "Table Grid"
+    for label, value in rows:
+        row = table.add_row().cells
+        row[0].text = str(label)
+        row[1].text = report_display_value(value)
+
+
+def report_add_rows_table(
+    document,
+    rows: list[dict],
+    headers: list[str] | None = None,
+    empty_text: str = "暂无数据。",
+    max_rows: int = 120,
+) -> None:
+    normalized_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    if not normalized_rows:
+        document.add_paragraph(empty_text)
+        return
+    table_headers = headers or report_headers_from_rows(normalized_rows)
+    if not table_headers:
+        document.add_paragraph(empty_text)
+        return
+    table = document.add_table(rows=1, cols=len(table_headers))
+    table.style = "Table Grid"
+    for index, header in enumerate(table_headers):
+        table.rows[0].cells[index].text = str(header)
+    for row in normalized_rows[:max_rows]:
+        cells = table.add_row().cells
+        for index, header in enumerate(table_headers):
+            cells[index].text = report_display_value(row.get(header, ""))
+    if len(normalized_rows) > max_rows:
+        document.add_paragraph(f"仅展示前 {max_rows} 行，共 {len(normalized_rows)} 行。")
+
+
+def report_headers_from_rows(rows: list[dict]) -> list[str]:
+    headers: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in row:
+            clean = str(key or "").strip()
+            if clean and clean not in headers:
+                headers.append(clean)
+    return headers
+
+
+def report_display_value(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, Decimal):
+        value = float(value)
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return ""
+        text = f"{value:.6f}".rstrip("0").rstrip(".")
+        return text or "0"
+    return str(value)
+
+
+def report_add_overview_composition_charts(document, disks: list[dict]) -> int:
+    added = 0
+    for disk in disks if isinstance(disks, list) else []:
+        segments = report_overview_disk_segments(disk)
+        if not segments:
+            continue
+        title = str(disk.get("title") or "构成").strip() or "构成"
+        if report_add_bar_chart(document, title, segments):
+            added += 1
+    return added
+
+
+def report_overview_disk_segments(disk: dict) -> list[dict]:
+    if not isinstance(disk, dict):
+        return []
+    segments: list[dict] = []
+    raw_segments = disk.get("segments")
+    if isinstance(raw_segments, list):
+        for segment in raw_segments:
+            if not isinstance(segment, dict):
+                continue
+            value = _numeric_or_none(segment.get("value"))
+            label = str(segment.get("label") or "").strip()
+            if value is not None and value > 0 and label:
+                segments.append({"label": label, "value": value, "unit": segment.get("unit") or disk.get("unit") or ""})
+    else:
+        for label_key, value_key in (("left_label", "left_value"), ("right_label", "right_value")):
+            value = _numeric_or_none(disk.get(value_key))
+            label = str(disk.get(label_key) or "").strip()
+            if value is not None and value > 0 and label:
+                segments.append({"label": label, "value": value, "unit": disk.get("unit") or ""})
+    return segments
+
+
+def report_add_bar_chart(document, title: str, segments: list[dict]) -> bool:
+    plt = report_pyplot()
+    labels = [str(segment.get("label") or "") for segment in segments]
+    values = [_numeric_or_none(segment.get("value")) or 0 for segment in segments]
+    if not labels or not any(value > 0 for value in values):
+        return False
+    unit = str(next((segment.get("unit") for segment in segments if segment.get("unit")), "") or "")
+    fig, ax = plt.subplots(figsize=(6.4, 3.2))
+    bars = ax.bar(labels, values, color=["#0d5c59", "#d98a2b", "#4a7a9f", "#8a9b3f", "#7d5fb2", "#a85d5d"])
+    ax.set_title(title)
+    if unit:
+        ax.set_ylabel(unit)
+    ax.tick_params(axis="x", rotation=20)
+    for bar, value in zip(bars, values):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), report_display_value(value), ha="center", va="bottom", fontsize=8)
+    ax.grid(axis="y", alpha=0.2)
+    fig.tight_layout()
+    report_add_figure(document, fig)
+    return True
+
+
+def report_add_line_chart(
+    document,
+    title: str,
+    rows: list[dict],
+    x_key: str,
+    series_specs: list[tuple[str, str]],
+    y_label: str,
+) -> bool:
+    normalized_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    if not normalized_rows:
+        return False
+    plt = report_pyplot()
+    fig, ax = plt.subplots(figsize=(6.4, 3.2))
+    plotted = False
+    x_values = [
+        _numeric_or_none(row.get(x_key)) if _numeric_or_none(row.get(x_key)) is not None else index + 1
+        for index, row in enumerate(normalized_rows)
+    ]
+    for key, label in series_specs:
+        y_values = [_numeric_or_none(row.get(key)) for row in normalized_rows]
+        if not any(value is not None for value in y_values):
+            continue
+        plotted = True
+        ax.plot(
+            x_values,
+            [value if value is not None else float("nan") for value in y_values],
+            linewidth=1.6,
+            label=label,
+        )
+    if not plotted:
+        plt.close(fig)
+        return False
+    ax.set_title(title)
+    ax.set_xlabel("月份" if x_key == "month" else "天")
+    ax.set_ylabel(y_label)
+    ax.grid(alpha=0.25)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    report_add_figure(document, fig)
+    return True
+
+
+def report_pyplot():
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    from matplotlib import font_manager
+    import matplotlib.pyplot as plt
+
+    for font_path in EVALUATION_REPORT_CJK_FONT_PATHS:
+        path = Path(font_path)
+        if path.exists():
+            try:
+                font_manager.fontManager.addfont(str(path))
+            except RuntimeError:
+                pass
+    available_fonts = {font.name for font in font_manager.fontManager.ttflist}
+    selected_fonts = [name for name in EVALUATION_REPORT_CJK_FONT_NAMES if name in available_fonts]
+    plt.rcParams["font.sans-serif"] = selected_fonts or EVALUATION_REPORT_CJK_FONT_NAMES
+    plt.rcParams["axes.unicode_minus"] = False
+    return plt
+
+
+def report_add_figure(document, figure) -> None:
+    from docx.shared import Inches
+
+    stream = BytesIO()
+    try:
+        figure.savefig(stream, format="png", dpi=150, bbox_inches="tight")
+        stream.seek(0)
+        document.add_picture(stream, width=Inches(6.4))
+    finally:
+        report_pyplot().close(figure)
+
+
 def merge_runtime_metrics(runtime_metrics: list[dict], workbook_metrics: list[dict]) -> list[dict]:
     if not workbook_metrics:
         return runtime_metrics
@@ -2579,9 +2952,27 @@ def handle_evaluation_results_api_path(
     query: str = "",
     current_user: dict | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
-    if path != "/api/evaluation/results":
+    if path not in {"/api/evaluation/results", "/api/evaluation/report"}:
         return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
     try:
+        if path == "/api/evaluation/report":
+            if method != "GET":
+                return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
+            query_params = parse_qs(query)
+            scheme = query_params.get("scheme", [""])[0]
+            filename = query_params.get("filename", [""])[0]
+            scheme = ensure_planning_scheme_access(scheme, current_user)
+            selected = resolve_evaluation_report_result_filename(scheme, filename)
+            if not selected:
+                raise FileNotFoundError("结果文件不存在")
+            report_body = build_evaluation_report_docx(scheme, selected)
+            display_name = result_display_name_from_filename(selected) or "结果"
+            return _download_response(
+                report_body,
+                f"{scheme}_{display_name}_报告.docx",
+                EVALUATION_REPORT_CONTENT_TYPE,
+            )
+
         if method == "GET":
             query_params = parse_qs(query)
             scheme = query_params.get("scheme", [""])[0]
