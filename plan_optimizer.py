@@ -933,21 +933,12 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     green_ratio_lower = model["green_ratio_lower"]
     dispatch_milp.add_green_ratio_constraint(
         builder,
-        green_power_indices=[
-            index
-            for hour in range(n)
-            for index in [
-                var(("wind_power", hour)),
-                var(("pv_power", hour)),
-                var(("storage_discharge", hour)),
-                *[var(("fuel_cell_power", hour, device["index"])) for device in fuel_cell_devices],
-            ]
-        ],
         diesel_power_indices=[
             var(("diesel_power", hour, device["index"]))
             for hour in range(n)
             for device in diesel_devices
         ],
+        load_energy=float(np.sum(model["loads"])) if n else 0.0,
         ratio_lower=green_ratio_lower,
     )
 
@@ -2192,7 +2183,7 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "pv_power": round(pv_power, 4),
                 "renewable_power": round(renewable_energy, 4),
                 "renewable_available": round(renewable_available, 4),
-                "renewable_ratio": round(estimate.percent(renewable_energy, load), 4),
+                "renewable_ratio": round(estimate.green_power_ratio_from_diesel_load(diesel_power, load), 4),
                 "storage_power": round(storage_power, 4),
                 "grid_storage_capacity": round(grid_storage_capacity, 4),
                 "grid_storage_power": round(grid_storage_power, 4),
@@ -2261,7 +2252,10 @@ def dispatch_totals(dispatch_rows: list[dict[str, Any]]) -> dict[str, float]:
         + totals["fuel_cell_energy"]
     )
     totals["total_generation_energy"] = totals["green_generation_energy"] + totals["diesel_energy"]
-    totals["green_power_ratio"] = estimate.percent(totals["green_generation_energy"], totals["total_generation_energy"])
+    totals["green_power_ratio"] = estimate.green_power_ratio_from_diesel_load(
+        totals["diesel_energy"],
+        totals["load_energy"],
+    )
     totals["renewable_ratio"] = totals["green_power_ratio"]
     return {key: round(value, 4) for key, value in totals.items()}
 
@@ -2441,11 +2435,11 @@ def build_results(
         ],
         "overview": [
             {"指标": "度电成本", "数值": costs["levelized_cost"], "单位": "元", "说明": "年总成本折算"},
-            {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "按风光、储能放电和燃料电池发电统计"},
+            {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "按柴油年发电量占负荷年用电量的比例反推"},
             {"指标": "总成本", "数值": costs["annual_total_cost"], "单位": "万元", "说明": "年均建设成本加年柴油成本"},
         ],
         "green": [
-            {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "满足规划参数中的绿色电量占比下限"},
+            {"指标": "绿电占比", "数值": round(green_ratio, 4), "单位": "%", "说明": "满足柴油年发电量不高于负荷年用电量折算上限"},
             {"指标": "弃电率", "数值": round(curtailed_ratio, 4), "单位": "%", "说明": "新能源弃电量占新能源最大可发电量比例"},
             {"指标": "柴油消耗", "数值": totals["diesel_consumption"], "单位": "吨", "说明": "按各柴发油耗率逐时累计"},
         ],

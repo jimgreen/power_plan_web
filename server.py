@@ -1021,7 +1021,7 @@ class OptimizationRuntime:
             ],
             "overview": [
                 {"指标": "度电成本", "数值": cost, "单位": "元", "说明": "基于当前候选方案的综合成本估计"},
-                {"指标": "绿电占比", "数值": green_ratio, "单位": "%", "说明": "风光与氢储供电占比"},
+                {"指标": "绿电占比", "数值": green_ratio, "单位": "%", "说明": "按柴油年发电量占负荷年用电量的比例反推"},
                 {"指标": "优化进度", "数值": self.progress, "单位": "%", "说明": self.status},
             ],
             "green": [
@@ -1209,7 +1209,7 @@ class OptimizationRuntime:
                         "pv_available": round(pv_available, 4),
                         "pv_power": round(pv_power, 4),
                         "renewable_available": round(renewable_available, 4),
-                        "renewable_ratio": round(renewable_power / load * 100 if load else 0.0, 4),
+                        "renewable_ratio": round(estimate.green_power_ratio_from_diesel_load(diesel_power, load), 4),
                         "storage_power": round(storage_discharge - storage_charge, 4),
                         "storage_soc": round(storage_soc, 4),
                         "hydrogen_production_power": 0,

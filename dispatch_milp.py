@@ -746,16 +746,13 @@ def add_hydrogen_cycle_constraint(
 def add_green_ratio_constraint(
     builder: MilpModelBuilder,
     *,
-    green_power_indices: list[int],
     diesel_power_indices: list[int],
+    load_energy: float,
     ratio_lower: float,
 ) -> None:
     if ratio_lower <= 0:
         return
-    coefficient = 1.0 - float(ratio_lower)
     terms: dict[int, float] = {}
-    for index in green_power_indices:
-        terms[index] = terms.get(index, 0.0) + coefficient
     for index in diesel_power_indices:
-        terms[index] = terms.get(index, 0.0) - float(ratio_lower)
-    builder.add_constraint(terms, 0.0, np.inf)
+        terms[index] = terms.get(index, 0.0) + 1.0
+    builder.add_constraint(terms, -np.inf, max(0.0, float(load_energy)) * (1.0 - float(ratio_lower)))

@@ -133,6 +133,53 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertNotIn(({key: value for key, value in expected_up_terms.items() if key not in {("wind_power",), ("pv_power",)}}, 10.0, np.inf), constraints)
         self.assertNotIn(({**{key: value for key, value in expected_up_terms.items() if key != ("pv_power",)}, ("wind_power",): -1.0}, 0.0, np.inf), constraints)
 
+    def test_green_ratio_constraint_limits_diesel_energy_by_load(self):
+        builder = dispatch_milp.MilpModelBuilder()
+        first = builder.add_var(("diesel_power", 1))
+        second = builder.add_var(("diesel_power", 2))
+
+        dispatch_milp.add_green_ratio_constraint(
+            builder,
+            diesel_power_indices=[first, second],
+            load_energy=1000.0,
+            ratio_lower=0.7,
+        )
+        matrix = builder.constraint_matrix().tocoo()
+        terms = {
+            column: value
+            for row, column, value in zip(matrix.row, matrix.col, matrix.data)
+            if row == 0
+        }
+
+        self.assertEqual(terms, {first: 1.0, second: 1.0})
+        self.assertEqual(builder.constraint_lower[0], -np.inf)
+        self.assertAlmostEqual(builder.constraint_upper[0], 300.0)
+
+    def test_dispatch_totals_green_ratio_uses_diesel_share_of_load(self):
+        totals = plan_optimizer.dispatch_totals(
+            [
+                {"load": 100.0, "diesel_power": 40.0, "wind_power": 10.0, "pv_power": 0.0},
+                {"load": 200.0, "diesel_power": 80.0, "wind_power": 20.0, "pv_power": 0.0},
+            ]
+        )
+
+        self.assertEqual(totals["load_energy"], 300.0)
+        self.assertEqual(totals["diesel_energy"], 120.0)
+        self.assertAlmostEqual(totals["green_power_ratio"], 60.0)
+        self.assertAlmostEqual(totals["renewable_ratio"], totals["green_power_ratio"])
+
+    def test_energy_ratios_align_new_energy_share_with_green_ratio(self):
+        row = {
+            "load_energy": 1000.0,
+            "diesel_energy": 250.0,
+            "renewable_energy": 700.0,
+            "curtailed_energy": 0.0,
+            "renewable_available_energy": 700.0,
+        }
+        estimate.add_energy_ratios(row)
+
+        self.assertAlmostEqual(row["renewable_ratio"], 75.0)
+
     def test_no_unmet_load_solution_validation_rejects_positive_load_shedding(self):
         model = {
             "problem_name": "规划求解",
@@ -249,6 +296,7 @@ class PlanOptimizerTest(unittest.TestCase):
 
         self.assertEqual(green_values["负荷总电量"], totals["load_energy"])
         self.assertEqual(green_values["柴发总电量"], totals["diesel_energy"])
+        self.assertEqual(green_values["新能源占比"], green_values["绿电占比"])
         self.assertEqual(green_values["柴油消耗"], totals["diesel_consumption"])
         self.assertEqual(green_values["年均建设成本"], costs["annualized_construction_cost"])
         self.assertEqual(green_values["年柴油成本"], costs["annual_diesel_cost"])

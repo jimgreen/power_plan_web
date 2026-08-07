@@ -177,8 +177,20 @@ def percent(part: float, total: float) -> float:
     return part / total * 100 if total else 0.0
 
 
+def green_power_ratio_from_diesel_load(diesel_energy: float, load_energy: float) -> float:
+    if load_energy <= 0:
+        return 0.0
+    return (1.0 - diesel_energy / load_energy) * 100
+
+
 def add_energy_ratios(row: dict[str, Any]) -> None:
-    row["renewable_ratio"] = round(percent(numeric(row.get("renewable_energy"), 0.0), numeric(row.get("load_energy"), 0.0)), 4)
+    row["renewable_ratio"] = round(
+        green_power_ratio_from_diesel_load(
+            numeric(row.get("diesel_energy"), 0.0),
+            numeric(row.get("load_energy"), 0.0),
+        ),
+        4,
+    )
     row["renewable_curtailed_rate"] = round(percent(numeric(row.get("curtailed_energy"), 0.0), numeric(row.get("renewable_available_energy"), 0.0)), 4)
 
 
