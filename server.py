@@ -1771,7 +1771,11 @@ def read_evaluation_planning_result_rows_for_response(scheme: str, filename: str
         return []
 
 
-def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], bytes]:
+def handle_comparison_data_api_path(
+    path: str,
+    query: str = "",
+    current_user: dict | None = None,
+) -> tuple[int, dict[str, str], bytes]:
     if path != "/api/comparison/data":
         return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
     try:
@@ -1784,6 +1788,9 @@ def handle_comparison_data_api_path(path: str, query: str = "") -> tuple[int, di
         items = json.loads(items_text or "[]")
         if not isinstance(items, list):
             raise ValueError("对比项必须为列表")
+        for item in items:
+            if isinstance(item, dict) and str(item.get("scheme", "")).strip():
+                ensure_planning_scheme_access(str(item.get("scheme", "")), current_user)
         if mode in {"curve", "curves"}:
             return _json_response(build_comparison_curve_payload(items[:8], curve_group, curve_names[:32]))
         return _json_response(build_comparison_payload(items[:8], include_hourly_curves=include_hourly_curves))
@@ -2544,6 +2551,7 @@ def handle_evaluation_results_api_path(
     method: str = "GET",
     body: bytes = b"",
     query: str = "",
+    current_user: dict | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
     if path != "/api/evaluation/results":
         return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
@@ -2552,6 +2560,7 @@ def handle_evaluation_results_api_path(
             query_params = parse_qs(query)
             scheme = query_params.get("scheme", [""])[0]
             filename = query_params.get("filename", [""])[0]
+            ensure_planning_scheme_access(scheme, current_user)
             light = query_params.get("light", [""])[0] in {"1", "true", "yes"}
             selected = selected_evaluation_result_filename(scheme, filename)
             if light:
@@ -2576,6 +2585,7 @@ def handle_evaluation_results_api_path(
         scheme = str(payload.get("scheme", ""))
         action = str(payload.get("action", ""))
         filename = str(payload.get("filename", ""))
+        ensure_planning_scheme_access(scheme, current_user)
 
         if action == "delete":
             result_path = evaluation_result_path(scheme, filename)
@@ -4173,12 +4183,12 @@ def start_task_item_unlocked(item: dict) -> dict:
     raise ValueError("任务类型必须为规划计算、方案评估或频率计算")
 
 
-def build_task_list(schedule: bool = True) -> list[dict]:
+def build_task_list(schedule: bool = True, current_user: dict | None = None) -> list[dict]:
     TASK_SCHEDULER.remove_running_or_finished()
     if schedule:
         TASK_SCHEDULER.schedule_next_if_idle()
     tasks: dict[str, dict] = {}
-    for scheme_item in safe_list_schemes_for_tasks():
+    for scheme_item in safe_list_schemes_for_tasks(current_user):
         scheme = str(scheme_item.get("name") or "").strip()
         if not scheme:
             continue
@@ -4232,6 +4242,8 @@ def build_task_list(schedule: bool = True) -> list[dict]:
                 tasks[freq_task["id"]] = freq_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
+        if not user_can_access_planning_scheme(scheme, current_user):
+            continue
         state = runtime.task_snapshot()
         task = task_from_runtime_state(
             "optimization",
@@ -4245,6 +4257,8 @@ def build_task_list(schedule: bool = True) -> list[dict]:
 
     for key, runtime in EVALUATION_RUNTIME.runtimes().items():
         scheme, result = split_evaluation_runtime_key(key)
+        if not user_can_access_planning_scheme(scheme, current_user):
+            continue
         queued = TASK_SCHEDULER.is_queued("evaluation", scheme, result)
         if result == OPTIMIZATION_RESULT_WORKBOOK_NAME and runtime.status != "运行中" and not queued:
             continue
@@ -4261,6 +4275,8 @@ def build_task_list(schedule: bool = True) -> list[dict]:
 
     for key, runtime in FREQUENCY_EVALUATION_RUNTIME.runtimes().items():
         scheme, result = split_evaluation_runtime_key(key)
+        if not user_can_access_planning_scheme(scheme, current_user):
+            continue
         queued = TASK_SCHEDULER.is_queued("frequency", scheme, result)
         state = runtime.task_snapshot()
         task = task_from_runtime_state(
@@ -4297,9 +4313,9 @@ def task_sort_key(item: dict) -> tuple[int, str, str]:
     return type_rank, str(item.get("scheme") or ""), str(item.get("result") or "")
 
 
-def safe_list_schemes_for_tasks() -> list[dict]:
+def safe_list_schemes_for_tasks(current_user: dict | None = None) -> list[dict]:
     try:
-        return PLANNING_STORE.list_schemes()
+        return PLANNING_STORE.list_schemes(owner_username=scheme_owner_filter_for_user(current_user))
     except Exception:
         return []
 
@@ -4398,11 +4414,18 @@ def latest_log_message(logs: object) -> str:
     return ""
 
 
-def build_task_control_response(action: str, task_type: str, scheme: str, result: str = "") -> dict:
+def build_task_control_response(
+    action: str,
+    task_type: str,
+    scheme: str,
+    result: str = "",
+    current_user: dict | None = None,
+) -> dict:
     task_type_key = normalize_task_type_key(task_type)
     normalized_action = normalize_task_action(action)
     if normalized_action == "cancel_queue":
         item = normalized_task_item(task_type_key, scheme, result)
+        ensure_planning_scheme_access(item["scheme"], current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         if task_type_key == "optimization":
             state = OPTIMIZATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"])
@@ -4412,22 +4435,25 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
             state = FREQUENCY_EVALUATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"], filename=item["result"])
         else:
             state = default_task_runtime_state(item["scheme"], item["result"])
-        tasks = build_task_list()
+        tasks = build_task_list(current_user=current_user)
         task = task_from_runtime_state(task_type_key, state, scheme=item["scheme"], result=item["result"])
         return {"ok": True, "task": task, "tasks": tasks}
     if normalized_action == "queue":
         item = normalized_task_item(task_type_key, scheme, result)
+        ensure_planning_scheme_access(item["scheme"], current_user)
         item = TASK_SCHEDULER.enqueue(item["task_type_key"], item["scheme"], item["result"])
-        tasks = build_task_list(schedule=False)
+        tasks = build_task_list(schedule=False, current_user=current_user)
         task = find_task_in_list(tasks, item)
         return {"ok": True, "task": task, "tasks": tasks}
     if task_type_key == "optimization":
+        ensure_planning_scheme_access(scheme, current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         state = OPTIMIZATION_RUNTIME.apply(normalized_action, scheme=scheme)
         task = task_from_runtime_state("optimization", state, scheme=state.get("scheme") or scheme, result=OPTIMIZATION_RESULT_WORKBOOK_NAME)
-        tasks = build_task_list()
+        tasks = build_task_list(current_user=current_user)
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
     if task_type_key == "evaluation":
+        ensure_planning_scheme_access(scheme, current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         state = EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
         task = task_from_runtime_state(
@@ -4436,9 +4462,10 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
             scheme=state.get("scheme") or scheme,
             result=state.get("result_filename") or result,
         )
-        tasks = build_task_list()
+        tasks = build_task_list(current_user=current_user)
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
     if task_type_key == "frequency":
+        ensure_planning_scheme_access(scheme, current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         state = FREQUENCY_EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
         task = task_from_runtime_state(
@@ -4447,7 +4474,7 @@ def build_task_control_response(action: str, task_type: str, scheme: str, result
             scheme=state.get("scheme") or scheme,
             result=state.get("result_filename") or result,
         )
-        tasks = build_task_list()
+        tasks = build_task_list(current_user=current_user)
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
     raise ValueError("任务类型必须为规划计算、方案评估或频率计算")
 
@@ -6585,7 +6612,70 @@ def round_load_value(value: float) -> float | int:
     return int(rounded) if rounded.is_integer() else rounded
 
 
-def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") -> tuple[int, dict[str, str], bytes]:
+def user_has_admin_scope(current_user: dict | None) -> bool:
+    return current_user is None or current_user.get("role") == "admin"
+
+
+def current_username(current_user: dict | None) -> str:
+    return str((current_user or {}).get("username") or "").strip()
+
+
+def scheme_owner_filter_for_user(current_user: dict | None) -> str | None:
+    if user_has_admin_scope(current_user):
+        return None
+    return current_username(current_user)
+
+
+def new_scheme_owner_for_user(current_user: dict | None) -> str | None:
+    if current_user is None:
+        return None
+    return current_username(current_user)
+
+
+def ensure_planning_scheme_access(name: str, current_user: dict | None) -> str:
+    clean = planning_store.validate_scheme_name(name)
+    if user_has_admin_scope(current_user):
+        return clean
+    username = current_username(current_user)
+    if not username or PLANNING_STORE.scheme_owner_username(clean) != username:
+        raise FileNotFoundError(f"方案不存在: {clean}")
+    return clean
+
+
+def user_can_access_planning_scheme(name: str, current_user: dict | None) -> bool:
+    try:
+        ensure_planning_scheme_access(name, current_user)
+    except (ValueError, FileNotFoundError):
+        return False
+    return True
+
+
+def planning_scheme_access_error_response(
+    name: str,
+    current_user: dict | None,
+) -> tuple[int, dict[str, str], bytes] | None:
+    try:
+        ensure_planning_scheme_access(name, current_user)
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except ValueError as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+    return None
+
+
+def ensure_planning_copy_target_access(name: str, current_user: dict | None) -> str:
+    clean = planning_store.validate_scheme_name(name)
+    if PLANNING_STORE.scheme_dir(clean).exists():
+        ensure_planning_scheme_access(clean, current_user)
+    return clean
+
+
+def handle_planning_api_path(
+    path: str,
+    method: str = "GET",
+    body: bytes = b"",
+    current_user: dict | None = None,
+) -> tuple[int, dict[str, str], bytes]:
     prefix = "/api/planning/schemes"
     try:
         if path == "/api/planning/time-series/import" and method == "POST":
@@ -6694,32 +6784,46 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
             payload = _read_json_body(body)
             return _json_response(reverse_geocode_coordinates(payload.get("latitude"), payload.get("longitude")))
         if path == prefix and method == "GET":
-            return _json_response({"schemes": PLANNING_STORE.list_schemes()})
+            return _json_response(
+                {"schemes": PLANNING_STORE.list_schemes(owner_username=scheme_owner_filter_for_user(current_user))}
+            )
         if path == prefix and method == "POST":
             payload = _read_json_body(body)
-            return _json_response(PLANNING_STORE.create_scheme(str(payload.get("name", ""))))
+            return _json_response(
+                PLANNING_STORE.create_scheme(
+                    str(payload.get("name", "")),
+                    owner_username=new_scheme_owner_for_user(current_user),
+                )
+            )
         if path == f"{prefix}/copy" and method == "POST":
             payload = _read_json_body(body)
+            source = ensure_planning_scheme_access(str(payload.get("source", "")), current_user)
+            target = ensure_planning_copy_target_access(str(payload.get("target", "")), current_user)
             return _json_response(
                 PLANNING_STORE.copy_scheme(
-                    str(payload.get("source", "")),
-                    str(payload.get("target", "")),
+                    source,
+                    target,
                     overwrite=truthy_json_value(payload.get("overwrite")),
+                    owner_username=new_scheme_owner_for_user(current_user),
                 )
             )
         if path == f"{prefix}/rename" and method == "POST":
             payload = _read_json_body(body)
+            source = ensure_planning_scheme_access(str(payload.get("source", "")), current_user)
             return _json_response(
-                PLANNING_STORE.rename_scheme(str(payload.get("source", "")), str(payload.get("target", "")))
+                PLANNING_STORE.rename_scheme(source, str(payload.get("target", "")))
             )
         if path.startswith(f"{prefix}/") and path.endswith("/overview") and method == "GET":
             name = unquote(path[len(prefix) + 1 : -len("/overview")])
+            ensure_planning_scheme_access(name, current_user)
             return _json_response(PLANNING_STORE.read_scheme_overview(name))
         if path.startswith(f"{prefix}/") and path.endswith("/time-series") and method == "GET":
             name = unquote(path[len(prefix) + 1 : -len("/time-series")])
+            ensure_planning_scheme_access(name, current_user)
             return _json_response(PLANNING_STORE.read_time_series(name))
         if path.startswith(f"{prefix}/"):
             name = unquote(path[len(prefix) + 1 :])
+            name = ensure_planning_scheme_access(name, current_user)
             if method == "GET":
                 return _json_response(PLANNING_STORE.read_scheme(name))
             if method == "PUT":
@@ -6739,31 +6843,41 @@ def handle_planning_api_path(path: str, method: str = "GET", body: bytes = b"") 
         return _json_response({"error": "file_locked", "message": str(exc)}, HTTPStatus.CONFLICT)
     except LoadCurveTemplateExistsError as exc:
         return _json_response({"error": "exists", "message": str(exc)}, HTTPStatus.CONFLICT)
-    except (ValueError, FileExistsError, FileNotFoundError) as exc:
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except (ValueError, FileExistsError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
 
 
-def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], bytes]:
+def handle_api_path(path: str, query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
     parsed_api_path = urlparse(path)
     if parsed_api_path.query and not query:
         query = parsed_api_path.query
         path = parsed_api_path.path
     query_params = parse_qs(query)
     if path == "/api/tasks":
-        return _json_response({"tasks": build_task_list()})
+        return _json_response({"tasks": build_task_list(current_user=current_user)})
     if path.startswith("/api/planning/"):
-        return handle_planning_api_path(path, "GET", b"")
+        return handle_planning_api_path(path, "GET", b"", current_user=current_user)
     if path.startswith("/api/comparison/"):
-        return handle_comparison_data_api_path(path, query)
+        return handle_comparison_data_api_path(path, query, current_user=current_user)
     if path == "/api/evaluation/status":
         scheme = query_params.get("scheme", [""])[0]
+        if scheme:
+            access_error = planning_scheme_access_error_response(scheme, current_user)
+            if access_error:
+                return access_error
         filename = query_params.get("filename", [""])[0]
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
     if path == "/api/frequency/status":
         scheme = query_params.get("scheme", [""])[0]
+        if scheme:
+            access_error = planning_scheme_access_error_response(scheme, current_user)
+            if access_error:
+                return access_error
         filename = query_params.get("filename", [""])[0]
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
@@ -6772,6 +6886,9 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
         try:
             scheme = query_params.get("scheme", [""])[0]
             filename = query_params.get("filename", [""])[0]
+            access_error = planning_scheme_access_error_response(scheme, current_user)
+            if access_error:
+                return access_error
             selected = selected_evaluation_result_filename(scheme, filename)
             hour_index = query_params.get("hour_index", [""])[0]
             month = query_params.get("month", [""])[0]
@@ -6790,9 +6907,13 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
         except ValueError as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     if path.startswith("/api/evaluation/"):
-        return handle_evaluation_results_api_path(path, "GET", b"", query)
+        return handle_evaluation_results_api_path(path, "GET", b"", query, current_user=current_user)
     if path == "/api/optimization/status":
         scheme = query_params.get("scheme", [""])[0]
+        if scheme:
+            access_error = planning_scheme_access_error_response(scheme, current_user)
+            if access_error:
+                return access_error
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         return _json_response(OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves))
@@ -6806,15 +6927,23 @@ def handle_api_path(path: str, query: str = "") -> tuple[int, dict[str, str], by
     return _json_response(routes[path])
 
 
-def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], bytes]:
+def handle_control_path(
+    path: str,
+    body: bytes,
+    current_user: dict | None = None,
+) -> tuple[int, dict[str, str], bytes]:
     if path == "/api/optimization/control":
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
             action = str(payload.get("action", ""))
             scheme = str(payload.get("scheme", ""))
+            if scheme or action != "clear_logs":
+                ensure_planning_scheme_access(scheme, current_user)
             state = OPTIMIZATION_RUNTIME.apply(action, scheme=scheme)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
         return _json_response({"ok": True, "state": state})
@@ -6824,6 +6953,8 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
             action = str(payload.get("action", ""))
             scheme = str(payload.get("scheme", ""))
             filename = str(payload.get("filename", ""))
+            if scheme or action != "clear_logs":
+                ensure_planning_scheme_access(scheme, current_user)
             state = EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
@@ -6838,6 +6969,8 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
             action = str(payload.get("action", ""))
             scheme = str(payload.get("scheme", ""))
             filename = str(payload.get("filename", ""))
+            if scheme or action != "clear_logs":
+                ensure_planning_scheme_access(scheme, current_user)
             state = FREQUENCY_EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
@@ -6853,7 +6986,7 @@ def handle_control_path(path: str, body: bytes) -> tuple[int, dict[str, str], by
             task_type = str(payload.get("task_type") or payload.get("task_type_key") or "")
             scheme = str(payload.get("scheme", ""))
             result = str(payload.get("result") or payload.get("filename") or "")
-            response = build_task_control_response(action, task_type, scheme, result)
+            response = build_task_control_response(action, task_type, scheme, result, current_user=current_user)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
         except FileNotFoundError as exc:
@@ -6926,7 +7059,7 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 status, headers, body = _unauthorized_response()
                 self._send(status, headers, body)
                 return
-            status, headers, body = safe_api_call(lambda: handle_api_path(parsed.path, parsed.query))
+            status, headers, body = safe_api_call(lambda: handle_api_path(parsed.path, parsed.query, current_user=current_user))
             self._send(status, headers, body)
             return
 
@@ -6981,18 +7114,29 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 self._send(status, headers, response_body)
                 return
             if parsed.path.startswith("/api/planning/"):
-                status, headers, response_body = safe_api_call(lambda: handle_planning_api_path(parsed.path, "POST", body))
+                status, headers, response_body = safe_api_call(
+                    lambda: handle_planning_api_path(parsed.path, "POST", body, current_user=current_user)
+                )
                 self._send(status, headers, response_body)
                 return
             if parsed.path == "/api/evaluation/control":
-                status, headers, response_body = safe_api_call(lambda: handle_control_path(parsed.path, body))
+                status, headers, response_body = safe_api_call(
+                    lambda: handle_control_path(parsed.path, body, current_user=current_user)
+                )
                 self._send(status, headers, response_body)
                 return
             if parsed.path.startswith("/api/evaluation/"):
-                status, headers, response_body = safe_api_call(lambda: handle_evaluation_results_api_path(parsed.path, "POST", body))
+                status, headers, response_body = safe_api_call(
+                    lambda: handle_evaluation_results_api_path(
+                        parsed.path,
+                        "POST",
+                        body,
+                        current_user=current_user,
+                    )
+                )
                 self._send(status, headers, response_body)
                 return
-            status, headers, response_body = safe_api_call(lambda: handle_control_path(parsed.path, body))
+            status, headers, response_body = safe_api_call(lambda: handle_control_path(parsed.path, body, current_user=current_user))
             self._send(status, headers, response_body)
             return
         self._send_text(HTTPStatus.NOT_FOUND, "Not Found")
@@ -7012,7 +7156,9 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             self._send(status, headers, response_body)
             return
         if parsed.path.startswith("/api/planning/"):
-            status, headers, response_body = safe_api_call(lambda: handle_planning_api_path(parsed.path, "PUT", body))
+            status, headers, response_body = safe_api_call(
+                lambda: handle_planning_api_path(parsed.path, "PUT", body, current_user=current_user)
+            )
             self._send(status, headers, response_body)
             return
         self._send_text(HTTPStatus.NOT_FOUND, "Not Found")
@@ -7030,7 +7176,9 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             self._send(status, headers, response_body)
             return
         if parsed.path.startswith("/api/planning/"):
-            status, headers, response_body = safe_api_call(lambda: handle_planning_api_path(parsed.path, "DELETE", b""))
+            status, headers, response_body = safe_api_call(
+                lambda: handle_planning_api_path(parsed.path, "DELETE", b"", current_user=current_user)
+            )
             self._send(status, headers, response_body)
             return
         self._send_text(HTTPStatus.NOT_FOUND, "Not Found")

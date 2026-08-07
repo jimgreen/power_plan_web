@@ -100,6 +100,29 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertTrue((self.tmp_dir / "方案C" / "parameters.xlsx").exists())
         self.assertFalse((self.tmp_dir / "方案B").exists())
 
+    def test_scheme_metadata_tracks_owner_and_filters_lists(self):
+        self.store.create_scheme("方案A", owner_username="alice")
+        self.store.create_scheme("方案B", owner_username="bob")
+        self.store.write_scheme("历史方案", planning_store.default_payload("历史方案"))
+
+        all_names = [item["name"] for item in self.store.list_schemes()]
+        alice_names = [item["name"] for item in self.store.list_schemes(owner_username="alice")]
+        bob_names = [item["name"] for item in self.store.list_schemes(owner_username="bob")]
+
+        self.assertEqual(all_names, ["历史方案", "方案A", "方案B"])
+        self.assertEqual(alice_names, ["方案A"])
+        self.assertEqual(bob_names, ["方案B"])
+        self.assertEqual(self.store.scheme_owner_username("方案A"), "alice")
+        self.assertEqual(self.store.scheme_owner_username("历史方案"), "")
+
+    def test_copy_scheme_can_assign_new_owner(self):
+        self.store.create_scheme("方案A", owner_username="alice")
+
+        self.store.copy_scheme("方案A", "方案B", owner_username="bob")
+
+        self.assertEqual(self.store.scheme_owner_username("方案A"), "alice")
+        self.assertEqual(self.store.scheme_owner_username("方案B"), "bob")
+
     def test_copy_scheme_can_overwrite_existing_target_when_requested(self):
         source = self.store.create_scheme("方案A")
         target = self.store.create_scheme("方案B")

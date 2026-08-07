@@ -6,6 +6,7 @@ import re
 import unicodedata
 import zipfile
 import gc
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,6 +24,7 @@ WEB_ROOT = Path(__file__).resolve().parent
 DEFAULT_SCHEME_ROOT = WEB_ROOT / "planning_schemes"
 WORKBOOK_NAME = "parameters.xlsx"
 TIME_SERIES_WORKBOOK_NAME = "time_series.xlsx"
+SCHEME_META_NAME = "scheme_meta.json"
 WORKBOOK_XML = "xl/workbook.xml"
 WORKBOOK_RELS_XML = "xl/_rels/workbook.xml.rels"
 MAIN_XML_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -550,13 +552,52 @@ class PlanningStore:
     def time_series_workbook_path(self, name: str) -> Path:
         return self.scheme_dir(name) / TIME_SERIES_WORKBOOK_NAME
 
-    def list_schemes(self) -> list[dict[str, Any]]:
+    def scheme_meta_path(self, name: str) -> Path:
+        return self.scheme_dir(name) / SCHEME_META_NAME
+
+    def read_scheme_meta(self, name: str) -> dict[str, Any]:
+        clean = validate_scheme_name(name)
+        path = self.scheme_meta_path(clean)
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def write_scheme_meta(self, name: str, meta: dict[str, Any]) -> None:
+        clean = validate_scheme_name(name)
+        folder = self.scheme_dir(clean)
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / SCHEME_META_NAME
+        path.write_text(json.dumps(meta, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def scheme_owner_username(self, name: str) -> str:
+        return str(self.read_scheme_meta(name).get("owner_username") or "").strip()
+
+    def build_scheme_meta(self, owner_username: str) -> dict[str, Any]:
+        owner = str(owner_username or "").strip()
+        now = datetime.now().isoformat(timespec="seconds")
+        return {
+            "owner_username": owner,
+            "created_by": owner,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def list_schemes(self, owner_username: str | None = None) -> list[dict[str, Any]]:
+        owner_filter = None if owner_username is None else str(owner_username or "").strip()
         schemes: list[dict[str, Any]] = []
         for folder in sorted(self.root.iterdir(), key=lambda item: item.name):
             if not folder.is_dir():
                 continue
             workbook = folder / WORKBOOK_NAME
             time_series_workbook = folder / TIME_SERIES_WORKBOOK_NAME
+            meta = self.read_scheme_meta(folder.name)
+            owner = str(meta.get("owner_username") or "").strip()
+            if owner_filter is not None and owner != owner_filter:
+                continue
             modified_at = None
             if workbook.exists():
                 modified_at = workbook.stat().st_mtime
@@ -568,20 +609,31 @@ class PlanningStore:
                     "name": folder.name,
                     "has_workbook": workbook.exists(),
                     "modified_at": modified_at,
+                    "owner_username": owner,
+                    "created_by": str(meta.get("created_by") or "").strip(),
+                    "created_at": str(meta.get("created_at") or "").strip(),
                 }
             )
         return schemes
 
-    def create_scheme(self, name: str) -> dict[str, Any]:
+    def create_scheme(self, name: str, owner_username: str | None = None) -> dict[str, Any]:
         clean = validate_scheme_name(name)
         folder = self.scheme_dir(clean)
         if folder.exists():
             raise FileExistsError(f"方案已存在: {clean}")
         folder.mkdir(parents=True)
+        if owner_username is not None:
+            self.write_scheme_meta(clean, self.build_scheme_meta(owner_username))
         self.write_scheme(clean, default_payload(clean))
         return self.read_scheme(clean)
 
-    def copy_scheme(self, source: str, target: str, overwrite: bool = False) -> dict[str, Any]:
+    def copy_scheme(
+        self,
+        source: str,
+        target: str,
+        overwrite: bool = False,
+        owner_username: str | None = None,
+    ) -> dict[str, Any]:
         source_dir = self.scheme_dir(source)
         target_dir = self.scheme_dir(target)
         if not source_dir.exists():
@@ -591,6 +643,8 @@ class PlanningStore:
                 raise FileExistsError(f"目标方案已存在: {target}")
             file_ops.delete_directory_with_retry(target_dir, "目标方案目录")
         file_ops.copy_directory_with_retry(source_dir, target_dir, "方案目录")
+        if owner_username is not None:
+            self.write_scheme_meta(target, self.build_scheme_meta(owner_username))
         return self.read_scheme(target)
 
     def rename_scheme(self, source: str, target: str) -> dict[str, Any]:
