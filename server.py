@@ -24,6 +24,7 @@ import threading
 import time
 import traceback
 import zlib
+from copy import deepcopy
 from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
@@ -87,6 +88,7 @@ import file_ops
 import milp_solver
 import plan_optimizer
 import planning_store
+import reliability
 
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -125,6 +127,9 @@ CHINESE_PLACE_ALIASES = {
 }
 OPTIMIZATION_RESULT_WORKBOOK_NAME = "opt_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
+RELIABILITY_PARAMETERS_FILE_NAME = "reliability_parameters.json"
+RELIABILITY_RESULT_JSON_SUFFIX = "_reliability.json"
+RELIABILITY_RESULT_WORKBOOK_SUFFIX = "_reliability_results.xlsx"
 PLANNING_RESULT_SHEET_NAME = "规划结果"
 PLANNING_RESULT_HEADERS = ["设备类型", "设计台数", "单台容量", "总容量", "单位"]
 CSV_ROWS_CACHE = file_cache.FileCache("dashboard_csv_rows", max_entries=32)
@@ -529,6 +534,15 @@ class UserStore:
             row = connection.execute(
                 "SELECT id, username, role, created_at FROM users WHERE id = ?",
                 (user_id,),
+            ).fetchone()
+        return self._public_user(row) if row else None
+
+    def get_user_by_username(self, username: str) -> dict | None:
+        clean_username = self._clean_username(username)
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT id, username, role, created_at FROM users WHERE username = ?",
+                (clean_username,),
             ).fetchone()
         return self._public_user(row) if row else None
 
@@ -1638,13 +1652,25 @@ def style_result_sheet(sheet) -> None:
         sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(max_length + 2, 10), 28)
 
 
+def is_reliability_export_workbook(path: Path | str) -> bool:
+    """Return True for reliability-only XLSX exports.
+
+    Reliability exports deliberately end in ``_results.xlsx`` so they are
+    convenient to recognize outside the application.  They are not planning
+    result workbooks, however, and must never be offered as inputs to another
+    optimization/evaluation run.
+    """
+
+    return Path(path).name.endswith(RELIABILITY_RESULT_WORKBOOK_SUFFIX)
+
+
 def list_evaluation_result_files(scheme: str) -> list[dict]:
     folder = PLANNING_STORE.scheme_dir(scheme)
     if not folder.exists():
         raise FileNotFoundError(f"方案不存在: {scheme}")
     files = []
     for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
-        if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
+        if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name) and not is_reliability_export_workbook(path):
             item = {"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""}
             error_message = result_workbook_error_message(path)
             if error_message:
@@ -1664,7 +1690,7 @@ def list_evaluation_result_files_for_tasks(scheme: str) -> list[dict]:
 def list_evaluation_result_files_for_tasks_uncached(folder: Path) -> list[dict]:
     files = []
     for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
-        if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name):
+        if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name) and not is_reliability_export_workbook(path):
             files.append({"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""})
     return files
 
@@ -2585,7 +2611,7 @@ def handle_evaluation_results_api_path(
         scheme = str(payload.get("scheme", ""))
         action = str(payload.get("action", ""))
         filename = str(payload.get("filename", ""))
-        ensure_planning_scheme_access(scheme, current_user)
+        ensure_planning_scheme_manage_access(scheme, current_user)
 
         if action == "delete":
             result_path = evaluation_result_path(scheme, filename)
@@ -3405,6 +3431,1401 @@ class FrequencyEvaluationRuntimeManager:
     @staticmethod
     def _scheme_name(scheme: str = "") -> str:
         return str(scheme or "未选择方案").strip() or "未选择方案"
+
+
+RELIABILITY_DEVICE_DEFAULTS: dict[str, dict] = {
+    "wind": {
+        "device_type": "wind",
+        "label": "风机",
+        "unit_count": 0,
+        "unit_capacity_kw": 0.0,
+        "forced_outage_rate": 0.08,
+        "mttr_hours": 72.0,
+        "extreme_cold_capacity_factor": 0.75,
+        "capex_wan_per_unit": 0.0,
+        "fixed_om_rate": 0.025,
+        "design_life_years": 20.0,
+    },
+    "pv": {
+        "device_type": "pv",
+        "label": "光伏",
+        "unit_count": 0,
+        "unit_capacity_kw": 0.0,
+        "forced_outage_rate": 0.02,
+        "mttr_hours": 24.0,
+        "extreme_cold_capacity_factor": 0.70,
+        "capex_wan_per_unit": 0.0,
+        "fixed_om_rate": 0.015,
+        "design_life_years": 20.0,
+    },
+    "storage": {
+        "device_type": "storage",
+        "label": "储能",
+        "unit_count": 0,
+        "unit_capacity_kw": 0.0,
+        "unit_capacity_kwh": 0.0,
+        "forced_outage_rate": 0.03,
+        "mttr_hours": 48.0,
+        "battery_forced_outage_rate": 0.02,
+        "battery_mttr_hours": 96.0,
+        "extreme_cold_capacity_factor": 0.70,
+        "capex_wan_per_unit": 0.0,
+        "fixed_om_rate": 0.015,
+        "design_life_years": 10.0,
+    },
+    "diesel": {
+        "device_type": "diesel",
+        "label": "柴油发电机",
+        "unit_count": 0,
+        "unit_capacity_kw": 0.0,
+        "forced_outage_rate": 0.05,
+        "mttr_hours": 36.0,
+        "extreme_cold_capacity_factor": 0.85,
+        "capex_wan_per_unit": 0.0,
+        "fixed_om_rate": 0.04,
+        "design_life_years": 20.0,
+        "startup_failure_rate": 0.02,
+        "variable_om_yuan_per_kwh": 0.15,
+    },
+}
+RELIABILITY_DEVICE_TYPE_ALIASES = {
+    "wind": "wind",
+    "wind_turbine": "wind",
+    "wind_turbines": "wind",
+    "pv": "pv",
+    "solar": "pv",
+    "photovoltaic": "pv",
+    "photovoltaics": "pv",
+    "storage": "storage",
+    "battery": "storage",
+    "ess": "storage",
+    "pcs": "storage",
+    "diesel": "diesel",
+    "generator": "diesel",
+    "diesel_generator": "diesel",
+    "diesel_generators": "diesel",
+}
+RELIABILITY_SCHEME_DEVICE_KEYS = {
+    "diesel_generators": "diesel",
+    "wind_turbines": "wind",
+    "photovoltaics": "pv",
+    "storage_pcs": "storage",
+    "storage_battery_packs": "storage",
+}
+
+
+def reliability_parameters_path_with_store(store: planning_store.PlanningStore, scheme: str) -> Path:
+    folder = store.scheme_dir(str(scheme or "").strip())
+    return folder / RELIABILITY_PARAMETERS_FILE_NAME
+
+
+def reliability_parameters_path(scheme: str) -> Path:
+    return reliability_parameters_path_with_store(PLANNING_STORE, scheme)
+
+
+def reliability_result_json_path_with_store(
+    store: planning_store.PlanningStore,
+    scheme: str,
+    filename: str = "",
+) -> Path:
+    folder = store.scheme_dir(str(scheme or "").strip())
+    source_stem = Path(str(filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)).stem
+    return folder / f"{source_stem}{RELIABILITY_RESULT_JSON_SUFFIX}"
+
+
+def reliability_result_json_path(scheme: str, filename: str = "") -> Path:
+    return reliability_result_json_path_with_store(PLANNING_STORE, scheme, filename)
+
+
+def reliability_result_workbook_path_with_store(
+    store: planning_store.PlanningStore,
+    scheme: str,
+    filename: str = "",
+) -> Path:
+    folder = store.scheme_dir(str(scheme or "").strip())
+    source_stem = Path(str(filename or OPTIMIZATION_RESULT_WORKBOOK_NAME)).stem
+    return folder / f"{source_stem}{RELIABILITY_RESULT_WORKBOOK_SUFFIX}"
+
+
+def reliability_result_workbook_path(scheme: str, filename: str = "") -> Path:
+    return reliability_result_workbook_path_with_store(PLANNING_STORE, scheme, filename)
+
+
+def normalize_reliability_source_filename(scheme: str, filename: str = "", *, require_exists: bool = False) -> str:
+    scheme_name = str(scheme or "").strip()
+    if not scheme_name:
+        raise ValueError("请选择规划方案")
+    PLANNING_STORE.read_scheme(scheme_name)
+    selected = str(filename or "").strip()
+    if selected:
+        if not RESULT_WORKBOOK_RE.fullmatch(selected) or is_reliability_export_workbook(selected):
+            raise ValueError("可靠性评估源文件必须是规划或方案评估结果工作簿")
+        source_path = evaluation_result_path(scheme_name, selected)
+        if require_exists and not source_path.exists():
+            raise FileNotFoundError(f"结果文件不存在: {selected}")
+        return selected
+    try:
+        return selected_evaluation_result_filename(scheme_name)
+    except FileNotFoundError:
+        return ""
+
+
+def _reliability_number(
+    value: object,
+    default: float,
+    *,
+    field_name: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    if value in (None, ""):
+        number = float(default)
+    else:
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name}必须是数字") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name}必须是有限数字")
+    if minimum is not None and number < minimum:
+        raise ValueError(f"{field_name}不能小于{minimum}")
+    if maximum is not None and number > maximum:
+        raise ValueError(f"{field_name}不能大于{maximum}")
+    return number
+
+
+def _reliability_ratio(value: object, default: float, *, field_name: str) -> float:
+    number = _reliability_number(value, default, field_name=field_name)
+    if 1.0 < number <= 100.0:
+        number /= 100.0
+    if number < 0.0 or number > 1.0:
+        raise ValueError(f"{field_name}必须位于0到1之间")
+    return number
+
+
+def _reliability_device_type(row: dict) -> str:
+    raw = str(row.get("device_type") or row.get("type") or row.get("device") or "").strip().lower()
+    return RELIABILITY_DEVICE_TYPE_ALIASES.get(raw, raw)
+
+
+def _weighted_device_value(rows: list[dict], field: str, count_field: str = "quantity_upper") -> float:
+    weighted = 0.0
+    total_count = 0
+    fallback = None
+    for row in rows:
+        value = row.get(field)
+        if value in (None, ""):
+            continue
+        numeric_value = _reliability_number(value, 0.0, field_name=field, minimum=0.0)
+        if fallback is None:
+            fallback = numeric_value
+        count = max(0, int(round(_reliability_number(row.get(count_field), 0.0, field_name=count_field))))
+        if count:
+            weighted += numeric_value * count
+            total_count += count
+    if total_count:
+        return weighted / total_count
+    return float(fallback or 0.0)
+
+
+def _minimum_positive_device_value(rows: list[dict], field: str, fallback: float) -> float:
+    values = [
+        _reliability_number(row.get(field), 0.0, field_name=field, minimum=0.0)
+        for row in rows
+        if row.get(field) not in (None, "")
+    ]
+    positive = [value for value in values if value > 0.0]
+    return min(positive) if positive else fallback
+
+
+def build_default_reliability_parameters(
+    scheme: str,
+    filename: str = "",
+    *,
+    store: planning_store.PlanningStore | None = None,
+) -> tuple[dict, list[str], str]:
+    active_store = store or PLANNING_STORE
+    scheme_name = str(scheme or "").strip()
+    scheme_payload = active_store.read_scheme(scheme_name)
+    selected = str(filename or "").strip()
+    if selected:
+        if not RESULT_WORKBOOK_RE.fullmatch(selected) or is_reliability_export_workbook(selected):
+            raise ValueError("可靠性评估源文件必须是规划或方案评估结果工作簿")
+        planning_rows = read_evaluation_planning_result_rows_with_store(active_store, scheme_name, selected)
+    else:
+        planning_rows = []
+    fixed_payload = estimate.fixed_quantity_payload(scheme_payload, planning_rows) if planning_rows else deepcopy(scheme_payload)
+
+    parameters = {
+        "mode": "both",
+        "simulation_years": int(reliability.DEFAULT_CONFIG.get("simulation_years", 100)),
+        "random_seed": int(reliability.DEFAULT_CONFIG.get("seed", 20260712)),
+        "critical_load_ratio": 0.60,
+        "reserve_duration_hours": 24.0,
+        "dispatch_policy": "reliability_first",
+        "assumption_source": "demo_scenario_assumption",
+        "devices": [],
+    }
+    for device_type in ("wind", "pv", "storage", "diesel"):
+        device = deepcopy(RELIABILITY_DEVICE_DEFAULTS[device_type])
+        if device_type == "wind":
+            rows = [row for row in fixed_payload.get("wind_turbines", []) if isinstance(row, dict)]
+            device["unit_count"] = sum(max(0, int(round(float(row.get("quantity_upper") or 0)))) for row in rows)
+            device["unit_capacity_kw"] = _weighted_device_value(rows, "capacity")
+        elif device_type == "pv":
+            rows = [row for row in fixed_payload.get("photovoltaics", []) if isinstance(row, dict)]
+            device["unit_count"] = sum(max(0, int(round(float(row.get("quantity_upper") or 0)))) for row in rows)
+            device["unit_capacity_kw"] = _weighted_device_value(rows, "capacity")
+        elif device_type == "diesel":
+            rows = [row for row in fixed_payload.get("diesel_generators", []) if isinstance(row, dict)]
+            device["unit_count"] = sum(max(0, int(round(float(row.get("quantity_upper") or 0)))) for row in rows)
+            device["unit_capacity_kw"] = _weighted_device_value(rows, "power_upper") or _weighted_device_value(rows, "capacity")
+        else:
+            pcs_rows = [row for row in fixed_payload.get("storage_pcs", []) if isinstance(row, dict)]
+            battery_rows = [row for row in fixed_payload.get("storage_battery_packs", []) if isinstance(row, dict)]
+            pcs_count = sum(max(0, int(round(float(row.get("quantity_upper") or 0)))) for row in pcs_rows)
+            battery_count = sum(max(0, int(round(float(row.get("quantity_upper") or 0)))) for row in battery_rows)
+            # The reliability parameter table labels this row as storage PCS
+            # and displays unit_capacity_kw.  Use the installed PCS count for
+            # that traceability field; the engine still reads PCS and battery
+            # quantities independently from the selected planning workbook.
+            device["unit_count"] = pcs_count if pcs_count > 0 else battery_count
+            device["unit_capacity_kw"] = _weighted_device_value(pcs_rows, "power_capacity")
+            device["unit_capacity_kwh"] = _weighted_device_value(battery_rows, "battery_capacity")
+            pcs_cost = _weighted_device_value(pcs_rows, "cost")
+            battery_cost = _weighted_device_value(battery_rows, "cost")
+            device["capex_wan_per_unit"] = pcs_cost + battery_cost
+            device["design_life_years"] = min(
+                _minimum_positive_device_value(pcs_rows, "design_life_years", device["design_life_years"]),
+                _minimum_positive_device_value(battery_rows, "design_life_years", device["design_life_years"]),
+            )
+            parameters["devices"].append(device)
+            continue
+        device["capex_wan_per_unit"] = _weighted_device_value(rows, "cost")
+        device["design_life_years"] = _minimum_positive_device_value(
+            rows,
+            "design_life_years",
+            float(device["design_life_years"]),
+        )
+        parameters["devices"].append(device)
+
+    warnings = [
+        "当前FOR、MTTR、极寒降额与成本默认值为演示场景假设，不是采购报价或厂商承诺值。",
+        "critical_load_ratio和reserve_duration_hours当前仅作为决策假设留档，可靠性引擎仍按完整小时负荷进行供需充裕度计算。",
+        "startup_failure_rate及运维成本字段已保存用于追溯，当前两状态故障模型尚未单独使用这些字段。",
+    ]
+    if planning_rows:
+        warnings.append(f"设备台数已从规划结果工作簿 {selected} 读取并固定。")
+    else:
+        warnings.append("未选择可读规划结果工作簿，设备台数来自方案参数中的固定上下限或上限。")
+    return parameters, warnings, selected
+
+
+def normalize_reliability_parameters(parameters: dict | None, defaults: dict | None = None) -> dict:
+    source = deepcopy(parameters) if isinstance(parameters, dict) else {}
+    base = deepcopy(defaults) if isinstance(defaults, dict) else {
+        "mode": "both",
+        "simulation_years": int(reliability.DEFAULT_CONFIG.get("simulation_years", 100)),
+        "random_seed": int(reliability.DEFAULT_CONFIG.get("seed", 20260712)),
+        "critical_load_ratio": 0.60,
+        "reserve_duration_hours": 24.0,
+        "dispatch_policy": "reliability_first",
+        "assumption_source": "demo_scenario_assumption",
+        "devices": [deepcopy(RELIABILITY_DEVICE_DEFAULTS[key]) for key in ("wind", "pv", "storage", "diesel")],
+    }
+    merged = deepcopy(base)
+    for key, value in source.items():
+        if key != "devices":
+            merged[key] = deepcopy(value)
+
+    mode = str(merged.get("mode") or merged.get("assessment_mode") or "both").strip().lower()
+    mode_aliases = {
+        "both": "both",
+        "combined": "both",
+        "deterministic": "deterministic",
+        "n-1": "deterministic",
+        "n1": "deterministic",
+        "monte_carlo": "monte_carlo",
+        "monte-carlo": "monte_carlo",
+        "probabilistic": "monte_carlo",
+    }
+    if mode not in mode_aliases:
+        raise ValueError("可靠性评估模式仅支持both、deterministic或monte_carlo")
+    merged["mode"] = mode_aliases[mode]
+    years_value = merged.get("simulation_years", merged.get("monte_carlo_years", 100))
+    years = _reliability_number(years_value, 100.0, field_name="蒙特卡洛年数", minimum=1.0, maximum=10000.0)
+    merged["simulation_years"] = int(round(years))
+    seed_value = merged.get("random_seed", merged.get("seed", reliability.DEFAULT_CONFIG.get("seed", 20260712)))
+    seed = _reliability_number(seed_value, 20260712.0, field_name="随机种子", minimum=0.0, maximum=2147483647.0)
+    merged["random_seed"] = int(round(seed))
+    merged["critical_load_ratio"] = _reliability_ratio(
+        merged.get("critical_load_ratio", 0.60),
+        0.60,
+        field_name="关键负荷比例",
+    )
+    merged["reserve_duration_hours"] = _reliability_number(
+        merged.get("reserve_duration_hours", 24.0),
+        24.0,
+        field_name="备用持续时间",
+        minimum=0.0,
+        maximum=720.0,
+    )
+    merged["dispatch_policy"] = str(merged.get("dispatch_policy") or "reliability_first").strip() or "reliability_first"
+    merged["assumption_source"] = str(merged.get("assumption_source") or "demo_scenario_assumption").strip()
+
+    base_rows = base.get("devices") if isinstance(base.get("devices"), list) else []
+    base_by_type = {
+        _reliability_device_type(row): deepcopy(row)
+        for row in base_rows
+        if isinstance(row, dict) and _reliability_device_type(row)
+    }
+    incoming = source.get("devices", merged.get("devices"))
+    if isinstance(incoming, dict):
+        incoming_rows = [
+            {"device_type": device_type, **(deepcopy(value) if isinstance(value, dict) else {})}
+            for device_type, value in incoming.items()
+        ]
+    elif isinstance(incoming, list):
+        incoming_rows = [deepcopy(row) for row in incoming if isinstance(row, dict)]
+    else:
+        incoming_rows = []
+    incoming_by_type = {
+        _reliability_device_type(row): row
+        for row in incoming_rows
+        if _reliability_device_type(row)
+    }
+
+    ordered_types = ["wind", "pv", "storage", "diesel"]
+    ordered_types.extend(
+        device_type
+        for device_type in incoming_by_type
+        if device_type not in ordered_types
+    )
+    normalized_devices = []
+    for device_type in ordered_types:
+        row = deepcopy(base_by_type.get(device_type) or RELIABILITY_DEVICE_DEFAULTS.get(device_type) or {
+            "device_type": device_type,
+            "label": device_type,
+        })
+        row.update(deepcopy(incoming_by_type.get(device_type) or {}))
+        row["device_type"] = device_type
+        row["label"] = str(row.get("label") or RELIABILITY_DEVICE_DEFAULTS.get(device_type, {}).get("label") or device_type)
+        row["unit_count"] = int(round(_reliability_number(
+            row.get("unit_count", row.get("count", 0)),
+            0.0,
+            field_name=f"{row['label']}台数",
+            minimum=0.0,
+            maximum=100000.0,
+        )))
+        for capacity_field in ("unit_capacity", "unit_capacity_kw", "unit_capacity_kwh"):
+            if row.get(capacity_field) not in (None, ""):
+                row[capacity_field] = _reliability_number(
+                    row.get(capacity_field),
+                    0.0,
+                    field_name=f"{row['label']}{capacity_field}",
+                    minimum=0.0,
+                )
+        row["forced_outage_rate"] = _reliability_ratio(
+            row.get("forced_outage_rate", row.get("for", 0.0)),
+            0.0,
+            field_name=f"{row['label']} FOR",
+        )
+        row["mttr_hours"] = _reliability_number(
+            row.get("mttr_hours", row.get("mttr", 0.0)),
+            0.0,
+            field_name=f"{row['label']} MTTR",
+            minimum=0.0,
+            maximum=8760.0,
+        )
+        if 0.0 < row["forced_outage_rate"] < 1.0 and row["mttr_hours"] <= 0.0:
+            raise ValueError(f"{row['label']}设置非零FOR时必须同时提供大于0的MTTR")
+        if device_type == "storage":
+            row["battery_forced_outage_rate"] = _reliability_ratio(
+                row.get("battery_forced_outage_rate", row.get("forced_outage_rate", 0.0)),
+                row["forced_outage_rate"],
+                field_name="储能电池组 FOR",
+            )
+            row["battery_mttr_hours"] = _reliability_number(
+                row.get("battery_mttr_hours", row.get("mttr_hours", 0.0)),
+                row["mttr_hours"],
+                field_name="储能电池组 MTTR",
+                minimum=0.0,
+                maximum=8760.0,
+            )
+            if 0.0 < row["battery_forced_outage_rate"] < 1.0 and row["battery_mttr_hours"] <= 0.0:
+                raise ValueError("储能电池组设置非零FOR时必须同时提供大于0的MTTR")
+        for ratio_field in ("extreme_cold_capacity_factor", "fixed_om_rate", "startup_failure_rate"):
+            if row.get(ratio_field) not in (None, ""):
+                row[ratio_field] = _reliability_ratio(
+                    row.get(ratio_field),
+                    0.0,
+                    field_name=f"{row['label']}{ratio_field}",
+                )
+        for numeric_field in ("capex_wan_per_unit", "variable_om_yuan_per_kwh", "design_life_years"):
+            if row.get(numeric_field) not in (None, ""):
+                row[numeric_field] = _reliability_number(
+                    row.get(numeric_field),
+                    0.0,
+                    field_name=f"{row['label']}{numeric_field}",
+                    minimum=0.0,
+                )
+        normalized_devices.append(row)
+    merged["devices"] = normalized_devices
+    return merged
+
+
+def read_reliability_parameters(
+    scheme: str,
+    filename: str = "",
+    *,
+    store: planning_store.PlanningStore | None = None,
+) -> tuple[dict, list[str], str]:
+    active_store = store or PLANNING_STORE
+    defaults, warnings, selected = build_default_reliability_parameters(scheme, filename, store=active_store)
+    path = reliability_parameters_path_with_store(active_store, scheme)
+    if path.exists():
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"可靠性参数文件无法读取: {path.name}") from exc
+        parameters = normalize_reliability_parameters(saved, defaults)
+    else:
+        parameters = normalize_reliability_parameters({}, defaults)
+
+    if selected:
+        fresh_by_type = {
+            row["device_type"]: row
+            for row in defaults.get("devices", [])
+            if isinstance(row, dict) and row.get("device_type")
+        }
+        for row in parameters.get("devices", []):
+            source_row = fresh_by_type.get(row.get("device_type"))
+            if source_row:
+                row["unit_count"] = source_row.get("unit_count", row.get("unit_count", 0))
+                row["unit_count_source"] = "planning_result_workbook"
+        parameters["source_result_filename"] = selected
+    return parameters, warnings, selected
+
+
+def write_reliability_parameters(
+    scheme: str,
+    parameters: dict,
+    filename: str = "",
+) -> tuple[dict, list[str], str]:
+    defaults, warnings, selected = build_default_reliability_parameters(scheme, filename)
+    normalized = normalize_reliability_parameters(parameters, defaults)
+    if selected:
+        default_by_type = {
+            row["device_type"]: row
+            for row in defaults.get("devices", [])
+            if isinstance(row, dict) and row.get("device_type")
+        }
+        for row in normalized.get("devices", []):
+            source_row = default_by_type.get(row.get("device_type"))
+            if source_row:
+                row["unit_count"] = source_row.get("unit_count", row.get("unit_count", 0))
+                row["unit_count_source"] = "planning_result_workbook"
+        normalized["source_result_filename"] = selected
+    path = reliability_parameters_path(scheme)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+    file_cache.invalidate_path(path)
+    return normalized, warnings, selected
+
+
+def prepare_reliability_scheme_payload(
+    scheme_payload: dict,
+    parameters: dict,
+    *,
+    has_planning_result: bool,
+) -> dict:
+    payload = deepcopy(scheme_payload)
+    parameter_by_type = {
+        _reliability_device_type(row): row
+        for row in parameters.get("devices", [])
+        if isinstance(row, dict) and _reliability_device_type(row)
+    }
+    for source_key, device_type in RELIABILITY_SCHEME_DEVICE_KEYS.items():
+        rows = payload.get(source_key)
+        device_parameters = parameter_by_type.get(device_type)
+        if not isinstance(rows, list) or not isinstance(device_parameters, dict):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            applied_parameters = deepcopy(device_parameters)
+            if source_key == "storage_battery_packs":
+                applied_parameters["forced_outage_rate"] = device_parameters.get(
+                    "battery_forced_outage_rate",
+                    device_parameters.get("forced_outage_rate", 0.0),
+                )
+                applied_parameters["mttr_hours"] = device_parameters.get(
+                    "battery_mttr_hours",
+                    device_parameters.get("mttr_hours", 0.0),
+                )
+            row["forced_outage_rate"] = applied_parameters.get("forced_outage_rate", 0.0)
+            row["mttr_hours"] = applied_parameters.get("mttr_hours", 0.0)
+            row["reliability"] = applied_parameters
+            if not has_planning_result and len(rows) == 1:
+                row["installed_quantity"] = device_parameters.get("unit_count", row.get("quantity_upper", 0))
+            capacity_kw = device_parameters.get("unit_capacity_kw", device_parameters.get("unit_capacity"))
+            if capacity_kw not in (None, ""):
+                if source_key == "diesel_generators":
+                    row["capacity"] = capacity_kw
+                    row["power_upper"] = capacity_kw
+                elif source_key in {"wind_turbines", "photovoltaics"}:
+                    row["capacity"] = capacity_kw
+                elif source_key == "storage_pcs":
+                    row["power_capacity"] = capacity_kw
+            capacity_kwh = device_parameters.get("unit_capacity_kwh")
+            if source_key == "storage_battery_packs" and capacity_kwh not in (None, ""):
+                row["battery_capacity"] = capacity_kwh
+            derating = device_parameters.get(
+                "extreme_cold_capacity_factor",
+                device_parameters.get("cold_derating_factor"),
+            )
+            if derating not in (None, "") and source_key in {"wind_turbines", "photovoltaics"}:
+                row["output_derating_factor"] = derating
+            if device_parameters.get("capex_wan_per_unit") not in (None, ""):
+                row["cost"] = device_parameters.get("capex_wan_per_unit")
+            if device_parameters.get("design_life_years") not in (None, ""):
+                row["design_life_years"] = device_parameters.get("design_life_years")
+    return payload
+
+
+def reliability_engine_config(parameters: dict) -> dict:
+    policy = str(parameters.get("dispatch_policy") or "reliability_first").strip().lower()
+    policy_map = {
+        "reliability_first": "renewable_storage_diesel",
+        "renewable_first": "renewable_storage_diesel",
+        "economic": "renewable_storage_diesel",
+        "proportional": "renewable_storage_diesel",
+        "renewable_storage_diesel": "renewable_storage_diesel",
+        "diesel_first": "renewable_diesel_storage",
+        "renewable_diesel_storage": "renewable_diesel_storage",
+    }
+    mode = str(parameters.get("mode") or "both")
+    return {
+        "seed": int(parameters.get("random_seed", reliability.DEFAULT_CONFIG.get("seed", 20260712))),
+        "simulation_years": int(parameters.get("simulation_years", reliability.DEFAULT_CONFIG.get("simulation_years", 100))),
+        "confidence_level": float(parameters.get("confidence_level", 0.95)),
+        "initial_storage_soc_ratio": float(parameters.get("initial_storage_soc_ratio", 0.5)),
+        "include_annual_samples": True,
+        "include_device_contributions": True,
+        "run_n_minus_one": mode != "monte_carlo",
+        "dispatch_policy": policy_map.get(policy, "renewable_storage_diesel"),
+    }
+
+
+def _deterministic_reliability_result(case: dict) -> dict:
+    n_minus_one = reliability.run_n_minus_one(case)
+    scenarios = n_minus_one.get("scenarios", [])
+    base_case = n_minus_one.get("base_case", {})
+    return {
+        "status": "completed",
+        "schema_version": reliability.SCHEMA_VERSION,
+        "input": reliability.input_summary(case),
+        "method": {
+            "availability_model": "deterministic_full_horizon_single_unit_outage",
+            "dispatch_model": "hourly_priority_dispatch",
+            "simulation_years": 0,
+            "hours_per_year": int(case.get("source_hours", 0)),
+        },
+        "summary": {
+            "simulated_years": 0,
+            "eens_kwh_per_year": None,
+            "lole_hours_per_year": None,
+            "lolp": None,
+            "lpsp": None,
+            "energy_supply_reliability": base_case.get("energy_supply_reliability"),
+            "time_supply_availability": base_case.get("time_supply_availability"),
+            "p95_ens_kwh_per_year": None,
+            "max_deficit_kw": max((float(row.get("max_deficit_kw", 0.0)) for row in scenarios), default=0.0),
+            "longest_consecutive_outage_hours": max(
+                (float(row.get("longest_consecutive_outage_hours", 0.0)) for row in scenarios),
+                default=0.0,
+            ),
+        },
+        "confidence_intervals": {},
+        "n_minus_one": n_minus_one,
+        "device_contributions": [],
+        "warnings": [
+            "本次仅运行确定性N-1压力测试，未生成LOLP、LOLE、EENS等概率年期望指标。",
+        ],
+    }
+
+
+def _result_metric_number(mapping: dict, key: str, default=None):
+    value = mapping.get(key, default) if isinstance(mapping, dict) else default
+    if value in (None, ""):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    return number if math.isfinite(number) else default
+
+
+def normalize_reliability_result(
+    raw_result: dict,
+    *,
+    scheme: str,
+    filename: str,
+    parameters: dict,
+    logs: list[dict] | None = None,
+) -> dict:
+    result = deepcopy(raw_result) if isinstance(raw_result, dict) else {}
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    confidence = result.get("confidence_intervals") if isinstance(result.get("confidence_intervals"), dict) else {}
+    eens_ci = confidence.get("eens_kwh_per_year") if isinstance(confidence.get("eens_kwh_per_year"), dict) else {}
+    n_minus_one = result.get("n_minus_one") if isinstance(result.get("n_minus_one"), dict) else {}
+    raw_scenarios = n_minus_one.get("scenarios") if isinstance(n_minus_one.get("scenarios"), list) else []
+    scenarios = []
+    for item in raw_scenarios:
+        if not isinstance(item, dict):
+            continue
+        row = deepcopy(item)
+        row.update(
+            {
+                "id": item.get("scenario_id"),
+                "name": item.get("scenario_name") or item.get("scenario_id"),
+                "outage_device": item.get("device_name"),
+                "duration_hours": item.get("longest_consecutive_outage_hours"),
+                "max_unmet_load_kw": item.get("max_deficit_kw"),
+                "unserved_energy_kwh": item.get("ens_kwh"),
+                "critical_load_supply_rate": item.get("energy_supply_reliability"),
+                "pass": item.get("passed"),
+            }
+        )
+        scenarios.append(row)
+    n1_pass_rate = (
+        sum(1 for row in scenarios if row.get("passed")) / len(scenarios)
+        if scenarios
+        else None
+    )
+    metrics = {
+        "eens_kwh_per_year": summary.get("eens_kwh_per_year"),
+        "lole_hours_per_year": summary.get("lole_hours_per_year"),
+        "lolp": summary.get("lolp"),
+        "lpsp": summary.get("lpsp"),
+        "supply_reliability": summary.get("energy_supply_reliability"),
+        "availability": summary.get("time_supply_availability"),
+        "n1_pass_rate": n1_pass_rate,
+        "p95_eens_kwh": summary.get("p95_ens_kwh_per_year"),
+        "max_unmet_load_kw": summary.get("max_deficit_kw"),
+        "max_outage_duration_hours": summary.get("longest_consecutive_outage_hours"),
+        "simulation_years": summary.get("simulated_years", parameters.get("simulation_years")),
+        "confidence_level": confidence.get("confidence_level"),
+        "eens_ci_lower_kwh": eens_ci.get("lower"),
+        "eens_ci_upper_kwh": eens_ci.get("upper"),
+    }
+    annual_samples = result.get("annual_samples") if isinstance(result.get("annual_samples"), list) else []
+    annual_distribution = []
+    for sample in annual_samples:
+        if not isinstance(sample, dict):
+            continue
+        row = deepcopy(sample)
+        row["eens_kwh"] = sample.get("ens_kwh_per_year")
+        row["lole_hours"] = sample.get("lole_hours_per_year")
+        annual_distribution.append(row)
+    normalized_contributions = []
+    for item in result.get("device_contributions", []) if isinstance(result.get("device_contributions"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        row = deepcopy(item)
+        row["label"] = item.get("device_name") or item.get("device_type_label") or item.get("device_id")
+        row["eens_kwh"] = item.get("marginal_eens_reduction_kwh_per_year")
+        row["share"] = item.get("normalized_contribution_share")
+        normalized_contributions.append(row)
+    assumption_log = [
+        {
+            "name": "参数来源",
+            "value": parameters.get("assumption_source", "demo_scenario_assumption"),
+            "note": "场景假设应与现场统计、厂商承诺和采购报价区分。",
+        },
+        {"name": "评估模式", "value": parameters.get("mode", "both")},
+        {"name": "蒙特卡洛年数", "value": parameters.get("simulation_years"), "unit": "年"},
+        {"name": "随机种子", "value": parameters.get("random_seed")},
+        {"name": "关键负荷比例", "value": parameters.get("critical_load_ratio"), "unit": "p.u.", "note": "当前仅留档，计算仍按完整负荷。"},
+        {"name": "备用持续时间", "value": parameters.get("reserve_duration_hours"), "unit": "h", "note": "当前仅留档。"},
+        {"name": "源规划结果", "value": filename or "方案参数固定台数"},
+        {"name": "故障独立性", "value": "设备独立两状态模型", "note": "共同原因故障与极端天气相关故障尚未单独建模。"},
+    ]
+    for device in parameters.get("devices", []):
+        if not isinstance(device, dict):
+            continue
+        label = str(device.get("label") or device.get("device_type") or "设备")
+        unit_count = int(round(_result_metric_number(device, "unit_count", 0) or 0))
+        unit_capacity_kw = _result_metric_number(device, "unit_capacity_kw", 0.0) or 0.0
+        forced_outage_rate = _result_metric_number(device, "forced_outage_rate", 0.0) or 0.0
+        mttr_hours = _result_metric_number(device, "mttr_hours", 0.0) or 0.0
+        value_parts = [
+            f"{unit_count}台 × {unit_capacity_kw:g} kW",
+            f"FOR {forced_outage_rate * 100:g}%",
+            f"MTTR {mttr_hours:g} h",
+        ]
+        if device.get("device_type") == "storage":
+            battery_for = _result_metric_number(device, "battery_forced_outage_rate", forced_outage_rate)
+            battery_mttr = _result_metric_number(device, "battery_mttr_hours", mttr_hours)
+            value_parts.extend(
+                [
+                    f"电池组FOR {(battery_for or 0.0) * 100:g}%",
+                    f"电池组MTTR {battery_mttr or 0.0:g} h",
+                ]
+            )
+        cold_factor = _result_metric_number(device, "extreme_cold_capacity_factor", 1.0)
+        capex = _result_metric_number(device, "capex_wan_per_unit", 0.0)
+        fixed_om = _result_metric_number(device, "fixed_om_rate", 0.0)
+        design_life = _result_metric_number(device, "design_life_years", 0.0)
+        note_parts = [
+            f"极寒/系统可用系数 {(cold_factor or 0.0) * 100:g}%",
+            f"CAPEX {capex or 0.0:g} 万元/单元",
+            f"固定运维 {(fixed_om or 0.0) * 100:g}%/年",
+            f"设计寿命 {design_life or 0.0:g} 年",
+        ]
+        if device.get("device_type") == "diesel":
+            startup_failure = _result_metric_number(device, "startup_failure_rate", 0.0)
+            variable_om = _result_metric_number(device, "variable_om_yuan_per_kwh", 0.0)
+            note_parts.extend(
+                [
+                    f"启动失败率 {(startup_failure or 0.0) * 100:g}%",
+                    f"变动运维 {variable_om or 0.0:g} 元/kWh",
+                ]
+            )
+        assumption_log.append(
+            {
+                "name": f"{label}可靠性参数",
+                "value": "；".join(value_parts),
+                "note": "；".join(note_parts) + "。成本为场景假设、非采购报价；未被内核使用的字段仍保留用于追溯。",
+            }
+        )
+    warnings = list(result.get("warnings") or [])
+    warnings.extend(
+        [
+            "critical_load_ratio、reserve_duration_hours、startup_failure_rate及成本字段当前作为追溯假设保存，尚未改变充裕度调度。",
+            "概率结果基于设备独立两状态故障模型，未覆盖共同原因故障、燃油断供和人员无法维修等极地风险。",
+        ]
+    )
+    result.update(
+        {
+            "status": "completed",
+            "scheme": scheme,
+            "source_result_filename": filename,
+            "generated_at": _now_text(),
+            "parameters": deepcopy(parameters),
+            "metrics": metrics,
+            "reliability_metrics": metrics,
+            "n1_scenarios": scenarios,
+            "annual_distribution": annual_distribution,
+            "device_contributions": normalized_contributions,
+            "assumption_log": assumption_log,
+            "warnings": list(dict.fromkeys(str(item) for item in warnings if str(item).strip())),
+            "logs": deepcopy(logs or []),
+        }
+    )
+    return result
+
+
+def reliability_process_worker(
+    event_queue,
+    scheme: str,
+    filename: str,
+    parameters: dict,
+    planning_root: str = "",
+) -> None:
+    worker_logs: list[dict] = []
+
+    def emit(level: str, message: str, progress: int | None = None) -> None:
+        item = {"time": _now_text(), "level": level, "message": message}
+        worker_logs.append(item)
+        event = {"type": "log", **item}
+        if progress is not None:
+            event["progress"] = int(progress)
+        event_queue.put(event)
+
+    try:
+        emit("info", "读取方案参数和规划结果台数", 5)
+        store = planning_store.PlanningStore(root=Path(planning_root)) if planning_root else PLANNING_STORE
+        scheme_payload = store.read_scheme(scheme)
+        planning_rows = read_evaluation_planning_result_rows_with_store(store, scheme, filename) if filename else []
+        emit("info", f"规划台数来源：{filename or '方案参数固定上下限'}", 15)
+        prepared_payload = prepare_reliability_scheme_payload(
+            scheme_payload,
+            parameters,
+            has_planning_result=bool(planning_rows),
+        )
+        engine_config = reliability_engine_config(parameters)
+        emit("info", "构建设备两状态故障与小时级供需充裕度模型", 25)
+        if str(parameters.get("mode") or "both") == "deterministic":
+            case = reliability.build_reliability_case(prepared_payload, planning_rows or None, engine_config)
+            emit("info", "执行确定性N-1压力测试", 40)
+            raw_result = _deterministic_reliability_result(case)
+        else:
+            emit("info", "执行序贯蒙特卡洛与N-1可靠性评估", 35)
+            raw_result = reliability.run_reliability_assessment(
+                prepared_payload,
+                planning_rows or None,
+                engine_config,
+            )
+        emit("ok", "可靠性计算完成，准备写入独立结果文件", 90)
+        normalized = normalize_reliability_result(
+            raw_result,
+            scheme=scheme,
+            filename=filename,
+            parameters=parameters,
+            logs=worker_logs,
+        )
+        event_queue.put({"type": "done", "result": normalized})
+    except Exception as exc:
+        event_queue.put(
+            {
+                "type": "error",
+                "message": f"可靠性评估失败：{exc}",
+                "traceback": traceback.format_exc(),
+            }
+        )
+
+
+def _reliability_excel_value(value):
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return value
+
+
+def _style_reliability_sheet(sheet) -> None:
+    if sheet.max_row >= 1:
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="1F4E78")
+    sheet.freeze_panes = "A2"
+    for column_cells in sheet.columns:
+        max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+        sheet.column_dimensions[get_column_letter(column_cells[0].column)].width = min(max(max_length + 2, 12), 48)
+
+
+def _append_reliability_dict_sheet(workbook: Workbook, title: str, rows: list[dict], columns: list[tuple[str, str]]) -> None:
+    sheet = workbook.create_sheet(title)
+    sheet.append([label for _, label in columns])
+    for row in rows:
+        sheet.append([_reliability_excel_value(row.get(key)) for key, _ in columns])
+    _style_reliability_sheet(sheet)
+
+
+def build_reliability_results_workbook(result: dict) -> Workbook:
+    workbook = Workbook()
+    summary_sheet = workbook.active
+    summary_sheet.title = "摘要"
+    summary_sheet.append(["指标", "数值", "单位", "说明"])
+    metric_specs = [
+        ("EENS", result.get("metrics", {}).get("eens_kwh_per_year"), "kWh/a", "年期望未供电量"),
+        ("LOLE", result.get("metrics", {}).get("lole_hours_per_year"), "h/a", "年期望失负荷小时数"),
+        ("LOLP", result.get("metrics", {}).get("lolp"), "p.u.", "任一小时失负荷概率"),
+        ("LPSP", result.get("metrics", {}).get("lpsp"), "p.u.", "未供电量占负荷电量比例"),
+        ("供电可靠率", result.get("metrics", {}).get("supply_reliability"), "p.u.", "按电量统计"),
+        ("N-1通过率", result.get("metrics", {}).get("n1_pass_rate"), "p.u.", "单设备停运场景通过比例"),
+        ("P95 EENS", result.get("metrics", {}).get("p95_eens_kwh"), "kWh/a", "年度分布95分位"),
+        ("最大失供功率", result.get("metrics", {}).get("max_unmet_load_kw"), "kW", "模拟样本最大功率缺口"),
+        ("最大失供持续时间", result.get("metrics", {}).get("max_outage_duration_hours"), "h", "最长连续失负荷时段"),
+        ("模拟年数", result.get("metrics", {}).get("simulation_years"), "年", "序贯蒙特卡洛样本数"),
+    ]
+    for row in metric_specs:
+        summary_sheet.append(list(row))
+    _style_reliability_sheet(summary_sheet)
+
+    _append_reliability_dict_sheet(
+        workbook,
+        "N-1场景",
+        result.get("n1_scenarios", []),
+        [
+            ("name", "场景"),
+            ("outage_device", "停运设备"),
+            ("device_type_label", "设备类型"),
+            ("installed_units", "安装台数"),
+            ("removed_units", "停运台数"),
+            ("max_unmet_load_kw", "最大失供功率(kW)"),
+            ("unserved_energy_kwh", "未供电量(kWh)"),
+            ("lole_hours", "失负荷时长(h)"),
+            ("longest_consecutive_outage_hours", "最长连续失供(h)"),
+            ("pass", "是否通过"),
+        ],
+    )
+    _append_reliability_dict_sheet(
+        workbook,
+        "年度样本",
+        result.get("annual_distribution", []),
+        [
+            ("year", "模拟年"),
+            ("seed", "随机种子"),
+            ("eens_kwh", "EENS(kWh/a)"),
+            ("lole_hours", "LOLE(h/a)"),
+            ("lolp", "LOLP"),
+            ("lpsp", "LPSP"),
+            ("max_deficit_kw", "最大失供功率(kW)"),
+            ("longest_consecutive_outage_hours", "最长连续失供(h)"),
+        ],
+    )
+    _append_reliability_dict_sheet(
+        workbook,
+        "设备贡献",
+        result.get("device_contributions", []),
+        [
+            ("label", "设备"),
+            ("device_type_label", "设备类型"),
+            ("installed_units", "安装台数"),
+            ("input_forced_outage_rate", "输入FOR"),
+            ("input_mttr_hours", "输入MTTR(h)"),
+            ("observed_unavailability", "模拟不可用率"),
+            ("eens_kwh", "边际EENS贡献(kWh/a)"),
+            ("share", "归一化贡献占比"),
+        ],
+    )
+    assumption_rows = []
+    for row in result.get("assumption_log", []):
+        if isinstance(row, dict):
+            assumption_rows.append(
+                {
+                    "record_type": "假设",
+                    "name": row.get("name"),
+                    "value": row.get("value"),
+                    "unit": row.get("unit"),
+                    "note": row.get("note"),
+                }
+            )
+    for warning in result.get("warnings", []):
+        assumption_rows.append({"record_type": "边界", "name": "警告", "note": warning})
+    for log in result.get("logs", []):
+        if isinstance(log, dict):
+            assumption_rows.append(
+                {
+                    "record_type": "日志",
+                    "name": log.get("level"),
+                    "value": log.get("time"),
+                    "note": log.get("message"),
+                }
+            )
+    _append_reliability_dict_sheet(
+        workbook,
+        "假设与日志",
+        assumption_rows,
+        [
+            ("record_type", "记录类型"),
+            ("name", "名称/级别"),
+            ("value", "数值/时间"),
+            ("unit", "单位"),
+            ("note", "说明"),
+        ],
+    )
+    return workbook
+
+
+def save_reliability_result_json(path: Path, result: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp")
+    tmp_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
+    file_cache.invalidate_path(path)
+
+
+def read_reliability_result_json(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"可靠性结果文件无法读取: {path.name}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"可靠性结果文件格式不正确: {path.name}")
+    return payload
+
+
+class ReliabilityRuntime:
+    """Independent background runtime for one scheme/result reliability case."""
+
+    def __init__(self, scheme: str = "", filename: str = "") -> None:
+        self.status = "idle"
+        self.scheme = str(scheme or "").strip()
+        self.result_filename = str(filename or "").strip()
+        self.start_time = ""
+        self.end_time = ""
+        self.progress = 0
+        self.result_file = ""
+        self.export_file = ""
+        self.process_id: int | None = None
+        self._result: dict = {}
+        self._logs: list[dict] = []
+        self._lock = threading.Lock()
+        self._process: multiprocessing.Process | None = None
+        self._event_queue: multiprocessing.Queue | None = None
+        self._stop_requested = False
+        self._append_log_unlocked("info", "可靠性评估待启动")
+
+    def snapshot(self, *, light: bool = False) -> dict:
+        with self._lock:
+            self._drain_events_unlocked()
+            self._reap_process_unlocked()
+            return self._payload_unlocked(light=light)
+
+    def apply(self, action: str, *, scheme: str, filename: str, parameters: dict | None = None) -> dict:
+        target_scheme = str(scheme or self.scheme or "").strip()
+        target_filename = str(filename or self.result_filename or "").strip()
+        if action == "clear_logs":
+            with self._lock:
+                self.scheme = target_scheme
+                self.result_filename = target_filename
+                self._logs.clear()
+                return self._payload_unlocked()
+        if action == "cancel_queue":
+            with self._lock:
+                if self.status == "running":
+                    raise OptimizationStateError("running", "可靠性评估正在运行，无法退出队列")
+                self.status = "idle"
+                self.progress = 0
+                self._append_log_unlocked("info", "已退出可靠性等待队列")
+                return self._payload_unlocked()
+        if action in {"start", "queue"}:
+            with self._lock:
+                self._drain_events_unlocked()
+                if self.status == "running":
+                    raise OptimizationStateError("running", f"方案“{target_scheme}”的可靠性评估正在运行")
+            if not target_scheme:
+                raise ValueError("请选择规划方案")
+            PLANNING_STORE.read_scheme(target_scheme)
+            if target_filename:
+                source_path = evaluation_result_path(target_scheme, target_filename)
+                if not source_path.exists():
+                    raise FileNotFoundError(f"结果文件不存在: {target_filename}")
+            if parameters is None:
+                target_parameters, _, _ = read_reliability_parameters(target_scheme, target_filename)
+            else:
+                defaults, _, _ = build_default_reliability_parameters(target_scheme, target_filename)
+                target_parameters = normalize_reliability_parameters(parameters, defaults)
+                if target_filename:
+                    default_by_type = {
+                        row["device_type"]: row
+                        for row in defaults.get("devices", [])
+                        if isinstance(row, dict) and row.get("device_type")
+                    }
+                    for row in target_parameters.get("devices", []):
+                        source_row = default_by_type.get(row.get("device_type"))
+                        if source_row:
+                            row["unit_count"] = source_row.get("unit_count", row.get("unit_count", 0))
+                            row["unit_count_source"] = "planning_result_workbook"
+            with self._lock:
+                if self.status == "running":
+                    raise OptimizationStateError("running", f"方案“{target_scheme}”的可靠性评估正在运行")
+                self._terminate_process_unlocked()
+                self.scheme = target_scheme
+                self.result_filename = target_filename
+                self.status = "running"
+                self.start_time = _now_text()
+                self.end_time = ""
+                self.progress = 0
+                self.result_file = ""
+                self.export_file = ""
+                self._result = {}
+                self._stop_requested = False
+                self._logs.clear()
+                if action == "queue":
+                    self._append_log_unlocked("info", "可靠性队列当前按独立后台任务立即启动")
+                self._append_log_unlocked("ok", f"启动可靠性评估：{target_scheme} / {target_filename or '方案参数'}")
+                self._event_queue = multiprocessing.Queue()
+                self._process = multiprocessing.Process(
+                    target=reliability_process_worker,
+                    args=(
+                        self._event_queue,
+                        target_scheme,
+                        target_filename,
+                        target_parameters,
+                        str(PLANNING_STORE.root),
+                    ),
+                    daemon=True,
+                )
+                self._process.start()
+                self.process_id = self._process.pid
+                return self._payload_unlocked(light=True)
+        if action == "stop":
+            with self._lock:
+                self._drain_events_unlocked()
+                if self.status != "running":
+                    raise OptimizationStateError("not_running", "当前可靠性评估没有运行")
+                self._stop_requested = True
+                self._terminate_process_unlocked()
+                self.status = "stopped"
+                self.end_time = _now_text()
+                self._append_log_unlocked("warn", "可靠性评估已停止")
+                return self._payload_unlocked(light=True)
+        raise ValueError(f"unknown reliability action: {action}")
+
+    def _payload_unlocked(self, *, light: bool = False) -> dict:
+        result_path = reliability_result_json_path(self.scheme, self.result_filename) if self.scheme else None
+        export_path = reliability_result_workbook_path(self.scheme, self.result_filename) if self.scheme else None
+        if result_path and result_path.exists() and self.status == "idle":
+            self.status = "completed"
+            self.progress = 100
+            self.result_file = str(result_path)
+            self.export_file = str(export_path) if export_path and export_path.exists() else ""
+            if not self.end_time:
+                self.end_time = datetime.fromtimestamp(result_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        if not light and not self._result and result_path and result_path.exists() and self.status != "running":
+            stored = read_reliability_result_json(result_path)
+            if stored:
+                self._result = stored
+                self.result_file = str(result_path)
+                self.export_file = str(export_path) if export_path and export_path.exists() else ""
+                self.end_time = str(stored.get("generated_at") or self.end_time)
+        payload = {
+            "status": self.status,
+            "scheme": self.scheme,
+            "filename": self.result_filename,
+            "result_filename": self.result_filename,
+            "start_time": self.start_time,
+            "end_time": self.end_time,
+            "progress": self.progress,
+            "elapsed_seconds": elapsed_seconds_from_times(self.start_time, self.end_time),
+            "process_id": self.process_id or "",
+            "result_file": self.result_file or (str(result_path) if result_path and result_path.exists() else ""),
+            "export_file": self.export_file or (str(export_path) if export_path and export_path.exists() else ""),
+            "logs": list(self._logs),
+        }
+        if not light:
+            payload["result"] = deepcopy(self._result) if self._result else None
+        return payload
+
+    def _drain_events_unlocked(self) -> None:
+        if not self._event_queue:
+            return
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+            if isinstance(event, dict):
+                self._handle_event_unlocked(event)
+            if not self._event_queue:
+                break
+
+    def _handle_event_unlocked(self, event: dict) -> None:
+        event_type = str(event.get("type") or "log")
+        if event_type == "log":
+            if event.get("progress") not in (None, ""):
+                self.progress = max(self.progress, min(99, int(event.get("progress"))))
+            self._append_log_unlocked(str(event.get("level") or "info"), str(event.get("message") or ""))
+            return
+        if event_type == "done":
+            if self.status != "running" or self._stop_requested:
+                return
+            result = event.get("result") if isinstance(event.get("result"), dict) else {}
+            self.progress = 96
+            self._append_log_unlocked("info", "写入独立可靠性JSON与Excel结果")
+            result_path = reliability_result_json_path(self.scheme, self.result_filename)
+            export_path = reliability_result_workbook_path(self.scheme, self.result_filename)
+            try:
+                result["logs"] = list(self._logs)
+                result.setdefault("artifacts", {})
+                result["artifacts"]["json"] = str(result_path)
+                try:
+                    save_result_workbook(build_reliability_results_workbook(result), export_path, "可靠性结果文件")
+                    self.export_file = str(export_path)
+                    result["artifacts"]["xlsx"] = str(export_path)
+                    self._append_log_unlocked("ok", f"可靠性Excel已写入：{export_path.name}")
+                except Exception as exc:
+                    message = f"可靠性Excel导出失败，JSON结果仍将保留：{exc}"
+                    self._append_log_unlocked("warn", message)
+                    result.setdefault("warnings", []).append(message)
+                self._append_log_unlocked("ok", f"可靠性JSON已写入：{result_path.name}")
+                result["logs"] = list(self._logs)
+                save_reliability_result_json(result_path, result)
+            except Exception as exc:
+                self.status = "failed"
+                self.end_time = _now_text()
+                self._append_log_unlocked("error", f"可靠性结果保存失败：{exc}")
+                self._join_finished_process_unlocked()
+                self._close_event_queue_unlocked()
+                return
+            self._result = result
+            self.result_file = str(result_path)
+            self.progress = 100
+            self.status = "completed"
+            self.end_time = _now_text()
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+            return
+        if event_type == "error":
+            if self.status != "running":
+                return
+            self.status = "failed"
+            self.end_time = _now_text()
+            self._append_log_unlocked("error", str(event.get("message") or "可靠性评估失败"))
+            self._join_finished_process_unlocked()
+            self._close_event_queue_unlocked()
+
+    def _reap_process_unlocked(self) -> None:
+        if not self._process or self._process.is_alive():
+            return
+        self._process.join(timeout=0)
+        self._drain_events_unlocked()
+        if self.status == "running":
+            self.status = "failed"
+            self.end_time = _now_text()
+            self._append_log_unlocked("error", f"可靠性评估进程异常退出，退出码：{self._process.exitcode}")
+        self._close_event_queue_unlocked()
+        self._process = None
+
+    def _terminate_process_unlocked(self) -> None:
+        process = self._process
+        if process and process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+            if process.is_alive() and hasattr(process, "kill"):
+                process.kill()
+                process.join(timeout=1)
+        self._process = None
+        self.process_id = None
+        self._close_event_queue_unlocked()
+
+    def _join_finished_process_unlocked(self) -> None:
+        if self._process:
+            self._process.join(timeout=0.2)
+        self._process = None
+
+    def _close_event_queue_unlocked(self) -> None:
+        event_queue = self._event_queue
+        self._event_queue = None
+        if event_queue and hasattr(event_queue, "close"):
+            try:
+                event_queue.close()
+            except (OSError, ValueError):
+                pass
+
+    def _append_log_unlocked(self, level: str, message: str) -> None:
+        self._logs.append({"time": _now_text(), "level": level, "message": message})
+        if len(self._logs) > 1000:
+            del self._logs[:-1000]
+
+
+class ReliabilityRuntimeManager:
+    def __init__(self) -> None:
+        self._runtimes: dict[str, ReliabilityRuntime] = {}
+        self._lock = threading.Lock()
+
+    def snapshot(self, scheme: str = "", filename: str = "", *, light: bool = False) -> dict:
+        scheme_name = str(scheme or "").strip()
+        selected = normalize_reliability_source_filename(scheme_name, filename, require_exists=False)
+        return self._runtime(scheme_name, selected).snapshot(light=light)
+
+    def apply(
+        self,
+        action: str,
+        *,
+        scheme: str = "",
+        filename: str = "",
+        parameters: dict | None = None,
+    ) -> dict:
+        scheme_name = str(scheme or "").strip()
+        selected = normalize_reliability_source_filename(
+            scheme_name,
+            filename,
+            require_exists=bool(str(filename or "").strip()),
+        )
+        return self._runtime(scheme_name, selected).apply(
+            action,
+            scheme=scheme_name,
+            filename=selected,
+            parameters=parameters,
+        )
+
+    def runtimes(self) -> dict[str, ReliabilityRuntime]:
+        with self._lock:
+            return dict(self._runtimes)
+
+    def _runtime(self, scheme: str, filename: str) -> ReliabilityRuntime:
+        key = f"{scheme}\0{filename}"
+        with self._lock:
+            if key not in self._runtimes:
+                self._runtimes[key] = ReliabilityRuntime(scheme, filename)
+            return self._runtimes[key]
+
+
+def handle_reliability_api_path(
+    path: str,
+    method: str,
+    body: bytes = b"",
+    query: str = "",
+    current_user: dict | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    query_params = parse_qs(query)
+    try:
+        if path == "/api/reliability/parameters":
+            if method == "GET":
+                scheme = query_params.get("scheme", [""])[0]
+                filename = query_params.get("filename", [""])[0]
+                ensure_planning_scheme_access(scheme, current_user)
+                selected = normalize_reliability_source_filename(scheme, filename, require_exists=False)
+                parameters, warnings, selected = read_reliability_parameters(scheme, selected)
+                return _json_response(
+                    {
+                        "scheme": scheme,
+                        "selected": selected,
+                        "parameters": parameters,
+                        "assumption_warnings": warnings,
+                    }
+                )
+            if method == "PUT":
+                payload = json.loads(body.decode("utf-8") or "{}")
+                scheme = str(payload.get("scheme") or "").strip()
+                filename = str(payload.get("filename") or "").strip()
+                ensure_planning_scheme_manage_access(scheme, current_user)
+                selected = normalize_reliability_source_filename(
+                    scheme,
+                    filename,
+                    require_exists=bool(filename),
+                )
+                parameters = payload.get("parameters")
+                if not isinstance(parameters, dict):
+                    raise ValueError("parameters必须是对象")
+                saved, warnings, selected = write_reliability_parameters(scheme, parameters, selected)
+                return _json_response(
+                    {
+                        "ok": True,
+                        "scheme": scheme,
+                        "selected": selected,
+                        "parameters": saved,
+                        "assumption_warnings": warnings,
+                    }
+                )
+        if path == "/api/reliability/results" and method == "GET":
+            scheme = query_params.get("scheme", [""])[0]
+            filename = query_params.get("filename", [""])[0]
+            ensure_planning_scheme_access(scheme, current_user)
+            selected = normalize_reliability_source_filename(scheme, filename, require_exists=False)
+            result_files = list_evaluation_result_files(scheme)
+            result_path = reliability_result_json_path(scheme, selected)
+            export_path = reliability_result_workbook_path(scheme, selected)
+            result = read_reliability_result_json(result_path)
+            return _json_response(
+                {
+                    "scheme": scheme,
+                    "selected": selected,
+                    "results": result_files,
+                    "result_file": result_path.name if result_path.exists() else "",
+                    "export_file": export_path.name if export_path.exists() else "",
+                    "result": result,
+                }
+            )
+        if path == "/api/reliability/status" and method == "GET":
+            scheme = query_params.get("scheme", [""])[0]
+            if scheme:
+                ensure_planning_scheme_access(scheme, current_user)
+            filename = query_params.get("filename", [""])[0]
+            light = truthy_json_value(query_params.get("light", ["0"])[0])
+            return _json_response(RELIABILITY_RUNTIME.snapshot(scheme, filename, light=light))
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+    return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
 
 
 def build_frequency_evaluation_payload(
@@ -4242,7 +5663,7 @@ def build_task_list(schedule: bool = True, current_user: dict | None = None) -> 
                 tasks[freq_task["id"]] = freq_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
-        if not user_can_access_planning_scheme(scheme, current_user):
+        if not user_can_manage_planning_scheme(scheme, current_user):
             continue
         state = runtime.task_snapshot()
         task = task_from_runtime_state(
@@ -4257,7 +5678,7 @@ def build_task_list(schedule: bool = True, current_user: dict | None = None) -> 
 
     for key, runtime in EVALUATION_RUNTIME.runtimes().items():
         scheme, result = split_evaluation_runtime_key(key)
-        if not user_can_access_planning_scheme(scheme, current_user):
+        if not user_can_manage_planning_scheme(scheme, current_user):
             continue
         queued = TASK_SCHEDULER.is_queued("evaluation", scheme, result)
         if result == OPTIMIZATION_RESULT_WORKBOOK_NAME and runtime.status != "运行中" and not queued:
@@ -4275,7 +5696,7 @@ def build_task_list(schedule: bool = True, current_user: dict | None = None) -> 
 
     for key, runtime in FREQUENCY_EVALUATION_RUNTIME.runtimes().items():
         scheme, result = split_evaluation_runtime_key(key)
-        if not user_can_access_planning_scheme(scheme, current_user):
+        if not user_can_manage_planning_scheme(scheme, current_user):
             continue
         queued = TASK_SCHEDULER.is_queued("frequency", scheme, result)
         state = runtime.task_snapshot()
@@ -4425,7 +5846,7 @@ def build_task_control_response(
     normalized_action = normalize_task_action(action)
     if normalized_action == "cancel_queue":
         item = normalized_task_item(task_type_key, scheme, result)
-        ensure_planning_scheme_access(item["scheme"], current_user)
+        ensure_planning_scheme_manage_access(item["scheme"], current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         if task_type_key == "optimization":
             state = OPTIMIZATION_RUNTIME.apply("cancel_queue", scheme=item["scheme"])
@@ -4440,20 +5861,20 @@ def build_task_control_response(
         return {"ok": True, "task": task, "tasks": tasks}
     if normalized_action == "queue":
         item = normalized_task_item(task_type_key, scheme, result)
-        ensure_planning_scheme_access(item["scheme"], current_user)
+        ensure_planning_scheme_manage_access(item["scheme"], current_user)
         item = TASK_SCHEDULER.enqueue(item["task_type_key"], item["scheme"], item["result"])
         tasks = build_task_list(schedule=False, current_user=current_user)
         task = find_task_in_list(tasks, item)
         return {"ok": True, "task": task, "tasks": tasks}
     if task_type_key == "optimization":
-        ensure_planning_scheme_access(scheme, current_user)
+        ensure_planning_scheme_manage_access(scheme, current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         state = OPTIMIZATION_RUNTIME.apply(normalized_action, scheme=scheme)
         task = task_from_runtime_state("optimization", state, scheme=state.get("scheme") or scheme, result=OPTIMIZATION_RESULT_WORKBOOK_NAME)
         tasks = build_task_list(current_user=current_user)
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
     if task_type_key == "evaluation":
-        ensure_planning_scheme_access(scheme, current_user)
+        ensure_planning_scheme_manage_access(scheme, current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         state = EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
         task = task_from_runtime_state(
@@ -4465,7 +5886,7 @@ def build_task_control_response(
         tasks = build_task_list(current_user=current_user)
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
     if task_type_key == "frequency":
-        ensure_planning_scheme_access(scheme, current_user)
+        ensure_planning_scheme_manage_access(scheme, current_user)
         TASK_SCHEDULER.remove(task_type_key, scheme, result)
         state = FREQUENCY_EVALUATION_RUNTIME.apply(normalized_action, scheme=scheme, filename=result)
         task = task_from_runtime_state(
@@ -4912,6 +6333,7 @@ SIMU_RUNTIME = _load_initial_simu_runtime()
 OPTIMIZATION_RUNTIME = OptimizationRuntimeManager()
 EVALUATION_RUNTIME = EvaluationRuntimeManager()
 FREQUENCY_EVALUATION_RUNTIME = FrequencyEvaluationRuntimeManager()
+RELIABILITY_RUNTIME = ReliabilityRuntimeManager()
 TASK_SCHEDULER = TaskScheduler()
 DATA_SOURCE = CsvDataSource()
 PLANNING_STORE = planning_store.PlanningStore()
@@ -6626,6 +8048,12 @@ def scheme_owner_filter_for_user(current_user: dict | None) -> str | None:
     return current_username(current_user)
 
 
+def scheme_visible_filter_for_user(current_user: dict | None) -> str | None:
+    if user_has_admin_scope(current_user):
+        return None
+    return current_username(current_user)
+
+
 def new_scheme_owner_for_user(current_user: dict | None) -> str | None:
     if current_user is None:
         return None
@@ -6637,7 +8065,17 @@ def ensure_planning_scheme_access(name: str, current_user: dict | None) -> str:
     if user_has_admin_scope(current_user):
         return clean
     username = current_username(current_user)
-    if not username or PLANNING_STORE.scheme_owner_username(clean) != username:
+    if not PLANNING_STORE.scheme_dir(clean).exists() or not username or not PLANNING_STORE.user_can_read_scheme(clean, username):
+        raise FileNotFoundError(f"方案不存在: {clean}")
+    return clean
+
+
+def ensure_planning_scheme_manage_access(name: str, current_user: dict | None) -> str:
+    clean = planning_store.validate_scheme_name(name)
+    if user_has_admin_scope(current_user):
+        return clean
+    username = current_username(current_user)
+    if not PLANNING_STORE.scheme_dir(clean).exists() or not username or PLANNING_STORE.scheme_owner_username(clean) != username:
         raise FileNotFoundError(f"方案不存在: {clean}")
     return clean
 
@@ -6645,6 +8083,14 @@ def ensure_planning_scheme_access(name: str, current_user: dict | None) -> str:
 def user_can_access_planning_scheme(name: str, current_user: dict | None) -> bool:
     try:
         ensure_planning_scheme_access(name, current_user)
+    except (ValueError, FileNotFoundError):
+        return False
+    return True
+
+
+def user_can_manage_planning_scheme(name: str, current_user: dict | None) -> bool:
+    try:
+        ensure_planning_scheme_manage_access(name, current_user)
     except (ValueError, FileNotFoundError):
         return False
     return True
@@ -6666,8 +8112,51 @@ def planning_scheme_access_error_response(
 def ensure_planning_copy_target_access(name: str, current_user: dict | None) -> str:
     clean = planning_store.validate_scheme_name(name)
     if PLANNING_STORE.scheme_dir(clean).exists():
-        ensure_planning_scheme_access(clean, current_user)
+        ensure_planning_scheme_manage_access(clean, current_user)
     return clean
+
+
+def planning_scheme_list_item_for_user(item: dict, current_user: dict | None) -> dict:
+    name = str(item.get("name") or "")
+    owner = str(item.get("owner_username") or "").strip()
+    username = current_username(current_user)
+    shared_with = planning_store.normalize_shared_usernames(item.get("shared_with_usernames"))
+    can_manage = user_can_manage_planning_scheme(name, current_user)
+    if user_has_admin_scope(current_user):
+        access_level = "admin"
+    elif owner == username:
+        access_level = "owner"
+    elif username in shared_with:
+        access_level = "shared"
+    else:
+        access_level = ""
+    return {
+        **item,
+        "shared_with_usernames": shared_with,
+        "access_level": access_level,
+        "can_manage": can_manage,
+        "is_shared_with_me": bool(username and username in shared_with and owner != username),
+    }
+
+
+def planning_scheme_share_payload(name: str) -> dict:
+    clean = planning_store.validate_scheme_name(name)
+    meta = PLANNING_STORE.read_scheme_meta(clean)
+    return {
+        "scheme": clean,
+        "owner_username": str(meta.get("owner_username") or "").strip(),
+        "shared_with_usernames": planning_store.normalize_shared_usernames(meta.get("shared_with_usernames")),
+    }
+
+
+def existing_share_target_username(username: str, current_user: dict | None) -> str:
+    target = USER_STORE.get_user_by_username(username)
+    if not target:
+        raise FileNotFoundError(f"用户不存在: {username}")
+    target_username = str(target.get("username") or "").strip()
+    if target_username and target_username == current_username(current_user):
+        raise ValueError("不能将方案分享给自己")
+    return target_username
 
 
 def handle_planning_api_path(
@@ -6784,9 +8273,11 @@ def handle_planning_api_path(
             payload = _read_json_body(body)
             return _json_response(reverse_geocode_coordinates(payload.get("latitude"), payload.get("longitude")))
         if path == prefix and method == "GET":
-            return _json_response(
-                {"schemes": PLANNING_STORE.list_schemes(owner_username=scheme_owner_filter_for_user(current_user))}
-            )
+            schemes = [
+                planning_scheme_list_item_for_user(item, current_user)
+                for item in PLANNING_STORE.list_schemes(visible_username=scheme_visible_filter_for_user(current_user))
+            ]
+            return _json_response({"schemes": schemes})
         if path == prefix and method == "POST":
             payload = _read_json_body(body)
             return _json_response(
@@ -6807,12 +8298,28 @@ def handle_planning_api_path(
                     owner_username=new_scheme_owner_for_user(current_user),
                 )
             )
+        if path == f"{prefix}/share" and method == "POST":
+            payload = _read_json_body(body)
+            name = ensure_planning_scheme_manage_access(str(payload.get("scheme", "")), current_user)
+            username = existing_share_target_username(str(payload.get("username", "")), current_user)
+            PLANNING_STORE.share_scheme(name, username)
+            return _json_response(planning_scheme_share_payload(name))
+        if path == f"{prefix}/unshare" and method == "POST":
+            payload = _read_json_body(body)
+            name = ensure_planning_scheme_manage_access(str(payload.get("scheme", "")), current_user)
+            username = str(payload.get("username", "")).strip()
+            PLANNING_STORE.unshare_scheme(name, username)
+            return _json_response(planning_scheme_share_payload(name))
         if path == f"{prefix}/rename" and method == "POST":
             payload = _read_json_body(body)
-            source = ensure_planning_scheme_access(str(payload.get("source", "")), current_user)
+            source = ensure_planning_scheme_manage_access(str(payload.get("source", "")), current_user)
             return _json_response(
                 PLANNING_STORE.rename_scheme(source, str(payload.get("target", "")))
             )
+        if path.startswith(f"{prefix}/") and path.endswith("/shares") and method == "GET":
+            name = unquote(path[len(prefix) + 1 : -len("/shares")])
+            name = ensure_planning_scheme_manage_access(name, current_user)
+            return _json_response(planning_scheme_share_payload(name))
         if path.startswith(f"{prefix}/") and path.endswith("/overview") and method == "GET":
             name = unquote(path[len(prefix) + 1 : -len("/overview")])
             ensure_planning_scheme_access(name, current_user)
@@ -6823,10 +8330,11 @@ def handle_planning_api_path(
             return _json_response(PLANNING_STORE.read_time_series(name))
         if path.startswith(f"{prefix}/"):
             name = unquote(path[len(prefix) + 1 :])
-            name = ensure_planning_scheme_access(name, current_user)
             if method == "GET":
+                name = ensure_planning_scheme_access(name, current_user)
                 return _json_response(PLANNING_STORE.read_scheme(name))
             if method == "PUT":
+                name = ensure_planning_scheme_manage_access(name, current_user)
                 payload = _read_json_body(body)
                 includes_time_series = "time_series" in payload
                 PLANNING_STORE.write_scheme(name, payload)
@@ -6834,6 +8342,7 @@ def handle_planning_api_path(
                     return _json_response(PLANNING_STORE.read_scheme(name))
                 return _json_response(PLANNING_STORE.read_scheme_overview(name))
             if method == "DELETE":
+                name = ensure_planning_scheme_manage_access(name, current_user)
                 return _json_response(PLANNING_STORE.delete_scheme(name))
     except WeatherHistoryError as exc:
         return _json_response({"error": "weather_history_error", "message": str(exc)}, HTTPStatus.BAD_GATEWAY)
@@ -6862,6 +8371,8 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         return handle_planning_api_path(path, "GET", b"", current_user=current_user)
     if path.startswith("/api/comparison/"):
         return handle_comparison_data_api_path(path, query, current_user=current_user)
+    if path.startswith("/api/reliability/"):
+        return handle_reliability_api_path(path, "GET", b"", query, current_user=current_user)
     if path == "/api/evaluation/status":
         scheme = query_params.get("scheme", [""])[0]
         if scheme:
@@ -6932,13 +8443,51 @@ def handle_control_path(
     body: bytes,
     current_user: dict | None = None,
 ) -> tuple[int, dict[str, str], bytes]:
+    if path == "/api/reliability/control":
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+            action = str(payload.get("action") or "").strip()
+            scheme = str(payload.get("scheme") or "").strip()
+            filename = str(payload.get("filename") or "").strip()
+            parameters = payload.get("parameters")
+            if scheme or action != "clear_logs":
+                ensure_planning_scheme_manage_access(scheme, current_user)
+            if parameters is not None and not isinstance(parameters, dict):
+                raise ValueError("parameters必须是对象")
+            selected = normalize_reliability_source_filename(
+                scheme,
+                filename,
+                require_exists=bool(filename),
+            )
+            if action in {"start", "queue"} and isinstance(parameters, dict):
+                parameters, _, selected = write_reliability_parameters(scheme, parameters, selected)
+            state = RELIABILITY_RUNTIME.apply(
+                action,
+                scheme=scheme,
+                filename=selected,
+                parameters=parameters,
+            )
+        except OptimizationStateError as exc:
+            return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (ValueError, json.JSONDecodeError) as exc:
+            return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        message = "可靠性评估已启动"
+        if action == "queue":
+            message = "可靠性队列当前按独立后台任务立即启动"
+        elif action == "stop":
+            message = "可靠性评估已停止"
+        elif action == "clear_logs":
+            message = "可靠性日志已清空"
+        return _json_response({"ok": True, "message": message, "state": state})
     if path == "/api/optimization/control":
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
             action = str(payload.get("action", ""))
             scheme = str(payload.get("scheme", ""))
             if scheme or action != "clear_logs":
-                ensure_planning_scheme_access(scheme, current_user)
+                ensure_planning_scheme_manage_access(scheme, current_user)
             state = OPTIMIZATION_RUNTIME.apply(action, scheme=scheme)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
@@ -6954,7 +8503,7 @@ def handle_control_path(
             scheme = str(payload.get("scheme", ""))
             filename = str(payload.get("filename", ""))
             if scheme or action != "clear_logs":
-                ensure_planning_scheme_access(scheme, current_user)
+                ensure_planning_scheme_manage_access(scheme, current_user)
             state = EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
@@ -6970,7 +8519,7 @@ def handle_control_path(
             scheme = str(payload.get("scheme", ""))
             filename = str(payload.get("filename", ""))
             if scheme or action != "clear_logs":
-                ensure_planning_scheme_access(scheme, current_user)
+                ensure_planning_scheme_manage_access(scheme, current_user)
             state = FREQUENCY_EVALUATION_RUNTIME.apply(action, scheme=scheme, filename=filename)
         except OptimizationStateError as exc:
             return _json_response({"error": exc.code, "message": str(exc)}, HTTPStatus.CONFLICT)
@@ -7158,6 +8707,12 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
         if parsed.path.startswith("/api/planning/"):
             status, headers, response_body = safe_api_call(
                 lambda: handle_planning_api_path(parsed.path, "PUT", body, current_user=current_user)
+            )
+            self._send(status, headers, response_body)
+            return
+        if parsed.path.startswith("/api/reliability/"):
+            status, headers, response_body = safe_api_call(
+                lambda: handle_reliability_api_path(parsed.path, "PUT", body, parsed.query, current_user=current_user)
             )
             self._send(status, headers, response_body)
             return

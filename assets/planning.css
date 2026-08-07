@@ -295,6 +295,10 @@ button:disabled {
   overflow: visible;
 }
 
+.scheme-actions-rail-bottom {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .scheme-actions-rail button {
   width: 100%;
   min-width: 0;
@@ -346,6 +350,30 @@ button:disabled {
   border-radius: 50%;
   background: rgba(248, 251, 250, 0.92);
   box-shadow: 0 0 0 2px rgba(248, 251, 250, 0.84);
+}
+
+.scheme-item-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scheme-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scheme-access-label {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgba(113, 81, 159, 0.12);
+  color: #6c4b97;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1.2;
 }
 
 .scheme-item.active {

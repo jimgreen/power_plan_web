@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>供电可靠性 - 考察站风-光-氢-储-柴联合规划系统</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/planning.css?v=20260530-scheme-rail-divider-visible">
+  <style>
+    .reliability-page .topbar {
+      gap: 14px;
+      padding-inline: 18px;
+    }
+
+    .reliability-page .brand {
+      font-size: 20px;
+    }
+
+    .reliability-page .main-nav {
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .reliability-page .main-nav a {
+      min-height: 32px;
+      padding: 8px 9px;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .reliability-workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(330px, 390px) minmax(0, 1fr);
+      gap: 16px;
+      padding: 18px;
+      overflow: hidden;
+    }
+
+    .reliability-settings,
+    .reliability-main > .optimization-command-card,
+    .reliability-main > .optimization-result-card {
+      color: var(--hud-text, #eef7ff);
+      border: 1px solid var(--hud-inner-line, rgba(20, 190, 255, 0.28));
+      border-radius: 10px;
+      background: var(--hud-panel, rgba(3, 18, 39, 0.88));
+      box-shadow: var(--hud-shadow-soft, 0 18px 42px rgba(0, 12, 32, 0.36));
+    }
+
+    .reliability-settings {
+      min-height: 0;
+      padding: 16px;
+      overflow: auto;
+    }
+
+    .reliability-main {
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: max-content minmax(0, 1fr);
+      gap: 16px;
+      overflow: hidden;
+    }
+
+    .reliability-main > .optimization-result-card {
+      min-height: 0;
+    }
+
+    .reliability-panel-head,
+    .reliability-section-head,
+    .reliability-chart-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .reliability-panel-head {
+      margin-bottom: 14px;
+    }
+
+    .reliability-panel-head h1,
+    .reliability-section-head h2,
+    .reliability-chart-head h3 {
+      margin: 0;
+      color: var(--hud-text, #eef7ff);
+      text-shadow: 0 0 14px rgba(44, 183, 255, 0.5);
+    }
+
+    .reliability-panel-head h1 {
+      font-size: 21px;
+    }
+
+    .reliability-panel-head p,
+    .reliability-section-head p,
+    .reliability-chart-head p {
+      margin: 4px 0 0;
+      color: var(--hud-muted, #8fb3c9);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .reliability-parameter-section {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(20, 190, 255, 0.18);
+    }
+
+    .reliability-section-head h2 {
+      font-size: 16px;
+    }
+
+    .reliability-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .reliability-field-grid .field-wide {
+      grid-column: 1 / -1;
+    }
+
+    .reliability-field-grid label {
+      min-width: 0;
+      display: grid;
+      gap: 6px;
+      color: var(--hud-muted-strong, #bdeaff);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .reliability-field-grid input,
+    .reliability-field-grid select,
+    .reliability-device-table input {
+      width: 100%;
+      min-width: 0;
+      min-height: 36px;
+      padding: 7px 9px;
+      border: 1px solid var(--control-border, rgba(21, 211, 255, 0.42));
+      border-radius: 7px;
+      outline: none;
+      background: var(--input-bg, rgba(1, 14, 42, 0.82));
+      color: var(--hud-text, #eef7ff);
+    }
+
+    .reliability-field-grid input:focus,
+    .reliability-field-grid select:focus,
+    .reliability-device-table input:focus {
+      border-color: var(--control-border-hover, rgba(108, 238, 255, 0.74));
+      box-shadow: 0 0 0 2px rgba(33, 213, 255, 0.12);
+    }
+
+    .reliability-assumption-warning {
+      margin-top: 12px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 192, 88, 0.5);
+      border-radius: 8px;
+      background: rgba(88, 55, 6, 0.34);
+      color: #ffe0a6;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .reliability-assumption-warning[data-authoritative="true"] {
+      border-color: rgba(74, 222, 128, 0.4);
+      background: rgba(8, 78, 55, 0.3);
+      color: #baf7d2;
+    }
+
+    .reliability-device-wrap {
+      margin-top: 10px;
+      overflow: auto;
+      border: 1px solid rgba(20, 190, 255, 0.22);
+      border-radius: 8px;
+    }
+
+    .reliability-device-table {
+      min-width: 1320px;
+      border-collapse: collapse;
+    }
+
+    .reliability-device-table th,
+    .reliability-device-table td {
+      padding: 7px 8px;
+      font-size: 13px;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .reliability-device-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    .reliability-device-table input {
+      min-height: 32px;
+      padding: 5px 7px;
+      font-size: 13px;
+    }
+
+    .reliability-dual-input {
+      display: grid;
+      gap: 4px;
+      min-width: 112px;
+    }
+
+    .reliability-dual-input label {
+      display: grid;
+      grid-template-columns: 34px minmax(62px, 1fr);
+      align-items: center;
+      gap: 4px;
+      color: var(--hud-muted-strong, #bdeaff);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .reliability-device-name {
+      color: var(--hud-cyan, #21d5ff);
+      font-weight: 900;
+    }
+
+    .reliability-table-note {
+      margin: 8px 0 0;
+      color: var(--hud-muted, #8fb3c9);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .reliability-parameter-actions {
+      position: sticky;
+      bottom: -16px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin: 16px -16px -16px;
+      padding: 12px 16px 16px;
+      border-top: 1px solid rgba(20, 190, 255, 0.2);
+      background: linear-gradient(180deg, rgba(3, 18, 39, 0.75), rgba(3, 18, 39, 0.98) 28%);
+    }
+
+    .reliability-parameter-actions button {
+      min-height: 36px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-weight: 800;
+    }
+
+    .reliability-message {
+      margin-bottom: 12px;
+      padding: 9px 11px;
+      border: 1px solid rgba(33, 213, 255, 0.34);
+      border-radius: 8px;
+      background: rgba(3, 43, 86, 0.42);
+      color: var(--hud-muted-strong, #bdeaff);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .reliability-message.error {
+      border-color: rgba(255, 107, 107, 0.55);
+      background: rgba(86, 20, 36, 0.45);
+      color: #ffd6d6;
+    }
+
+    .reliability-message.ok {
+      border-color: rgba(74, 222, 128, 0.44);
+      background: rgba(8, 78, 55, 0.34);
+      color: #baf7d2;
+    }
+
+    .reliability-command-row {
+      display: grid;
+      grid-template-columns: minmax(170px, 0.75fr) auto minmax(520px, 2fr);
+      align-items: center;
+      gap: 12px;
+    }
+
+    .reliability-command-row .optimization-current-scheme {
+      min-width: 0;
+    }
+
+    .reliability-command-row .optimization-status-grid {
+      grid-template-columns: repeat(6, minmax(82px, 1fr));
+    }
+
+    .reliability-command-row .status-tile {
+      display: grid;
+      gap: 2px;
+      align-content: center;
+      padding: 7px 8px;
+    }
+
+    .reliability-command-row .status-tile strong {
+      font-size: 16px;
+    }
+
+    .reliability-result-panel {
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .reliability-overview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .reliability-summary-card,
+    .reliability-chart-card,
+    .reliability-note-card {
+      min-width: 0;
+      padding: 14px;
+      border: 1px solid var(--hud-inner-line, rgba(20, 190, 255, 0.22));
+      border-radius: 8px;
+      background: var(--hud-inner-surface, rgba(4, 20, 48, 0.42));
+    }
+
+    .reliability-summary-card span {
+      display: block;
+      color: var(--hud-muted, #8fb3c9);
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .reliability-summary-card strong {
+      display: block;
+      margin-top: 8px;
+      color: var(--hud-cyan, #21d5ff);
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .reliability-summary-card small {
+      display: block;
+      margin-top: 7px;
+      color: var(--hud-muted, #8fb3c9);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .reliability-definition-strip {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border-left: 3px solid var(--hud-cyan, #21d5ff);
+      background: rgba(3, 43, 86, 0.32);
+      color: var(--hud-muted-strong, #bdeaff);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .reliability-table-panel {
+      max-height: none;
+    }
+
+    .reliability-table-panel table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .reliability-empty {
+      min-height: 170px;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      border: 1px dashed rgba(20, 190, 255, 0.28);
+      border-radius: 8px;
+      color: var(--hud-muted, #8fb3c9);
+      text-align: center;
+      line-height: 1.65;
+    }
+
+    .reliability-chart-grid {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .reliability-chart-card {
+      min-height: 330px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .reliability-chart-head h3 {
+      font-size: 16px;
+    }
+
+    .reliability-chart {
+      flex: 1 1 auto;
+      min-height: 250px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+
+    .reliability-chart svg {
+      width: 100%;
+      height: 100%;
+      min-height: 250px;
+      display: block;
+    }
+
+    .reliability-chart text {
+      fill: var(--hud-muted-strong, #bdeaff);
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      font-size: 11px;
+    }
+
+    .reliability-split-layout {
+      display: grid;
+      grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.1fr);
+      gap: 12px;
+    }
+
+    .reliability-note-card h3 {
+      margin: 0 0 10px;
+      color: var(--hud-text, #eef7ff);
+      font-size: 16px;
+    }
+
+    .reliability-note-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .reliability-note-list li {
+      padding: 9px 10px;
+      border-left: 2px solid rgba(33, 213, 255, 0.5);
+      background: rgba(3, 43, 86, 0.26);
+      color: var(--hud-muted-strong, #bdeaff);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .reliability-note-list strong {
+      color: var(--hud-cyan, #21d5ff);
+    }
+
+    .reliability-progress {
+      height: 5px;
+      margin-top: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(21, 211, 255, 0.12);
+    }
+
+    .reliability-progress > span {
+      width: 0;
+      height: 100%;
+      display: block;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #0f7cb9, #21d5ff);
+      box-shadow: 0 0 12px rgba(33, 213, 255, 0.75);
+      transition: width 0.2s ease;
+    }
+
+    @media (max-width: 1380px) {
+      .reliability-page .brand { font-size: 17px; }
+      .reliability-page .main-nav a { padding-inline: 7px; font-size: 13px; }
+      .reliability-workspace { grid-template-columns: 330px minmax(0, 1fr); }
+      .reliability-command-row { grid-template-columns: 1fr auto; }
+      .reliability-command-row .optimization-status-grid { grid-column: 1 / -1; }
+    }
+
+    @media (max-width: 1050px) {
+      .reliability-workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(280px, 42%) minmax(0, 1fr);
+        overflow: auto;
+      }
+      .reliability-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .reliability-chart-grid,
+      .reliability-split-layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body class="reliability-page">
+  <main class="planning-shell">
+    <header class="topbar">
+      <a class="brand" href="index.html">考察站风-光-氢-储-柴联合规划系统</a>
+      <nav class="main-nav" aria-label="主功能导航">
+        <a href="index.html">系统首页</a>
+        <a href="planning.html">参数维护</a>
+        <a href="optimize.html">规划求解</a>
+        <a href="evaluation.html">方案评估</a>
+        <a class="active" href="reliability.html">供电可靠性</a>
+        <a href="frequency.html">频率计算</a>
+        <a href="comparison.html">结果对比</a>
+        <a href="tasks.html">任务并发</a>
+      </nav>
+      <div class="user-status" data-auth-user hidden>
+        <span>当前用户:</span><strong data-auth-username></strong><em data-auth-role></em>
+        <button type="button" data-logout>退出</button>
+      </div>
+    </header>
+
+    <section class="reliability-workspace">
+      <aside class="reliability-settings" aria-label="供电可靠性评估参数">
+        <div class="reliability-panel-head">
+          <div>
+            <h1>供电可靠性评估</h1>
+            <p>N-1 压力测试与序贯蒙特卡洛联合校核</p>
+          </div>
+        </div>
+
+        <div id="reliabilityMessage" class="reliability-message" role="status" aria-live="polite" hidden></div>
+
+        <section class="reliability-parameter-section" aria-labelledby="selectionTitle">
+          <div class="reliability-section-head">
+            <div>
+              <h2 id="selectionTitle">方案与结果</h2>
+              <p>可靠性评估不改变原规划结果，仅对所选配置做独立风险校核。</p>
+            </div>
+          </div>
+          <div class="reliability-field-grid">
+            <label class="field-wide">方案
+              <select id="reliabilitySchemeSelect" aria-label="选择规划方案">
+                <option value="">正在读取方案…</option>
+              </select>
+            </label>
+            <label class="field-wide">规划结果
+              <select id="reliabilityResultSelect" aria-label="选择规划结果">
+                <option value="">默认/当前配置</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="reliability-parameter-section" aria-labelledby="simulationTitle">
+          <div class="reliability-section-head">
+            <div>
+              <h2 id="simulationTitle">试验设置</h2>
+              <p>确定性模式用于 N-1 边界，蒙特卡洛模式用于年度概率指标。</p>
+            </div>
+          </div>
+          <div class="reliability-field-grid">
+            <label class="field-wide">评估模式
+              <select id="reliabilityMode">
+                <option value="both">确定性 + 蒙特卡洛</option>
+                <option value="deterministic">仅确定性 N-1</option>
+                <option value="monte_carlo">仅序贯蒙特卡洛</option>
+              </select>
+            </label>
+            <label>模拟年数
+              <input id="reliabilitySimulationYears" type="number" min="1" max="10000" step="1" inputmode="numeric" value="1000">
+            </label>
+            <label>随机种子
+              <input id="reliabilityRandomSeed" type="number" min="0" max="2147483647" step="1" inputmode="numeric" value="20260712">
+            </label>
+            <label>关键负荷比例（%）
+              <input id="reliabilityCriticalLoadRatio" type="number" min="0" max="100" step="0.1" inputmode="decimal" value="60">
+            </label>
+            <label>备用持续时间（h）
+              <input id="reliabilityReserveDuration" type="number" min="0" max="720" step="0.5" inputmode="decimal" value="24">
+            </label>
+            <label class="field-wide">失效期调度策略
+              <select id="reliabilityDispatchPolicy">
+                <option value="reliability_first">可靠性优先：先保关键负荷</option>
+                <option value="renewable_first">新能源优先：减少弃风弃光</option>
+                <option value="economic">经济优先：减少柴油消耗</option>
+                <option value="proportional">比例供电：按负荷比例分配</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <div id="reliabilityAssumptionWarning" class="reliability-assumption-warning">
+          <strong>演示场景假设：</strong>当前 FOR、MTTR、极寒系数与成本参数为系统演示默认值，均不是厂商承诺值、采购报价或现场统计。正式决策前应替换为极地运行实测与供应商数据。
+        </div>
+
+        <section class="reliability-parameter-section" aria-labelledby="deviceReliabilityTitle">
+          <div class="reliability-section-head">
+            <div>
+              <h2 id="deviceReliabilityTitle">设备 FOR / MTTR</h2>
+              <p>按独立可故障单元填写；N-1 需要明确台数与单机容量。</p>
+            </div>
+          </div>
+          <div class="reliability-device-wrap">
+            <table class="reliability-device-table">
+              <thead>
+                <tr>
+                  <th>设备</th>
+                  <th>台数</th>
+                  <th>单机功率（kW）</th>
+                  <th>FOR（%）</th>
+                  <th>MTTR（h）</th>
+                  <th>极寒/系统可用系数（%）</th>
+                  <th>CAPEX（万元/单元）</th>
+                  <th>固定运维（%/年）</th>
+                  <th>设计寿命（年）</th>
+                  <th>启动失败率（%）</th>
+                  <th>变动运维（元/kWh）</th>
+                </tr>
+              </thead>
+              <tbody id="reliabilityDeviceRows"></tbody>
+            </table>
+          </div>
+          <p class="reliability-table-note">FOR 为强迫停运率，MTTR 为平均修复时间；储能行的台数和“单机功率”按 PCS 口径显示，PCS 与电池组可分别设置 FOR / MTTR，电池组台数、容量与 SOC 约束由规划结果独立读取。启动失败率和变动运维仅适用于柴发。表内成本均为场景假设、非采购报价。</p>
+        </section>
+
+        <div class="reliability-parameter-actions">
+          <button id="resetReliabilityParameters" class="secondary" type="button">恢复演示值</button>
+          <button id="saveReliabilityParameters" class="primary" type="button">保存参数</button>
+        </div>
+      </aside>
+
+      <section class="reliability-main">
+        <section class="optimization-command-card" aria-label="可靠性评估控制与指标">
+          <div class="reliability-command-row">
+            <div id="reliabilityCurrentSelection" class="optimization-current-scheme">当前：未选择方案</div>
+            <div class="optimization-actions" aria-label="可靠性评估操作">
+              <button id="startReliability" class="primary" type="button">启动</button>
+              <button id="queueReliability" class="queue-action" type="button">排队</button>
+              <button id="stopReliability" class="danger" type="button">停止</button>
+            </div>
+            <div class="optimization-status-grid" aria-label="可靠性评估总体指标">
+              <div class="status-tile"><span>状态</span><strong id="reliabilityStatus">待启动</strong></div>
+              <div class="status-tile"><span>EENS</span><strong id="reliabilityEens">-</strong></div>
+              <div class="status-tile"><span>LOLE</span><strong id="reliabilityLole">-</strong></div>
+              <div class="status-tile"><span>LOLP</span><strong id="reliabilityLolp">-</strong></div>
+              <div class="status-tile"><span>供电可靠率</span><strong id="reliabilitySupplyRate">-</strong></div>
+              <div class="status-tile"><span>N-1 通过率</span><strong id="reliabilityN1Rate">-</strong></div>
+            </div>
+          </div>
+          <div class="reliability-progress" aria-label="评估进度"><span id="reliabilityProgressBar"></span></div>
+        </section>
+
+        <section class="optimization-result-card">
+          <div class="result-tabs" role="tablist" aria-label="供电可靠性结果切换">
+            <button class="result-tab active" data-reliability-tab="overview" type="button" aria-selected="true">指标概览</button>
+            <button class="result-tab" data-reliability-tab="scenarios" type="button" aria-selected="false">N-1 场景</button>
+            <button class="result-tab" data-reliability-tab="distribution" type="button" aria-selected="false">年度分布与收敛</button>
+            <button class="result-tab" data-reliability-tab="worst" type="button" aria-selected="false">最差年曲线</button>
+            <button class="result-tab" data-reliability-tab="contribution" type="button" aria-selected="false">设备贡献与假设</button>
+            <button class="result-tab" data-reliability-tab="logs" type="button" aria-selected="false">运行日志</button>
+          </div>
+
+          <div id="reliabilityOverviewPanel" class="result-panel active reliability-result-panel" data-reliability-panel="overview" role="tabpanel">
+            <div class="reliability-definition-strip">
+              EENS 为年期望未供电量，LOLE 为年期望失负荷小时数，LOLP 为任一时刻发生失负荷的概率；供电可靠率按已供电量占需求电量计算。概率指标必须结合模拟年数与置信区间解释。
+            </div>
+            <div id="reliabilityOverview" class="reliability-overview-grid"></div>
+          </div>
+
+          <div id="reliabilityScenariosPanel" class="result-panel reliability-result-panel" data-reliability-panel="scenarios" role="tabpanel" hidden>
+            <div id="reliabilityScenarioTable" class="data-table reliability-table-panel"></div>
+          </div>
+
+          <div id="reliabilityDistributionPanel" class="result-panel reliability-result-panel" data-reliability-panel="distribution" role="tabpanel" hidden>
+            <div class="reliability-chart-grid">
+              <section class="reliability-chart-card">
+                <div class="reliability-chart-head">
+                  <div>
+                    <h3>年度 EENS 分布</h3>
+                    <p>观察平均值之外的长尾风险与 P95 年景。</p>
+                  </div>
+                </div>
+                <div id="reliabilityAnnualChart" class="reliability-chart"></div>
+              </section>
+              <section class="reliability-chart-card">
+                <div class="reliability-chart-head">
+                  <div>
+                    <h3>蒙特卡洛收敛</h3>
+                    <p>累计均值与置信区间随模拟年数的变化。</p>
+                  </div>
+                </div>
+                <div id="reliabilityConvergenceChart" class="reliability-chart"></div>
+              </section>
+            </div>
+          </div>
+
+          <div id="reliabilityWorstPanel" class="result-panel reliability-result-panel" data-reliability-panel="worst" role="tabpanel" hidden>
+            <section class="reliability-chart-card">
+              <div class="reliability-chart-head">
+                <div>
+                  <h3>最差模拟年供需与失负荷过程</h3>
+                  <p>共同低资源、设备停运与储能耗尽的时间关系比年度平均值更关键。</p>
+                </div>
+              </div>
+              <div id="reliabilityWorstYearChart" class="reliability-chart"></div>
+            </section>
+          </div>
+
+          <div id="reliabilityContributionPanel" class="result-panel reliability-result-panel" data-reliability-panel="contribution" role="tabpanel" hidden>
+            <div class="reliability-split-layout">
+              <section class="reliability-note-card">
+                <h3>设备故障贡献</h3>
+                <div id="reliabilityContributionTable" class="data-table reliability-table-panel"></div>
+              </section>
+              <section class="reliability-note-card">
+                <h3>假设与边界日志</h3>
+                <ul id="reliabilityAssumptionLog" class="reliability-note-list"></ul>
+              </section>
+            </div>
+          </div>
+
+          <div id="reliabilityLogsPanel" class="result-panel reliability-result-panel" data-reliability-panel="logs" role="tabpanel" hidden>
+            <div id="reliabilityLogs" class="optimization-logs" aria-live="polite"></div>
+          </div>
+        </section>
+      </section>
+    </section>
+  </main>
+  <script src="assets/i18n.js?v=20260518-fit-text4"></script>
+  <script src="assets/auth.js?v=20260510-auth"></script>
+  <script src="assets/page_state.js?v=20260530-page-state2"></script>
+  <script src="assets/reliability.js?v=20260712-reliability-1"></script>
+</body>
+</html>

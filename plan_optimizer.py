@@ -2371,12 +2371,10 @@ def dispatch_totals(dispatch_rows: list[dict[str, Any]]) -> dict[str, float]:
     totals["renewable_curtailed_rate"] = estimate.percent(totals["curtailed_energy"], totals["renewable_available_energy"])
     totals["diesel_consumption"] = sum(numeric(row.get("diesel_consumption"), 0.0) for row in dispatch_rows)
     totals["hydrogen_production"] = sum(numeric(row.get("hydrogen_production"), 0.0) for row in dispatch_rows)
-    totals["green_generation_energy"] = (
-        totals["wind_energy"]
-        + totals["pv_energy"]
-        + totals["storage_discharge_energy"]
-        + totals["fuel_cell_energy"]
-    )
+    # Green electricity is primary renewable generation only. Storage and
+    # hydrogen shift previously generated energy and must not be counted again
+    # as new green generation, otherwise the same wind/PV energy is duplicated.
+    totals["green_generation_energy"] = totals["wind_energy"] + totals["pv_energy"]
     totals["total_generation_energy"] = totals["green_generation_energy"] + totals["diesel_energy"]
     totals["green_power_ratio"] = estimate.green_power_ratio_from_diesel_load(
         totals["diesel_energy"],

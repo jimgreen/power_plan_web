@@ -600,6 +600,7 @@ function bindActions() {
   document.getElementById("createScheme").addEventListener("click", createScheme);
   document.getElementById("copyScheme").addEventListener("click", copyScheme);
   document.getElementById("renameScheme").addEventListener("click", renameScheme);
+  document.getElementById("shareScheme").addEventListener("click", shareScheme);
   document.getElementById("saveScheme").addEventListener("click", saveScheme);
   document.getElementById("deleteScheme").addEventListener("click", deleteScheme);
   document.getElementById("importTimeSeriesFile").addEventListener("click", importTimeSeriesFile);
@@ -1280,16 +1281,17 @@ async function api(path, options = {}) {
 
 async function loadSchemes() {
   state.schemes = (await api("/api/planning/schemes")).schemes;
-  renderSchemes();
   if (state.currentScheme && !state.schemes.some((scheme) => scheme.name === state.currentScheme)) {
     state.currentScheme = "";
   }
+  renderSchemes();
   if (state.currentScheme) {
     await selectScheme(state.currentScheme, { preserveMonth: true });
   } else if (state.schemes.length) {
     await selectScheme(state.schemes[0].name);
   } else {
     renderSummary();
+    syncSchemeActionState();
   }
 }
 
@@ -1324,14 +1326,20 @@ function renderSchemes() {
   const list = document.getElementById("schemeList");
   if (!state.schemes.length) {
     list.innerHTML = "<div class=\"validation-item\">暂无方案，请新建方案。</div>";
+    syncSchemeActionState();
+    scheduleSchemeRailLayout();
     return;
   }
   list.innerHTML = `<ul class="scheme-list-items" role="listbox">${state.schemes
-    .map((scheme) => `<li class="scheme-item ${scheme.name === state.currentScheme ? "active" : ""}" data-name="${escapeHtml(scheme.name)}" role="option" aria-selected="${scheme.name === state.currentScheme ? "true" : "false"}" tabindex="0">${escapeHtml(scheme.name)}</li>`)
+    .map((scheme) => {
+      const accessLabel = scheme.access_level === "shared" ? '<span class="scheme-access-label">共享</span>' : "";
+      return `<li class="scheme-item ${scheme.name === state.currentScheme ? "active" : ""}" data-name="${escapeHtml(scheme.name)}" role="option" aria-selected="${scheme.name === state.currentScheme ? "true" : "false"}" tabindex="0"><span class="scheme-item-content"><span class="scheme-item-name">${escapeHtml(scheme.name)}</span>${accessLabel}</span></li>`;
+    })
     .join("")}</ul>`;
   document.querySelectorAll(".scheme-item").forEach((item) => {
     bindSchemeListItem(item, () => selectSchemeWithSwitchFeedback(item.dataset.name).catch(showError));
   });
+  syncSchemeActionState();
   scheduleSchemeRailLayout();
 }
 
@@ -1406,7 +1414,12 @@ async function copyScheme() {
   const target = normalizeSchemeName(prompt("请输入复制后的方案名称", `${state.currentScheme}_副本`));
   if (!target) return;
   const payload = { source: state.currentScheme, target };
-  if (schemeNameExists(target)) {
+  const existingTarget = schemeItemByName(target);
+  if (existingTarget?.can_manage === false) {
+    alert("同名方案来自他人分享，不能覆盖，请换一个名称");
+    return;
+  }
+  if (existingTarget || schemeNameExists(target)) {
     const confirmed = confirm(`方案名称已存在：${target}\n是否覆盖？`);
     if (!confirmed) return;
     payload.overwrite = true;
@@ -1423,6 +1436,7 @@ async function copyScheme() {
 
 async function renameScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
+  if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能修改名称");
   const target = normalizeSchemeName(prompt("请输入新的方案名称", state.currentScheme));
   if (!target || target === state.currentScheme) return;
   if (schemeNameExists(target, state.currentScheme)) {
@@ -1439,8 +1453,35 @@ async function renameScheme() {
   await selectScheme(state.currentScheme);
 }
 
+async function shareScheme() {
+  if (!state.currentScheme) return alert("请先选择方案");
+  if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能继续分享");
+  const detail = await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}/shares`).catch(showError);
+  if (!detail) return;
+  const sharedUsers = Array.isArray(detail.shared_with_usernames) ? detail.shared_with_usernames : [];
+  const currentText = sharedUsers.length ? `当前已分享给：${sharedUsers.join("、")}` : "当前还没有分享给其他用户";
+  const input = prompt(`${currentText}\n请输入要分享的用户名；如果要取消分享，请输入 -用户名。`, "");
+  if (input === null) return;
+  const text = String(input || "").trim();
+  if (!text) return;
+  const unshare = text.startsWith("-");
+  const username = (unshare ? text.slice(1) : text).trim();
+  if (!username) {
+    alert("用户名不能为空");
+    return;
+  }
+  const result = await api(unshare ? "/api/planning/schemes/unshare" : "/api/planning/schemes/share", {
+    method: "POST",
+    body: JSON.stringify({ scheme: state.currentScheme, username }),
+  }).catch(showError);
+  if (!result) return;
+  await loadSchemes();
+  alert(unshare ? `已取消分享给 ${username}` : `已分享给 ${username}`);
+}
+
 async function saveScheme() {
   if (!state.currentScheme || !state.payload) return alert("请先选择方案");
+  if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能保存修改");
   try {
     syncPlanningParameterInputs();
     if (!isTimeSeriesLoaded()) {
@@ -1505,6 +1546,7 @@ function buildSchemeSavePayload() {
 
 async function deleteScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
+  if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能删除");
   const deletedIndex = state.schemes.findIndex((scheme) => scheme.name === state.currentScheme);
   if (!confirm(`确认删除方案“${state.currentScheme}”？删除后无法恢复。`)) return;
   const result = await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}`, { method: "DELETE" }).catch(showError);
@@ -4639,6 +4681,36 @@ function schemeNameExists(name, excludedName = "") {
   const cleanName = normalizeSchemeName(name);
   const cleanExcludedName = normalizeSchemeName(excludedName);
   return state.schemes.some((scheme) => normalizeSchemeName(scheme.name) === cleanName && normalizeSchemeName(scheme.name) !== cleanExcludedName);
+}
+
+function schemeItemByName(name) {
+  const cleanName = normalizeSchemeName(name);
+  return state.schemes.find((scheme) => normalizeSchemeName(scheme.name) === cleanName) || null;
+}
+
+function currentSchemeItem() {
+  return schemeItemByName(state.currentScheme);
+}
+
+function currentSchemeCanManage() {
+  const item = currentSchemeItem();
+  return Boolean(state.currentScheme && (!item || item.can_manage !== false));
+}
+
+function syncSchemeActionState() {
+  const hasScheme = Boolean(state.currentScheme);
+  const canManage = currentSchemeCanManage();
+  const states = {
+    copyScheme: !hasScheme,
+    deleteScheme: !hasScheme || !canManage,
+    renameScheme: !hasScheme || !canManage,
+    saveScheme: !hasScheme || !canManage,
+    shareScheme: !hasScheme || !canManage,
+  };
+  Object.entries(states).forEach(([id, disabled]) => {
+    const button = document.getElementById(id);
+    if (button) button.disabled = disabled;
+  });
 }
 
 function normalizePayload(payload) {

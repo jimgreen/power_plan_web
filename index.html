@@ -178,7 +178,7 @@
       width: min(1040px, calc(100vw - 220px));
       min-height: clamp(420px, 54vh, 540px);
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(8, minmax(0, 1fr));
       gap: clamp(16px, 1.35vw, 24px);
       padding: clamp(28px, 3.2vh, 42px) clamp(28px, 2.6vw, 46px);
       transform: translate(-50%, -35%);
@@ -222,6 +222,7 @@
 
     .feature-entry {
       position: relative;
+      grid-column: span 2;
       min-height: clamp(178px, 22vh, 228px);
       display: flex;
       flex-direction: column;
@@ -241,6 +242,10 @@
         0 20px 54px rgba(0, 8, 28, 0.38);
       backdrop-filter: blur(3px);
       transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    .feature-entry:nth-child(5) {
+      grid-column: 2 / span 2;
     }
 
     .feature-entry::before,
@@ -1146,8 +1151,13 @@
       }
 
       .feature-entry {
+        grid-column: auto;
         min-height: 132px;
         padding: 16px;
+      }
+
+      .feature-entry:nth-child(5) {
+        grid-column: auto;
       }
 
       .energy-side {
@@ -1338,6 +1348,17 @@
           </svg>
         </i>
         <strong>方案评估</strong>
+      </a>
+      <a class="feature-entry" href="reliability.html">
+        <i class="feature-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64">
+            <path d="M32 7l20 8v14c0 13-8 23-20 28C20 52 12 42 12 29V15z"></path>
+            <path d="M19 33h7l4-11 6 21 4-10h6"></path>
+            <circle cx="46" cy="18" r="7"></circle>
+            <path d="M42 18l3 3 5-6"></path>
+          </svg>
+        </i>
+        <strong>供电可靠性</strong>
       </a>
       <a class="feature-entry" href="frequency.html">
         <i class="feature-icon" aria-hidden="true">

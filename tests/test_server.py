@@ -1,5 +1,6 @@
 import ast
 import json
+import queue
 import re
 import shutil
 import sys
@@ -3682,6 +3683,260 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
         self.assertEqual(json.loads(body.decode("utf-8"))["error"], "not_found")
 
+    def test_reliability_parameters_api_uses_result_counts_and_preserves_traceability_fields(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_reliability_parameters"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.RELIABILITY_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.RELIABILITY_RUNTIME = server.ReliabilityRuntimeManager()
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            payload["time_series"] = payload["time_series"][:24]
+            payload["wind_turbines"][0].update({"capacity": 100, "quantity_lower": 0, "quantity_upper": 8, "cost": 120})
+            payload["photovoltaics"][0].update({"capacity": 50, "quantity_lower": 0, "quantity_upper": 10, "cost": 22.5})
+            payload["storage_pcs"][0].update({"power_capacity": 100, "quantity_lower": 0, "quantity_upper": 10, "cost": 70})
+            payload["storage_battery_packs"][0].update(
+                {"battery_capacity": 200, "quantity_lower": 0, "quantity_upper": 10, "cost": 300}
+            )
+            payload["diesel_generators"][0].update(
+                {"capacity": 100, "power_upper": 100, "quantity_lower": 0, "quantity_upper": 5, "cost": 30}
+            )
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+
+            source_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = server.PLANNING_RESULT_SHEET_NAME
+            sheet.append(server.PLANNING_RESULT_HEADERS)
+            sheet.append(["柴发", 3, 100, 300, "kW"])
+            sheet.append(["风机", 2, 100, 200, "kW"])
+            sheet.append(["光伏", 4, 50, 200, "kW"])
+            sheet.append(["储能PCS", 3, 100, 300, "kW"])
+            sheet.append(["储能电池组", 5, 200, 1000, "kWh"])
+            workbook.save(source_path)
+            workbook.close()
+
+            status, headers, body = server.handle_api_path(
+                "/api/reliability/parameters?scheme=方案A&filename=case_results.xlsx"
+            )
+            self.assertEqual(status, 200)
+            initial = json.loads(body.decode("utf-8"))
+            initial_by_type = {row["device_type"]: row for row in initial["parameters"]["devices"]}
+            self.assertEqual(initial_by_type["diesel"]["unit_count"], 3)
+            self.assertEqual(initial_by_type["wind"]["unit_count"], 2)
+            self.assertEqual(initial_by_type["pv"]["unit_count"], 4)
+            self.assertEqual(initial_by_type["storage"]["unit_count"], 3)
+            self.assertEqual(initial_by_type["storage"]["unit_capacity_kwh"], 200)
+            self.assertEqual(initial_by_type["storage"]["battery_forced_outage_rate"], 0.02)
+            self.assertEqual(initial_by_type["storage"]["battery_mttr_hours"], 96)
+            self.assertTrue(any("工作簿" in message for message in initial["assumption_warnings"]))
+
+            parameters = initial["parameters"]
+            parameters["simulation_years"] = 123
+            parameters["devices"][0].update(
+                {
+                    "unit_count": 99,
+                    "extreme_cold_capacity_factor": 0.63,
+                    "capex_wan_per_unit": 188.5,
+                    "fixed_om_rate": 0.031,
+                    "design_life_years": 25,
+                    "vendor_batch": "demo-wind-batch",
+                }
+            )
+            diesel = next(row for row in parameters["devices"] if row["device_type"] == "diesel")
+            diesel.update({"startup_failure_rate": 0.015, "variable_om_yuan_per_kwh": 0.21})
+            storage = next(row for row in parameters["devices"] if row["device_type"] == "storage")
+            storage.update({"forced_outage_rate": 0.035, "mttr_hours": 72, "battery_forced_outage_rate": 0.02, "battery_mttr_hours": 96})
+            status, headers, body = server.handle_reliability_api_path(
+                "/api/reliability/parameters",
+                "PUT",
+                json.dumps(
+                    {
+                        "scheme": "方案A",
+                        "filename": "case_results.xlsx",
+                        "parameters": parameters,
+                    },
+                    ensure_ascii=False,
+                ).encode("utf-8"),
+            )
+            self.assertEqual(status, 200)
+            saved = json.loads(body.decode("utf-8"))["parameters"]
+            saved_by_type = {row["device_type"]: row for row in saved["devices"]}
+            self.assertEqual(saved_by_type["wind"]["unit_count"], 2)
+            self.assertEqual(saved_by_type["wind"]["vendor_batch"], "demo-wind-batch")
+            self.assertEqual(saved_by_type["wind"]["extreme_cold_capacity_factor"], 0.63)
+            self.assertEqual(saved_by_type["diesel"]["startup_failure_rate"], 0.015)
+            self.assertEqual(saved_by_type["diesel"]["variable_om_yuan_per_kwh"], 0.21)
+            prepared = server.prepare_reliability_scheme_payload(payload, saved, has_planning_result=True)
+            self.assertEqual(prepared["storage_pcs"][0]["forced_outage_rate"], 0.035)
+            self.assertEqual(prepared["storage_pcs"][0]["mttr_hours"], 72)
+            self.assertEqual(prepared["storage_battery_packs"][0]["forced_outage_rate"], 0.02)
+            self.assertEqual(prepared["storage_battery_packs"][0]["mttr_hours"], 96)
+            planning_rows = server.read_evaluation_planning_result_rows("方案A", "case_results.xlsx")
+            case = server.reliability.build_reliability_case(prepared, planning_rows, {"hours_per_year": 24})
+            group_by_type = {group["device_type"]: group for group in case["groups"]}
+            self.assertEqual(group_by_type["pcs"]["unit_count"], 3)
+            self.assertEqual(group_by_type["battery"]["unit_count"], 5)
+            parameter_path = planning_root / "方案A" / server.RELIABILITY_PARAMETERS_FILE_NAME
+            self.assertTrue(parameter_path.exists())
+            stored = json.loads(parameter_path.read_text(encoding="utf-8"))
+            self.assertEqual(stored["simulation_years"], 123)
+
+            export_path = planning_root / "方案A" / f"case_results{server.RELIABILITY_RESULT_WORKBOOK_SUFFIX}"
+            export_book = Workbook()
+            export_book.save(export_path)
+            export_book.close()
+            listed_names = [item["name"] for item in server.list_evaluation_result_files("方案A")]
+            self.assertEqual(listed_names, ["case_results.xlsx"])
+        finally:
+            server.PLANNING_STORE = original_store
+            server.RELIABILITY_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
+    def test_reliability_control_runs_in_background_and_writes_independent_json_and_xlsx(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_reliability_control"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        original_store = server.PLANNING_STORE
+        original_runtime = server.RELIABILITY_RUNTIME
+        server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
+        server.RELIABILITY_RUNTIME = server.ReliabilityRuntimeManager()
+
+        class InlineProcess:
+            next_pid = 70000
+
+            def __init__(self, target, args=(), daemon=None):
+                self.target = target
+                self.args = args
+                self.daemon = daemon
+                self.pid = None
+                self.exitcode = None
+                self._alive = False
+
+            def start(self):
+                type(self).next_pid += 1
+                self.pid = type(self).next_pid
+                self._alive = True
+                try:
+                    self.target(*self.args)
+                    self.exitcode = 0
+                finally:
+                    self._alive = False
+
+            def is_alive(self):
+                return self._alive
+
+            def join(self, timeout=None):
+                return None
+
+            def terminate(self):
+                self._alive = False
+                self.exitcode = -15
+
+            def kill(self):
+                self.terminate()
+
+        try:
+            payload = server.planning_store.default_payload("方案A")
+            payload["time_series"] = payload["time_series"][:24]
+            for hour, row in enumerate(payload["time_series"]):
+                row.update({"wind_speed": 0, "solar_irradiance": 0, "load": 80, "temperature": -30})
+            payload["diesel_generators"][0].update(
+                {
+                    "capacity": 100,
+                    "power_upper": 100,
+                    "power_lower": 0,
+                    "quantity_lower": 2,
+                    "quantity_upper": 2,
+                }
+            )
+            for key in ("wind_turbines", "photovoltaics", "storage_pcs", "storage_battery_packs"):
+                payload[key][0]["quantity_lower"] = 0
+                payload[key][0]["quantity_upper"] = 0
+            server.PLANNING_STORE.write_scheme("方案A", payload)
+
+            source_path = planning_root / "方案A" / "case_results.xlsx"
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = server.PLANNING_RESULT_SHEET_NAME
+            sheet.append(server.PLANNING_RESULT_HEADERS)
+            sheet.append(["柴发", 2, 100, 200, "kW"])
+            workbook.save(source_path)
+            workbook.close()
+            source_bytes = source_path.read_bytes()
+
+            parameters, _, _ = server.read_reliability_parameters("方案A", "case_results.xlsx")
+            parameters["simulation_years"] = 2
+            parameters["random_seed"] = 42
+            diesel = next(row for row in parameters["devices"] if row["device_type"] == "diesel")
+            diesel.update({"forced_outage_rate": 0.05, "mttr_hours": 12})
+
+            with patch.object(server.multiprocessing, "Queue", queue.Queue), patch.object(
+                server.multiprocessing,
+                "Process",
+                InlineProcess,
+            ):
+                status, headers, body = server.handle_control_path(
+                    "/api/reliability/control",
+                    json.dumps(
+                        {
+                            "action": "start",
+                            "scheme": "方案A",
+                            "filename": "case_results.xlsx",
+                            "parameters": parameters,
+                        },
+                        ensure_ascii=False,
+                    ).encode("utf-8"),
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body.decode("utf-8"))["state"]["status"], "running")
+
+                status, headers, body = server.handle_api_path(
+                    "/api/reliability/status?scheme=方案A&filename=case_results.xlsx"
+                )
+                self.assertEqual(status, 200)
+                completed = json.loads(body.decode("utf-8"))
+                self.assertEqual(completed["status"], "completed")
+                self.assertEqual(completed["progress"], 100)
+                self.assertIsInstance(completed["result"], dict)
+                self.assertIn("metrics", completed["result"])
+                self.assertEqual(completed["result"]["parameters"]["simulation_years"], 2)
+
+            json_path = planning_root / "方案A" / "case_results_reliability.json"
+            xlsx_path = planning_root / "方案A" / "case_results_reliability_results.xlsx"
+            self.assertTrue(json_path.exists())
+            self.assertTrue(xlsx_path.exists())
+            self.assertEqual(source_path.read_bytes(), source_bytes)
+            reliability_payload = json.loads(json_path.read_text(encoding="utf-8"))
+            self.assertEqual(reliability_payload["source_result_filename"], "case_results.xlsx")
+            self.assertIn("annual_distribution", reliability_payload)
+            self.assertIn("n1_scenarios", reliability_payload)
+
+            export_book = load_workbook(xlsx_path, read_only=True, data_only=True)
+            try:
+                self.assertEqual(
+                    export_book.sheetnames,
+                    ["摘要", "N-1场景", "年度样本", "设备贡献", "假设与日志"],
+                )
+            finally:
+                export_book.close()
+
+            status, headers, body = server.handle_api_path(
+                "/api/reliability/results?scheme=方案A&filename=case_results.xlsx"
+            )
+            self.assertEqual(status, 200)
+            result_index = json.loads(body.decode("utf-8"))
+            self.assertEqual([item["name"] for item in result_index["results"]], ["case_results.xlsx"])
+            self.assertEqual(result_index["result_file"], "case_results_reliability.json")
+            self.assertEqual(result_index["export_file"], "case_results_reliability_results.xlsx")
+            self.assertIsInstance(result_index["result"], dict)
+        finally:
+            server.PLANNING_STORE = original_store
+            server.RELIABILITY_RUNTIME = original_runtime
+            shutil.rmtree(planning_root, ignore_errors=True)
+
     def test_planning_api_create_read_save_copy_rename(self):
         planning_root = WEB_ROOT / "tests" / "tmp_planning_api"
         shutil.rmtree(planning_root, ignore_errors=True)
@@ -6334,7 +6589,7 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn("方案管理", rail)
         self.assertIn("方案列表", rail)
         self.assertIn('id="schemeList"', rail)
-        for control in ("createScheme", "deleteScheme", "renameScheme", "copyScheme"):
+        for control in ("createScheme", "deleteScheme", "renameScheme", "copyScheme", "shareScheme"):
             self.assertIn(f'id="{control}"', rail)
         self.assertLess(rail.index('id="createScheme"'), rail.index("方案列表"))
         self.assertLess(rail.index('id="deleteScheme"'), rail.index("方案列表"))
@@ -6342,11 +6597,15 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(rail.index('id="deleteScheme"'), rail.index('id="schemeList"'))
         self.assertLess(rail.index('id="schemeList"'), rail.index('id="renameScheme"'))
         self.assertLess(rail.index('id="schemeList"'), rail.index('id="copyScheme"'))
+        self.assertLess(rail.index('id="schemeList"'), rail.index('id="shareScheme"'))
         self.assertIn(".planning-scheme-rail-layout", css)
         self.assertIn("--planning-scheme-rail-height", css)
         planning_script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
         self.assertIn("applyAdaptiveSchemeRailLayout", planning_script)
         self.assertIn("scheduleSchemeRailLayout", planning_script)
+        self.assertIn("function shareScheme()", planning_script)
+        self.assertIn('document.getElementById("shareScheme").addEventListener("click", shareScheme)', planning_script)
+        self.assertIn("currentSchemeCanManage", planning_script)
         self.assertIn("const workspaceContentHeight", planning_script)
         self.assertIn("summaryMinimumHeight = Math.max(280", planning_script)
         self.assertIn("workspaceContentHeight - rowGap * 2 - handleHeight - summaryMinimumHeight", planning_script)
@@ -6366,6 +6625,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertIn("overflow: auto", css.split(".scheme-rail.scheme-list-capped .scheme-list {", 1)[1].split("}", 1)[0])
         self.assertIn(".scheme-actions-rail", css)
         self.assertIn("grid-template-columns: repeat(2, minmax(0, 1fr))", css)
+        self.assertIn(".scheme-actions-rail-bottom", css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", css)
+        self.assertIn(".scheme-access-label", css)
         self.assertIn(".scheme-list-title", css)
         self.assertIn("color: #102b2a", css)
         self.assertIn("font-size: 18px", css)
@@ -6388,9 +6650,11 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertNotIn('id="renameScheme"', editor_header)
         self.assertNotIn('id="copyScheme"', editor_header)
         self.assertNotIn('id="deleteScheme"', editor_header)
+        self.assertNotIn('id="shareScheme"', editor_header)
         self.assertIn('id="renameScheme"', rail)
         self.assertIn('id="copyScheme"', rail)
         self.assertIn('id="deleteScheme"', rail)
+        self.assertIn('id="shareScheme"', rail)
         self.assertIn(">修改名称<", rail)
         self.assertNotIn("修改方案名称", editor_header)
         self.assertNotIn("修改方案名", editor_header)

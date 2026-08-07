@@ -531,6 +531,21 @@ def sanitize_payload_names(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def normalize_shared_usernames(usernames: Any) -> list[str]:
+    if isinstance(usernames, str):
+        candidates = [usernames]
+    elif isinstance(usernames, list):
+        candidates = usernames
+    else:
+        candidates = []
+    result: list[str] = []
+    for item in candidates:
+        username = str(item or "").strip()
+        if username and username not in result:
+            result.append(username)
+    return result
+
+
 @dataclass
 class PlanningStore:
     root: Path = DEFAULT_SCHEME_ROOT
@@ -576,6 +591,16 @@ class PlanningStore:
     def scheme_owner_username(self, name: str) -> str:
         return str(self.read_scheme_meta(name).get("owner_username") or "").strip()
 
+    def scheme_shared_usernames(self, name: str) -> list[str]:
+        return normalize_shared_usernames(self.read_scheme_meta(name).get("shared_with_usernames"))
+
+    def user_can_read_scheme(self, name: str, username: str) -> bool:
+        clean_username = str(username or "").strip()
+        if not clean_username:
+            return False
+        owner = self.scheme_owner_username(name)
+        return owner == clean_username or clean_username in self.scheme_shared_usernames(name)
+
     def build_scheme_meta(self, owner_username: str) -> dict[str, Any]:
         owner = str(owner_username or "").strip()
         now = datetime.now().isoformat(timespec="seconds")
@@ -584,10 +609,16 @@ class PlanningStore:
             "created_by": owner,
             "created_at": now,
             "updated_at": now,
+            "shared_with_usernames": [],
         }
 
-    def list_schemes(self, owner_username: str | None = None) -> list[dict[str, Any]]:
+    def list_schemes(
+        self,
+        owner_username: str | None = None,
+        visible_username: str | None = None,
+    ) -> list[dict[str, Any]]:
         owner_filter = None if owner_username is None else str(owner_username or "").strip()
+        visible_filter = None if visible_username is None else str(visible_username or "").strip()
         schemes: list[dict[str, Any]] = []
         for folder in sorted(self.root.iterdir(), key=lambda item: item.name):
             if not folder.is_dir():
@@ -596,7 +627,10 @@ class PlanningStore:
             time_series_workbook = folder / TIME_SERIES_WORKBOOK_NAME
             meta = self.read_scheme_meta(folder.name)
             owner = str(meta.get("owner_username") or "").strip()
+            shared_with = normalize_shared_usernames(meta.get("shared_with_usernames"))
             if owner_filter is not None and owner != owner_filter:
+                continue
+            if visible_filter is not None and owner != visible_filter and visible_filter not in shared_with:
                 continue
             modified_at = None
             if workbook.exists():
@@ -612,6 +646,7 @@ class PlanningStore:
                     "owner_username": owner,
                     "created_by": str(meta.get("created_by") or "").strip(),
                     "created_at": str(meta.get("created_at") or "").strip(),
+                    "shared_with_usernames": shared_with,
                 }
             )
         return schemes
@@ -646,6 +681,41 @@ class PlanningStore:
         if owner_username is not None:
             self.write_scheme_meta(target, self.build_scheme_meta(owner_username))
         return self.read_scheme(target)
+
+    def share_scheme(self, name: str, username: str) -> dict[str, Any]:
+        clean = validate_scheme_name(name)
+        folder = self.scheme_dir(clean)
+        if not folder.exists() or not folder.is_dir():
+            raise FileNotFoundError(f"方案不存在: {clean}")
+        target_username = str(username or "").strip()
+        if not target_username:
+            raise ValueError("分享用户名不能为空")
+        meta = self.read_scheme_meta(clean)
+        owner = str(meta.get("owner_username") or "").strip()
+        if owner and target_username == owner:
+            raise ValueError("不能将方案分享给创建者自己")
+        shared_with = normalize_shared_usernames(meta.get("shared_with_usernames"))
+        if target_username not in shared_with:
+            shared_with.append(target_username)
+        meta["shared_with_usernames"] = shared_with
+        meta["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        self.write_scheme_meta(clean, meta)
+        return self.read_scheme_meta(clean)
+
+    def unshare_scheme(self, name: str, username: str) -> dict[str, Any]:
+        clean = validate_scheme_name(name)
+        folder = self.scheme_dir(clean)
+        if not folder.exists() or not folder.is_dir():
+            raise FileNotFoundError(f"方案不存在: {clean}")
+        target_username = str(username or "").strip()
+        if not target_username:
+            raise ValueError("取消分享用户名不能为空")
+        meta = self.read_scheme_meta(clean)
+        shared_with = [item for item in normalize_shared_usernames(meta.get("shared_with_usernames")) if item != target_username]
+        meta["shared_with_usernames"] = shared_with
+        meta["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        self.write_scheme_meta(clean, meta)
+        return self.read_scheme_meta(clean)
 
     def rename_scheme(self, source: str, target: str) -> dict[str, Any]:
         source_dir = self.scheme_dir(source)

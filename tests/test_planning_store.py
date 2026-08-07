@@ -115,6 +115,26 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(self.store.scheme_owner_username("方案A"), "alice")
         self.assertEqual(self.store.scheme_owner_username("历史方案"), "")
 
+    def test_scheme_sharing_tracks_visible_users_without_changing_owner(self):
+        self.store.create_scheme("方案A", owner_username="alice")
+        self.store.create_scheme("方案B", owner_username="bob")
+
+        self.store.share_scheme("方案A", "bob")
+        self.store.share_scheme("方案A", "bob")
+
+        bob_visible = [item["name"] for item in self.store.list_schemes(visible_username="bob")]
+        bob_owned = [item["name"] for item in self.store.list_schemes(owner_username="bob")]
+        self.assertEqual(bob_visible, ["方案A", "方案B"])
+        self.assertEqual(bob_owned, ["方案B"])
+        self.assertEqual(self.store.scheme_owner_username("方案A"), "alice")
+        self.assertEqual(self.store.scheme_shared_usernames("方案A"), ["bob"])
+        self.assertTrue(self.store.user_can_read_scheme("方案A", "bob"))
+
+        self.store.unshare_scheme("方案A", "bob")
+
+        self.assertEqual([item["name"] for item in self.store.list_schemes(visible_username="bob")], ["方案B"])
+        self.assertFalse(self.store.user_can_read_scheme("方案A", "bob"))
+
     def test_copy_scheme_can_assign_new_owner(self):
         self.store.create_scheme("方案A", owner_username="alice")
 

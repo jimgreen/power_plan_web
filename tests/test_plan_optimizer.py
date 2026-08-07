@@ -256,6 +256,36 @@ class PlanOptimizerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "功率平衡约束要求无切负荷"):
             plan_optimizer.validate_no_unmet_load_solution(model, np.array([0.0, 0.001]))
 
+    def test_dispatch_totals_green_energy_excludes_storage_and_fuel_cell_double_counting(self):
+        rows = [
+            {
+                "load": 100,
+                "wind_power": 30,
+                "pv_power": 20,
+                "storage_discharge": 15,
+                "storage_charge": 0,
+                "diesel_power": 35,
+                "fuel_cell_power": 10,
+                "curtailed_power": 0,
+                "unmet_load": 0,
+                "hydrogen_production_power": 0,
+                "wind_available": 30,
+                "pv_available": 20,
+                "renewable_available": 50,
+                "wind_curtailed_power": 0,
+                "pv_curtailed_power": 0,
+                "hydrogen_storage": 0,
+                "diesel_consumption": 0,
+                "hydrogen_production": 0,
+            }
+        ]
+
+        totals = plan_optimizer.dispatch_totals(rows)
+
+        self.assertEqual(totals["green_generation_energy"], 50)
+        self.assertEqual(totals["total_generation_energy"], 85)
+        self.assertAlmostEqual(totals["green_power_ratio"], 65.0, places=4)
+
     def test_security_curve_fields_use_grid_forming_storage_formula(self):
         fields = plan_optimizer.dispatch_security_curve_fields(
             {
