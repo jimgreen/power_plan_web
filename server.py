@@ -2193,6 +2193,125 @@ EVALUATION_REPORT_DEVICE_SECTIONS = [
     ("hydrogen_tanks", "储氢罐类型数"),
     ("fuel_cells", "燃料电池类型数"),
 ]
+EVALUATION_REPORT_INPUT_TABLE_KEYS = [
+    "diesel_generators",
+    "wind_turbines",
+    "photovoltaics",
+    "storage_pcs",
+    "storage_battery_packs",
+    "hydrogen_electrolyzers",
+    "hydrogen_tanks",
+    "fuel_cells",
+]
+EVALUATION_REPORT_INPUT_FIELD_LABELS = {
+    "hour_index": "小时",
+    "datetime": "时间",
+    "wind_speed": "风速(m/s)",
+    "solar_irradiance": "太阳辐射(W/m²)",
+    "load": "负荷(kW)",
+    "temperature": "环境温度(℃)",
+    "name": "名称",
+    "cost": "成本(万元/台)",
+    "capacity": "容量(kW)",
+    "power_capacity": "容量(kW)",
+    "power_upper": "功率上限(kW)",
+    "power_lower": "功率下限(kW)",
+    "fuel_rate": "油耗率(kg/kWh)",
+    "inertia_constant_h": "惯量常数H(s)",
+    "primary_frequency_coefficient_k": "一次调频系数K",
+    "damping_coefficient_d": "阻尼系数D",
+    "governor_time_constant_t": "调速时间常数T(s)",
+    "cut_in_wind_speed": "切入风速(m/s)",
+    "rated_wind_speed": "额定风速(m/s)",
+    "cut_out_wind_speed": "切出风速(m/s)",
+    "is_grid_forming": "是否构网",
+    "storage_charge_efficiency": "充电效率",
+    "storage_discharge_efficiency": "放电效率",
+    "storage_equivalent_inertia_constant_h": "等效惯量常数H(s)",
+    "storage_equivalent_primary_frequency_coefficient_k": "等效一次调频系数K",
+    "storage_equivalent_damping_coefficient_d": "等效阻尼系数D",
+    "battery_capacity": "容量(kWh)",
+    "soc_upper": "SOC上限",
+    "soc_lower": "SOC下限",
+    "self_discharge_rate": "自损耗率",
+    "hydrogen_tank_capacity": "容量(Nm³)",
+    "electric_to_hydrogen_efficiency": "电-氢效率(Nm³/kWh)",
+    "hydrogen_to_electric_efficiency": "氢-电效率(kWh/Nm³)",
+    "quantity_lower": "数量下限(台)",
+    "quantity_upper": "数量上限(台)",
+    "design_life_years": "设计年限(年)",
+    "diesel_price": "柴油价格(万元/吨)",
+    "diesel_minimum_on_hours": "柴发开机持续工作小时数下限",
+    "diesel_minimum_off_hours": "柴发关机持续工作小时数下限",
+    "green_power_ratio_lower": "绿色电量占比下限",
+    "optimization_time_limit_minutes": "规划求解时间上限(分钟)",
+    "preferred_solver": "优先求解器",
+    "initial_storage_soc_ratio": "初始电储SOC",
+    "storage_balance_mode": "电储能平衡模式",
+    "initial_hydrogen_storage_ratio": "初始氢储SOC",
+    "post_disturbance_power_balance_enabled": "是否考虑扰动后平衡约束",
+    "renewable_n_1_enabled": "是否考虑新能源N-1",
+    "renewable_disturbance_enabled": "是否考虑新能源扰动",
+    "load_disturbance_enabled": "是否考虑负荷扰动",
+    "load_up_disturbance_factor": "负荷向上扰动系数",
+    "load_down_disturbance_factor": "负荷向下扰动系数",
+    "renewable_down_disturbance_factor": "新能源向下扰动系数",
+    "frequency_security_constraint_enabled": "是否考虑频率安全约束",
+    "nominal_frequency_hz": "额定频率(Hz)",
+    "frequency_nadir_lower_hz": "频率最低点下限(Hz)",
+    "frequency_peak_upper_hz": "频率最高点上限(Hz)",
+    "frequency_lower_security_margin_hz": "频率下限安全裕度(Hz)",
+    "frequency_upper_security_margin_hz": "频率上限安全裕度(Hz)",
+    "load_frequency_coefficient_d": "负荷频率系数D",
+    "rocof_upper_hz_per_s": "RoCoF上限(Hz/s)",
+    "steady_state_frequency_lower_hz": "稳态频率下限(Hz)",
+    "steady_state_frequency_upper_hz": "稳态频率上限(Hz)",
+    "frequency_governor_time_constant_s": "频率等效调速时间常数T(s)",
+    "frequency_nadir_evaluation_duration_s": "频率Nadir评估时长(s)",
+    "nadir_linearization_samples_per_axis": "Nadir线性化每轴采样点数",
+    "nadir_linearization_interval_ratio": "Nadir线性化区间比例",
+    "network_synchronization_coefficient_base": "网络同步系数基值",
+    "network_synchronization_coefficient_slope": "网络同步系数斜率",
+    "network_synchronization_reference_load_kw": "网络同步系数基准负荷(kW)",
+    "storage_frequency_regulation_enabled": "储能是否参与调频",
+}
+EVALUATION_REPORT_BOOLEAN_FIELDS = {
+    "is_grid_forming",
+    "post_disturbance_power_balance_enabled",
+    "renewable_n_1_enabled",
+    "renewable_disturbance_enabled",
+    "load_disturbance_enabled",
+    "frequency_security_constraint_enabled",
+    "storage_frequency_regulation_enabled",
+}
+EVALUATION_REPORT_VALUE_LABELS = {
+    "preferred_solver": {
+        "auto": "自动选择",
+        "gurobi": "Gurobi",
+        "cplex": "CPLEX",
+        "mosek": "原生MOSEK",
+        "scipy": "SciPy HiGHS",
+    },
+    "storage_balance_mode": {
+        "daily": "日内平衡",
+        "weekly": "周内平衡",
+        "monthly": "月度平衡",
+        "annual": "年度平衡",
+        "none": "不闭环",
+    },
+}
+EVALUATION_REPORT_TIME_SERIES_SUMMARY_SPECS = [
+    ("load", "负荷", "kW"),
+    ("wind_speed", "风速", "m/s"),
+    ("solar_irradiance", "太阳辐射", "W/m²"),
+    ("temperature", "环境温度", "℃"),
+]
+EVALUATION_REPORT_INPUT_LOAD_SERIES = [("load_daily_energy", "负荷电量")]
+EVALUATION_REPORT_INPUT_WEATHER_SERIES = [
+    ("wind_speed_avg", "风速均值"),
+    ("temperature_avg", "环境温度均值"),
+]
+EVALUATION_REPORT_INPUT_SOLAR_SERIES = [("solar_irradiance_avg", "太阳辐射均值")]
 EVALUATION_REPORT_GREEN_SERIES = [
     ("load_energy", "负荷"),
     ("diesel_energy", "柴发"),
@@ -2222,7 +2341,8 @@ def build_evaluation_report_docx(scheme: str, filename: str) -> bytes:
         raise FileNotFoundError(f"结果文件不存在: {result_path.name}")
 
     payload = read_result_workbook_display_payload(result_path, include_hourly_curves=False)
-    overview = read_evaluation_report_scheme_overview(clean_scheme)
+    scheme_payload = read_evaluation_report_scheme_payload(clean_scheme)
+    overview = scheme_payload or read_evaluation_report_scheme_overview(clean_scheme)
     meta = PLANNING_STORE.read_scheme_meta(clean_scheme)
     results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
 
@@ -2241,6 +2361,8 @@ def build_evaluation_report_docx(scheme: str, filename: str) -> bytes:
         document,
         evaluation_report_basic_rows(clean_scheme, selected, result_path, overview, meta),
     )
+
+    report_add_input_data_section(document, scheme_payload)
 
     document.add_heading("关键指标", level=1)
     metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
@@ -2315,6 +2437,13 @@ def resolve_evaluation_report_result_filename(scheme: str, filename: str = "") -
     return selected
 
 
+def read_evaluation_report_scheme_payload(scheme: str) -> dict:
+    try:
+        return PLANNING_STORE.read_scheme(scheme)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
 def read_evaluation_report_scheme_overview(scheme: str) -> dict:
     try:
         return PLANNING_STORE.read_scheme_overview(scheme)
@@ -2347,6 +2476,149 @@ def evaluation_report_basic_rows(
     return rows
 
 
+def report_add_input_data_section(document, scheme_payload: dict) -> None:
+    document.add_heading("输入数据", level=1)
+    if not isinstance(scheme_payload, dict) or not scheme_payload:
+        document.add_paragraph("方案输入数据无法读取。")
+        return
+
+    report_add_planning_parameter_table(document, scheme_payload)
+    for key in EVALUATION_REPORT_INPUT_TABLE_KEYS:
+        rows = scheme_payload.get(key)
+        if not isinstance(rows, list) or not rows:
+            continue
+        sheet_name, headers = planning_store.SHEET_SPECS[key]
+        document.add_heading(sheet_name, level=2)
+        report_add_rows_table(
+            document,
+            rows,
+            headers=headers,
+            header_labels=EVALUATION_REPORT_INPUT_FIELD_LABELS,
+            value_formatter=report_input_display_value,
+            max_rows=80,
+        )
+
+    time_series_rows = scheme_payload.get("time_series")
+    if not isinstance(time_series_rows, list) or not time_series_rows:
+        document.add_heading("8760时序数据", level=2)
+        document.add_paragraph("暂无时序输入数据。")
+        return
+
+    document.add_heading("8760时序数据摘要", level=2)
+    report_add_rows_table(
+        document,
+        report_time_series_summary_rows(time_series_rows),
+        headers=["曲线", "点数", "最小值", "最大值", "平均值", "单位"],
+    )
+
+    document.add_heading("8760时序数据样表", level=2)
+    report_add_rows_table(
+        document,
+        time_series_rows,
+        headers=planning_store.SHEET_SPECS["time_series"][1],
+        header_labels=EVALUATION_REPORT_INPUT_FIELD_LABELS,
+        max_rows=96,
+    )
+
+    document.add_heading("输入数据曲线", level=2)
+    daily_rows = report_daily_input_curve_rows(time_series_rows)
+    charts_added = 0
+    if report_add_line_chart(document, "输入负荷日曲线", daily_rows, "day", EVALUATION_REPORT_INPUT_LOAD_SERIES, "kWh"):
+        charts_added += 1
+    if report_add_line_chart(document, "输入风速与温度日均曲线", daily_rows, "day", EVALUATION_REPORT_INPUT_WEATHER_SERIES, "m/s / ℃"):
+        charts_added += 1
+    if report_add_line_chart(document, "输入太阳辐射日均曲线", daily_rows, "day", EVALUATION_REPORT_INPUT_SOLAR_SERIES, "W/m²"):
+        charts_added += 1
+    if charts_added == 0:
+        document.add_paragraph("暂无可展示输入曲线。")
+
+
+def report_add_planning_parameter_table(document, scheme_payload: dict) -> None:
+    rows = scheme_payload.get("planning_parameters")
+    parameter_row = {}
+    if isinstance(rows, list) and rows:
+        parameter_row = rows[0] if isinstance(rows[0], dict) else {}
+    elif isinstance(rows, dict):
+        parameter_row = rows
+    document.add_heading(planning_store.SHEET_SPECS["planning_parameters"][0], level=2)
+    if not parameter_row:
+        document.add_paragraph("暂无规划参数。")
+        return
+    headers = planning_store.SHEET_SPECS["planning_parameters"][1]
+    report_add_key_value_table(
+        document,
+        [
+            (
+                EVALUATION_REPORT_INPUT_FIELD_LABELS.get(key, key),
+                report_input_display_value(parameter_row.get(key, ""), key),
+            )
+            for key in headers
+        ],
+    )
+
+
+def report_time_series_summary_rows(rows: list[dict]) -> list[dict]:
+    summary_rows = []
+    for key, label, unit in EVALUATION_REPORT_TIME_SERIES_SUMMARY_SPECS:
+        values = [_numeric_or_none(row.get(key)) for row in rows if isinstance(row, dict)]
+        numeric_values = [value for value in values if value is not None]
+        if not numeric_values:
+            continue
+        summary_rows.append(
+            {
+                "曲线": label,
+                "点数": len(numeric_values),
+                "最小值": min(numeric_values),
+                "最大值": max(numeric_values),
+                "平均值": sum(numeric_values) / len(numeric_values),
+                "单位": unit,
+            }
+        )
+    return summary_rows
+
+
+def report_daily_input_curve_rows(rows: list[dict]) -> list[dict]:
+    grouped: dict[int, dict[str, list[float]]] = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        hour = _numeric_or_none(row.get("hour_index")) or (index + 1)
+        day = max(1, int((int(hour) - 1) // 24) + 1)
+        bucket = grouped.setdefault(day, {"load": [], "wind_speed": [], "solar_irradiance": [], "temperature": []})
+        for key in bucket:
+            value = _numeric_or_none(row.get(key))
+            if value is not None:
+                bucket[key].append(float(value))
+    daily_rows = []
+    for day in sorted(grouped):
+        bucket = grouped[day]
+        row = {"day": day}
+        if bucket["load"]:
+            row["load_daily_energy"] = sum(bucket["load"])
+        if bucket["wind_speed"]:
+            row["wind_speed_avg"] = report_average(bucket["wind_speed"])
+        if bucket["solar_irradiance"]:
+            row["solar_irradiance_avg"] = report_average(bucket["solar_irradiance"])
+        if bucket["temperature"]:
+            row["temperature_avg"] = report_average(bucket["temperature"])
+        daily_rows.append(row)
+    return daily_rows
+
+
+def report_average(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def report_input_display_value(value: object, key: str = "") -> str:
+    clean_key = str(key or "")
+    if clean_key in EVALUATION_REPORT_BOOLEAN_FIELDS and value not in (None, ""):
+        return "是" if str(value).strip().lower() in {"1", "true", "yes", "on", "是"} else "否"
+    value_labels = EVALUATION_REPORT_VALUE_LABELS.get(clean_key)
+    if value_labels:
+        return value_labels.get(str(value), report_display_value(value))
+    return report_display_value(value)
+
+
 def report_add_key_value_table(document, rows: list[tuple[str, object]]) -> None:
     table = document.add_table(rows=0, cols=2)
     table.style = "Table Grid"
@@ -2360,6 +2632,8 @@ def report_add_rows_table(
     document,
     rows: list[dict],
     headers: list[str] | None = None,
+    header_labels: dict[str, str] | None = None,
+    value_formatter=None,
     empty_text: str = "暂无数据。",
     max_rows: int = 120,
 ) -> None:
@@ -2373,12 +2647,14 @@ def report_add_rows_table(
         return
     table = document.add_table(rows=1, cols=len(table_headers))
     table.style = "Table Grid"
+    labels = header_labels or {}
     for index, header in enumerate(table_headers):
-        table.rows[0].cells[index].text = str(header)
+        table.rows[0].cells[index].text = str(labels.get(header, header))
     for row in normalized_rows[:max_rows]:
         cells = table.add_row().cells
         for index, header in enumerate(table_headers):
-            cells[index].text = report_display_value(row.get(header, ""))
+            raw_value = row.get(header, "")
+            cells[index].text = value_formatter(raw_value, header) if value_formatter else report_display_value(raw_value)
     if len(normalized_rows) > max_rows:
         document.add_paragraph(f"仅展示前 {max_rows} 行，共 {len(normalized_rows)} 行。")
 
@@ -2461,6 +2737,7 @@ def report_add_bar_chart(document, title: str, segments: list[dict]) -> bool:
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), report_display_value(value), ha="center", va="bottom", fontsize=8)
     ax.grid(axis="y", alpha=0.2)
     fig.tight_layout()
+    document.add_paragraph(title)
     report_add_figure(document, fig)
     return True
 
@@ -2503,6 +2780,7 @@ def report_add_line_chart(
     ax.grid(alpha=0.25)
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
+    document.add_paragraph(title)
     report_add_figure(document, fig)
     return True
 

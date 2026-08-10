@@ -2574,6 +2574,17 @@ class PowerPlanServerTest(unittest.TestCase):
         server.PLANNING_STORE = server.planning_store.PlanningStore(root=planning_root)
         try:
             server.PLANNING_STORE.create_scheme("方案A", owner_username="alice")
+            scheme_payload = server.planning_store.default_payload("方案A")
+            scheme_payload["planning_parameters"][0]["diesel_price"] = 7.5
+            scheme_payload["planning_parameters"][0]["storage_balance_mode"] = "weekly"
+            scheme_payload["diesel_generators"][0]["name"] = "输入柴发"
+            for index, row in enumerate(scheme_payload["time_series"]):
+                hour = index % 24
+                row["load"] = 100 + hour
+                row["wind_speed"] = 5 + (hour / 24)
+                row["solar_irradiance"] = max(0, 700 - abs(12 - hour) * 55)
+                row["temperature"] = 18 + (hour / 12)
+            server.PLANNING_STORE.write_scheme("方案A", scheme_payload)
             result_path = planning_root / "方案A" / "opt_results.xlsx"
             workbook = Workbook()
             workbook.active.title = "总体指标"
@@ -2621,10 +2632,18 @@ class PowerPlanServerTest(unittest.TestCase):
             table_text = "\n".join(cell.text for table in document.tables for row in table.rows for cell in row.cells)
             self.assertIn("方案结果报告", paragraph_text)
             self.assertIn("方案A / opt", paragraph_text)
+            self.assertIn("输入数据", paragraph_text)
+            self.assertIn("规划参数", paragraph_text)
+            self.assertIn("8760时序数据样表", paragraph_text)
+            self.assertIn("输入负荷日曲线", paragraph_text)
             self.assertIn("方案名称", table_text)
+            self.assertIn("柴油价格(万元/吨)", table_text)
+            self.assertIn("7.5", table_text)
+            self.assertIn("输入柴发", table_text)
+            self.assertIn("负荷(kW)", table_text)
             self.assertIn("度电成本", table_text)
             self.assertIn("工作簿柴发", table_text)
-            self.assertGreaterEqual(len(document.inline_shapes), 1)
+            self.assertGreaterEqual(len(document.inline_shapes), 4)
 
             status, headers, body = server.handle_evaluation_results_api_path(
                 "/api/evaluation/report",
