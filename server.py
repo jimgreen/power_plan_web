@@ -127,6 +127,7 @@ CHINESE_PLACE_ALIASES = {
 }
 OPTIMIZATION_RESULT_WORKBOOK_NAME = "opt_results.xlsx"
 RESULT_WORKBOOK_RE = re.compile(r"^[A-Za-z0-9_\-\u4e00-\u9fff]+_results\.xlsx$")
+RESULT_CURVE_SQLITE_SCHEMA_VERSION = "1"
 RELIABILITY_PARAMETERS_FILE_NAME = "reliability_parameters.json"
 RELIABILITY_RESULT_JSON_SUFFIX = "_reliability.json"
 RELIABILITY_RESULT_WORKBOOK_SUFFIX = "_reliability_results.xlsx"
@@ -150,6 +151,16 @@ COMPARISON_CURVE_GROUPS = {
     "safety": {"title": "安全日曲线", "sheet": "安全日曲线", "limit": None},
     "monthly": {"title": "月度统计", "sheet": "供能月曲线", "limit": None},
 }
+RESULT_CURVE_GROUP_TO_COMPARISON_GROUP = {
+    "green_hourly": "hourly",
+    "green_daily": "daily",
+    "safety_daily": "safety",
+    "green_monthly": "monthly",
+}
+COMPARISON_GROUP_TO_RESULT_CURVE_GROUP = {
+    value: key for key, value in RESULT_CURVE_GROUP_TO_COMPARISON_GROUP.items()
+}
+RESULT_CURVE_SQLITE_GROUPS = ["green_daily", "green_monthly", "safety_daily", "green_hourly"]
 COMPARISON_CURVE_X_HEADERS = {
     "小时",
     "hour_index",
@@ -247,6 +258,11 @@ RESULT_WORKBOOK_HEADER_TO_FIELD.update(
         "月份": "month",
     }
 )
+RESULT_CURVE_FIELD_DISPLAY_LABELS = {
+    field: header
+    for header, field in RESULT_WORKBOOK_HEADER_TO_FIELD.items()
+    if field and header not in COMPARISON_CURVE_X_HEADERS
+}
 STATIC_NO_STORE_SUFFIXES = {".html"}
 STATIC_BROWSER_CACHE_SUFFIXES = {".css", ".js", ".png", ".svg", ".ico", ".map", ".jpg", ".jpeg", ".webp", ".woff", ".woff2"}
 NO_STORE_CACHE_CONTROL = "no-store, no-cache, max-age=0, must-revalidate"
@@ -1371,6 +1387,7 @@ def export_optimization_results_workbook(payload: dict) -> Path:
     result_path.parent.mkdir(parents=True, exist_ok=True)
     save_result_workbook(build_optimization_results_workbook(payload, include_curves=False), result_path, "结果文件")
     save_result_workbook(build_result_curves_workbook(payload), result_curves_workbook_path(result_path), "曲线结果文件")
+    write_result_curve_sqlite_from_payload(result_path, payload)
     return result_path
 
 
@@ -1387,6 +1404,7 @@ def export_evaluation_results_workbook(payload: dict, dispatch_rows: list[dict])
     result_path.parent.mkdir(parents=True, exist_ok=True)
     save_result_workbook(build_optimization_results_workbook(payload, include_curves=False), result_path, "结果文件")
     save_result_workbook(build_result_curves_workbook(payload), result_curves_workbook_path(result_path), "曲线结果文件")
+    write_result_curve_sqlite_from_payload(result_path, payload)
     return result_path
 
 
@@ -1415,6 +1433,13 @@ def result_curves_workbook_path(result_path: Path) -> Path:
     if stem.endswith("_results"):
         stem = stem[: -len("_results")]
     return result_path.with_name(f"{stem}_curves.xlsx")
+
+
+def result_curves_sqlite_path(result_path: Path) -> Path:
+    stem = result_path.stem
+    if stem.endswith("_results"):
+        stem = stem[: -len("_results")]
+    return result_path.with_name(f".{stem}_curves.sqlite3")
 
 
 def build_optimization_results_workbook(payload: dict, include_curves: bool = False) -> Workbook:
@@ -1975,6 +2000,223 @@ def read_comparison_workbook_uncached(path: Path, include_hourly_curves: bool = 
         workbook.close()
 
 
+def write_result_curve_sqlite_from_payload(result_path: Path, payload: dict) -> None:
+    results = payload.get("results") if isinstance(payload.get("results"), dict) else {}
+    curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
+    write_result_curve_sqlite(result_path, curves)
+
+
+def write_result_curve_sqlite(result_path: Path, curves: dict) -> None:
+    curve_path = result_curves_workbook_path(result_path)
+    if not curve_path.exists() or not isinstance(curves, dict):
+        return
+    db_path = result_curves_sqlite_path(result_path)
+    tmp_path = db_path.with_name(f".{db_path.name}.tmp")
+    tmp_path.unlink(missing_ok=True)
+    try:
+        with sqlite3.connect(tmp_path) as connection:
+            connection.execute("PRAGMA journal_mode=OFF")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute(
+                """
+                CREATE TABLE meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE curve_rows (
+                    group_key TEXT NOT NULL,
+                    row_index INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    PRIMARY KEY (group_key, row_index)
+                )
+                """
+            )
+            rows_to_insert = []
+            for group_key in RESULT_CURVE_SQLITE_GROUPS:
+                group_rows = curves.get(group_key, [])
+                if not isinstance(group_rows, list):
+                    continue
+                for row_index, row in enumerate(group_rows, start=1):
+                    if isinstance(row, dict):
+                        rows_to_insert.append(
+                            (
+                                group_key,
+                                row_index,
+                                json.dumps(result_curve_json_safe(row), ensure_ascii=False, separators=(",", ":")),
+                            )
+                        )
+            connection.executemany(
+                "INSERT INTO curve_rows (group_key, row_index, payload) VALUES (?, ?, ?)",
+                rows_to_insert,
+            )
+            connection.executemany(
+                "INSERT INTO meta (key, value) VALUES (?, ?)",
+                [
+                    ("schema_version", RESULT_CURVE_SQLITE_SCHEMA_VERSION),
+                    ("source_signature", result_curve_source_signature(curve_path)),
+                    ("row_count", str(len(rows_to_insert))),
+                    ("updated_at", datetime.now().isoformat(timespec="seconds")),
+                ],
+            )
+        file_ops.replace_file_with_retry(tmp_path, db_path, "曲线SQLite缓存")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def result_curve_json_safe(value):
+    if isinstance(value, dict):
+        return {str(key): result_curve_json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [result_curve_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [result_curve_json_safe(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ", timespec="seconds")
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def result_curve_source_signature(path: Path) -> str:
+    stat = path.stat()
+    return json.dumps({"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}, sort_keys=True, separators=(",", ":"))
+
+
+def read_result_curve_sqlite_meta(result_path: Path) -> dict[str, str] | None:
+    db_path = result_curves_sqlite_path(result_path)
+    curve_path = result_curves_workbook_path(result_path)
+    if not db_path.exists() or not curve_path.exists():
+        return None
+    try:
+        with sqlite3.connect(db_path) as connection:
+            meta = {str(key): str(value) for key, value in connection.execute("SELECT key, value FROM meta")}
+    except (OSError, sqlite3.Error):
+        return None
+    if meta.get("schema_version") != RESULT_CURVE_SQLITE_SCHEMA_VERSION:
+        return None
+    if meta.get("source_signature") != result_curve_source_signature(curve_path):
+        return None
+    return meta
+
+
+def read_result_curve_sqlite_rows(result_path: Path, group_key: str, limit: int | None = None) -> list[dict] | None:
+    if read_result_curve_sqlite_meta(result_path) is None:
+        return None
+    db_path = result_curves_sqlite_path(result_path)
+    sql = "SELECT payload FROM curve_rows WHERE group_key = ? ORDER BY row_index"
+    params: list[object] = [group_key]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    try:
+        with sqlite3.connect(db_path) as connection:
+            rows = [json.loads(payload) for (payload,) in connection.execute(sql, params)]
+    except (OSError, sqlite3.Error, json.JSONDecodeError):
+        return None
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def read_result_curve_sqlite_payload(result_path: Path, include_hourly_curves: bool = True) -> dict | None:
+    if read_result_curve_sqlite_meta(result_path) is None:
+        return None
+    curves = {
+        "green_daily": read_result_curve_sqlite_rows(result_path, "green_daily"),
+        "green_monthly": read_result_curve_sqlite_rows(result_path, "green_monthly"),
+        "green_hourly": read_result_curve_sqlite_rows(result_path, "green_hourly") if include_hourly_curves else [],
+        "safety_daily": read_result_curve_sqlite_rows(result_path, "safety_daily"),
+    }
+    if any(value is None for value in curves.values()):
+        return None
+    return curves
+
+
+def read_comparison_curve_groups_from_sqlite(result_path: Path, include_hourly_curves: bool = True) -> dict | None:
+    if read_result_curve_sqlite_meta(result_path) is None:
+        return None
+    groups = {}
+    for comparison_key in COMPARISON_CURVE_GROUPS:
+        if comparison_key == "hourly" and not include_hourly_curves:
+            groups[comparison_key] = read_comparison_curve_group_headers_from_sqlite(result_path, comparison_key)
+        else:
+            groups[comparison_key] = read_comparison_curve_group_from_sqlite(result_path, comparison_key)
+        if groups[comparison_key] is None:
+            return None
+    return groups
+
+
+def read_comparison_curve_group_headers_from_sqlite(result_path: Path, comparison_key: str) -> dict[str, list[dict]] | None:
+    result_group_key = COMPARISON_GROUP_TO_RESULT_CURVE_GROUP.get(comparison_key, "")
+    rows = read_result_curve_sqlite_rows(result_path, result_group_key, limit=1)
+    if rows is None:
+        return None
+    return result_curve_rows_to_comparison_group(rows, selected_names=None, headers_only=True)
+
+
+def read_comparison_curve_group_from_sqlite(
+    result_path: Path,
+    comparison_key: str,
+    selected_names: set[str] | tuple[str, ...] | None = None,
+) -> dict[str, list[dict]] | None:
+    result_group_key = COMPARISON_GROUP_TO_RESULT_CURVE_GROUP.get(comparison_key, "")
+    if not result_group_key:
+        return None
+    limit = COMPARISON_CURVE_GROUPS.get(comparison_key, {}).get("limit")
+    rows = read_result_curve_sqlite_rows(result_path, result_group_key, limit=limit)
+    if rows is None:
+        return None
+    return result_curve_rows_to_comparison_group(rows, selected_names=selected_names)
+
+
+def result_curve_rows_to_comparison_group(
+    rows: list[dict],
+    selected_names: set[str] | tuple[str, ...] | None = None,
+    headers_only: bool = False,
+) -> dict[str, list[dict]]:
+    ordered_headers = result_curve_headers_from_rows(rows)
+    x_key = next((header for header in ordered_headers if header in COMPARISON_CURVE_X_HEADERS), "")
+    wanted = {str(name or "").strip() for name in selected_names or [] if str(name or "").strip()}
+    curves: dict[str, list[dict]] = {}
+    for header in ordered_headers:
+        if header == x_key or header in COMPARISON_CURVE_X_HEADERS:
+            continue
+        display_name = result_curve_display_name(header)
+        if not display_name:
+            continue
+        if wanted and display_name not in wanted:
+            continue
+        curves[display_name] = []
+    if headers_only or not curves:
+        return curves
+    for row_index, row in enumerate(rows, start=1):
+        x_value = row.get(x_key, row_index) if x_key else row_index
+        if x_value in (None, ""):
+            x_value = row_index
+        for header in ordered_headers:
+            display_name = result_curve_display_name(header)
+            if display_name not in curves:
+                continue
+            number = _numeric_or_none(row.get(header))
+            if number is not None:
+                curves[display_name].append({"x": x_value, "y": number})
+    return curves
+
+
+def result_curve_headers_from_rows(rows: list[dict]) -> list[str]:
+    headers: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in row:
+            clean = str(key or "").strip()
+            if clean and clean not in headers:
+                headers.append(clean)
+    return headers
+
+
 def read_comparison_curve_group(path: Path, curve_group: str, curve_names: list[str]) -> dict[str, list[dict]]:
     ensure_split_result_workbook(path)
     selected_names = tuple(name for name in curve_names if name)
@@ -1991,6 +2233,10 @@ def read_comparison_curve_group_uncached(path: Path, curve_group: str, curve_nam
     if not config:
         raise ValueError("曲线类型不合法")
     source_path = result_curves_workbook_path(path) if result_curves_workbook_path(path).exists() else path
+    if result_curves_workbook_path(path).exists():
+        sqlite_group = read_comparison_curve_group_from_sqlite(path, curve_group, selected_names=curve_names)
+        if sqlite_group is not None:
+            return sqlite_group
     try:
         workbook = load_workbook(source_path, read_only=True, data_only=True)
     except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -2032,6 +2278,7 @@ def ensure_split_result_workbook(path: Path) -> None:
         workbook.close()
     if curve_payload is not None:
         save_result_workbook(build_result_curves_workbook(curve_payload), curve_path, "曲线结果文件")
+        write_result_curve_sqlite_from_payload(path, curve_payload)
     try:
         workbook = load_workbook(path)
     except RESULT_WORKBOOK_READ_ERRORS:
@@ -2050,6 +2297,9 @@ def ensure_split_result_workbook(path: Path) -> None:
 def read_comparison_curve_groups(path: Path, fallback_workbook=None, include_hourly_curves: bool = True) -> dict:
     curve_path = result_curves_workbook_path(path)
     if curve_path.exists():
+        sqlite_groups = read_comparison_curve_groups_from_sqlite(path, include_hourly_curves=include_hourly_curves)
+        if sqlite_groups is not None:
+            return sqlite_groups
         try:
             curve_workbook = load_workbook(curve_path, read_only=True, data_only=True)
         except RESULT_WORKBOOK_READ_ERRORS as exc:
@@ -2127,12 +2377,18 @@ def read_result_workbook_display_payload_uncached(path: Path, include_hourly_cur
 def read_result_curve_workbook_payload(path: Path, fallback_workbook=None, include_hourly_curves: bool = True) -> dict:
     curve_path = result_curves_workbook_path(path)
     if curve_path.exists():
+        sqlite_payload = read_result_curve_sqlite_payload(path, include_hourly_curves=include_hourly_curves)
+        if sqlite_payload is not None:
+            return sqlite_payload
         try:
             curve_workbook = load_workbook(curve_path, read_only=True, data_only=True)
         except RESULT_WORKBOOK_READ_ERRORS as exc:
             raise ValueError(f"曲线结果文件无法读取: {curve_path.name}") from exc
         try:
-            return read_result_curves_from_workbook(curve_workbook, include_hourly_curves=include_hourly_curves)
+            curves = read_result_curves_from_workbook(curve_workbook, include_hourly_curves=include_hourly_curves)
+            if include_hourly_curves:
+                write_result_curve_sqlite(path, curves)
+            return curves
         finally:
             curve_workbook.close()
     if fallback_workbook is not None:
@@ -3061,7 +3317,7 @@ def result_curve_display_name(header: str) -> str:
     clean = str(header or "").strip()
     if clean in DEPRECATED_RESULT_CURVE_HEADERS:
         return ""
-    return RESULT_CURVE_FIELD_LABELS.get(clean, clean)
+    return RESULT_CURVE_FIELD_LABELS.get(clean) or RESULT_CURVE_FIELD_DISPLAY_LABELS.get(clean, clean)
 
 
 def merge_comparison_rows(tables: list[list[dict]], items: list[dict], key_field: str) -> list[dict]:
@@ -3200,10 +3456,14 @@ def rename_evaluation_result_workbook(scheme: str, filename: str, target_name: s
 
     source_curve_path = result_curves_workbook_path(source_path)
     target_curve_path = result_curves_workbook_path(target_path)
+    source_curve_sqlite_path = result_curves_sqlite_path(source_path)
+    target_curve_sqlite_path = result_curves_sqlite_path(target_path)
     if target_path.exists():
         raise FileExistsError(f"重命名失败，结果文件已存在: {target_path.name}")
     if target_curve_path.exists():
         raise FileExistsError(f"重命名失败，曲线结果文件已存在: {target_curve_path.name}")
+    if target_curve_sqlite_path.exists():
+        raise FileExistsError(f"重命名失败，曲线缓存文件已存在: {target_curve_sqlite_path.name}")
 
     file_ops.retry_file_operation(
         lambda: source_path.rename(target_path),
@@ -3219,6 +3479,8 @@ def rename_evaluation_result_workbook(scheme: str, filename: str, target_name: s
         )
         file_cache.invalidate_path(source_curve_path)
         file_cache.invalidate_path(target_curve_path)
+    if source_curve_sqlite_path.exists():
+        file_ops.replace_file_with_retry(source_curve_sqlite_path, target_curve_sqlite_path, "曲线SQLite缓存")
     file_cache.invalidate_path(target_path.parent)
     return target_path
 
@@ -3291,6 +3553,9 @@ def handle_evaluation_results_api_path(
             curve_path = result_curves_workbook_path(result_path)
             if curve_path.exists():
                 file_ops.delete_file_with_retry(curve_path, "曲线结果文件")
+            curve_sqlite_path = result_curves_sqlite_path(result_path)
+            if curve_sqlite_path.exists():
+                file_ops.delete_file_with_retry(curve_sqlite_path, "曲线SQLite缓存")
             selected = selected_evaluation_result_filename(scheme)
             return _json_response(
                 {
@@ -5570,6 +5835,9 @@ def emit_frequency_log(log_callback, level: str, message: str) -> None:
 
 def read_frequency_dispatch_rows(path: Path) -> list[dict]:
     ensure_split_result_workbook(path)
+    sqlite_rows = read_result_curve_sqlite_rows(path, "green_hourly", limit=TIME_SERIES_IMPORT_ROW_COUNT)
+    if sqlite_rows is not None and len(sqlite_rows) == TIME_SERIES_IMPORT_ROW_COUNT:
+        return sqlite_rows
     dispatch_path = result_curves_workbook_path(path)
     source_path = dispatch_path if dispatch_path.exists() else path
     try:

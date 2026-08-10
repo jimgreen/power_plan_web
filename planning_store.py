@@ -8,6 +8,7 @@ import zipfile
 import gc
 import json
 import shutil
+import sqlite3
 import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ DEFAULT_SCHEME_ROOT = WEB_ROOT / "planning_schemes"
 WORKBOOK_NAME = "parameters.xlsx"
 TIME_SERIES_WORKBOOK_NAME = "time_series.xlsx"
 SCHEME_META_NAME = "scheme_meta.json"
+TIME_SERIES_SQLITE_NAME = ".time_series.sqlite3"
+TIME_SERIES_SQLITE_SCHEMA_VERSION = "1"
 SCHEME_ARCHIVE_MAX_FILES = 2000
 SCHEME_ARCHIVE_MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
 WORKBOOK_XML = "xl/workbook.xml"
@@ -592,6 +595,9 @@ class PlanningStore:
     def time_series_workbook_path(self, name: str) -> Path:
         return self.scheme_dir(name) / TIME_SERIES_WORKBOOK_NAME
 
+    def time_series_sqlite_path(self, name: str) -> Path:
+        return self.scheme_dir(name) / TIME_SERIES_SQLITE_NAME
+
     def scheme_meta_path(self, name: str) -> Path:
         return self.scheme_dir(name) / SCHEME_META_NAME
 
@@ -858,6 +864,7 @@ class PlanningStore:
         folder = self.scheme_dir(clean)
         folder.mkdir(parents=True, exist_ok=True)
         payload = sanitize_payload_names(deepcopy(payload))
+        time_series_rows = payload.get("time_series") if "time_series" in payload else None
         workbook = build_workbook(payload | {"scheme": clean}, include_keys=[key for key in SHEET_SPECS if key != "time_series"])
         tmp_path = folder / f".{WORKBOOK_NAME}.tmp"
         final_path = folder / WORKBOOK_NAME
@@ -866,7 +873,7 @@ class PlanningStore:
         finally:
             workbook.close()
         replace_workbook_with_retry(tmp_path, final_path)
-        if "time_series" in payload and time_series_changed(self.time_series_workbook_path(clean), final_path, payload.get("time_series")):
+        if "time_series" in payload and time_series_changed(self.time_series_workbook_path(clean), final_path, time_series_rows):
             time_series_workbook = build_time_series_workbook(payload | {"scheme": clean})
             time_series_tmp_path = folder / f".{TIME_SERIES_WORKBOOK_NAME}.tmp"
             time_series_final_path = folder / TIME_SERIES_WORKBOOK_NAME
@@ -875,6 +882,10 @@ class PlanningStore:
             finally:
                 time_series_workbook.close()
             replace_workbook_with_retry(time_series_tmp_path, time_series_final_path)
+        if isinstance(time_series_rows, list):
+            source_path = time_series_source_path(final_path)
+            if should_refresh_time_series_sqlite(self.time_series_sqlite_path(clean), source_path):
+                write_time_series_sqlite(self.time_series_sqlite_path(clean), source_path, time_series_rows)
 
     def read_scheme(self, name: str) -> dict[str, Any]:
         clean = validate_scheme_name(name)
@@ -883,7 +894,7 @@ class PlanningStore:
             raise FileNotFoundError(f"方案参数文件不存在: {path}")
         self.ensure_split_scheme_files(clean)
         payload = read_workbook(path, clean, include_keys=[key for key in SHEET_SPECS if key != "time_series"])
-        payload.update(read_time_series_workbook_payload(path, clean))
+        payload.update(read_time_series_payload(path, clean))
         payload["validation"] = payload.get("validation", []) + validate_payload(payload)
         payload["time_series_loaded"] = True
         payload["time_series_count"] = len(payload.get("time_series", []))
@@ -907,7 +918,7 @@ class PlanningStore:
         if not path.exists():
             raise FileNotFoundError(f"方案参数文件不存在: {path}")
         self.ensure_split_scheme_files(clean)
-        payload = read_time_series_workbook_payload(path, clean)
+        payload = read_time_series_payload(path, clean)
         payload["time_series_loaded"] = True
         payload["time_series_count"] = len(payload.get("time_series", []))
         payload["validation"] = payload.get("validation", []) + validate_payload(payload)
@@ -994,6 +1005,175 @@ def read_workbook(path: Path, scheme: str, include_keys: list[str] | None = None
 def read_time_series_workbook_payload(parameter_path: Path, scheme: str) -> dict[str, Any]:
     source_path = time_series_source_path(parameter_path)
     return read_workbook(source_path, scheme, include_keys=["time_series"])
+
+
+def read_time_series_payload(parameter_path: Path, scheme: str) -> dict[str, Any]:
+    sqlite_payload = read_time_series_sqlite_payload(parameter_path, scheme)
+    if sqlite_payload is not None:
+        return sqlite_payload
+    payload = read_time_series_workbook_payload(parameter_path, scheme)
+    rows = payload.get("time_series")
+    if isinstance(rows, list):
+        try:
+            write_time_series_sqlite(time_series_sqlite_path_from_parameter_path(parameter_path), time_series_source_path(parameter_path), rows)
+        except (OSError, sqlite3.Error):
+            pass
+    return payload
+
+
+def time_series_sqlite_path_from_parameter_path(path: Path) -> Path:
+    return path.with_name(TIME_SERIES_SQLITE_NAME)
+
+
+def read_time_series_sqlite_payload(parameter_path: Path, scheme: str) -> dict[str, Any] | None:
+    db_path = time_series_sqlite_path_from_parameter_path(parameter_path)
+    source_path = time_series_source_path(parameter_path)
+    if not db_path.exists() or not source_path.exists():
+        return None
+    expected_signature = sqlite_source_signature(source_path)
+    try:
+        with sqlite3.connect(db_path) as connection:
+            meta = read_sqlite_meta(connection)
+            if meta.get("schema_version") != TIME_SERIES_SQLITE_SCHEMA_VERSION:
+                return None
+            if meta.get("source_signature") != expected_signature:
+                return None
+            rows = [
+                {
+                    "hour_index": hour_index,
+                    "datetime": datetime_value,
+                    "wind_speed": sqlite_display_value(wind_speed),
+                    "solar_irradiance": sqlite_display_value(solar_irradiance),
+                    "load": sqlite_display_value(load),
+                    "temperature": sqlite_display_value(temperature),
+                }
+                for hour_index, datetime_value, wind_speed, solar_irradiance, load, temperature in connection.execute(
+                    """
+                    SELECT hour_index, datetime, wind_speed, solar_irradiance, load, temperature
+                    FROM time_series
+                    ORDER BY hour_index
+                    """
+                )
+            ]
+    except (OSError, sqlite3.Error):
+        return None
+    if not rows:
+        return None
+    return {"scheme": scheme, "validation": [], "time_series": rows}
+
+
+def should_refresh_time_series_sqlite(db_path: Path, source_path: Path) -> bool:
+    if not db_path.exists() or not source_path.exists():
+        return True
+    try:
+        with sqlite3.connect(db_path) as connection:
+            meta = read_sqlite_meta(connection)
+        return (
+            meta.get("schema_version") != TIME_SERIES_SQLITE_SCHEMA_VERSION
+            or meta.get("source_signature") != sqlite_source_signature(source_path)
+        )
+    except (OSError, sqlite3.Error):
+        return True
+
+
+def write_time_series_sqlite(db_path: Path, source_path: Path, rows: list[dict[str, Any]]) -> None:
+    if not isinstance(rows, list) or not source_path.exists():
+        return
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(f".{db_path.name}.tmp")
+    tmp_path.unlink(missing_ok=True)
+    try:
+        with sqlite3.connect(tmp_path) as connection:
+            connection.execute("PRAGMA journal_mode=OFF")
+            connection.execute("PRAGMA synchronous=OFF")
+            connection.execute(
+                """
+                CREATE TABLE meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE time_series (
+                    hour_index INTEGER PRIMARY KEY,
+                    datetime TEXT,
+                    wind_speed REAL,
+                    solar_irradiance REAL,
+                    load REAL,
+                    temperature REAL
+                )
+                """
+            )
+            connection.executemany(
+                """
+                INSERT INTO time_series (
+                    hour_index,
+                    datetime,
+                    wind_speed,
+                    solar_irradiance,
+                    load,
+                    temperature
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        sqlite_int_value(row.get("hour_index")) or index,
+                        str(row.get("datetime") or ""),
+                        sqlite_float_value(row.get("wind_speed")),
+                        sqlite_float_value(row.get("solar_irradiance")),
+                        sqlite_float_value(row.get("load")),
+                        sqlite_float_value(row.get("temperature")),
+                    )
+                    for index, row in enumerate(rows, start=1)
+                    if isinstance(row, dict)
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO meta (key, value) VALUES (?, ?)",
+                [
+                    ("schema_version", TIME_SERIES_SQLITE_SCHEMA_VERSION),
+                    ("source_signature", sqlite_source_signature(source_path)),
+                    ("row_count", str(len(rows))),
+                    ("updated_at", datetime.now().isoformat(timespec="seconds")),
+                ],
+            )
+        file_ops.replace_file_with_retry(tmp_path, db_path, "时序SQLite缓存")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def read_sqlite_meta(connection: sqlite3.Connection) -> dict[str, str]:
+    try:
+        return {str(key): str(value) for key, value in connection.execute("SELECT key, value FROM meta")}
+    except sqlite3.Error:
+        return {}
+
+
+def sqlite_source_signature(path: Path) -> str:
+    stat = path.stat()
+    return json.dumps({"mtime_ns": stat.st_mtime_ns, "size": stat.st_size}, sort_keys=True, separators=(",", ":"))
+
+
+def sqlite_float_value(value: Any) -> float | int | None:
+    if value in ("", None):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def sqlite_display_value(value: Any) -> Any:
+    return "" if value is None else value
+
+
+def sqlite_int_value(value: Any) -> int | None:
+    number = sqlite_float_value(value)
+    return int(number) if number is not None else None
 
 
 def read_workbook_uncached(path: Path, scheme: str, selected_keys: set[str]) -> dict[str, Any]:

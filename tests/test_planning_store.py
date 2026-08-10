@@ -42,8 +42,10 @@ class PlanningStoreTest(unittest.TestCase):
 
         workbook = self.tmp_dir / "方案A" / "parameters.xlsx"
         time_series_workbook = self.tmp_dir / "方案A" / "time_series.xlsx"
+        time_series_sqlite = self.tmp_dir / "方案A" / ".time_series.sqlite3"
         self.assertTrue(workbook.exists())
         self.assertTrue(time_series_workbook.exists())
+        self.assertTrue(time_series_sqlite.exists())
         parameter_book = load_workbook(workbook, read_only=True)
         try:
             self.assertNotIn("8760时序数据", parameter_book.sheetnames)
@@ -158,6 +160,7 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertIn("方案A/time_series.xlsx", names)
         self.assertIn("方案A/case_results.xlsx", names)
         self.assertNotIn("方案A/scheme_meta.json", names)
+        self.assertNotIn("方案A/.time_series.sqlite3", names)
 
         imported = self.store.import_scheme_archive(archive_bytes, "方案B", owner_username="carol")
 
@@ -279,6 +282,16 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("diesel_generators", payload)
         self.assertNotIn("planning_parameters", payload)
 
+    def test_read_time_series_uses_sqlite_mirror_when_excel_reader_is_unavailable(self):
+        payload = self.store.create_scheme("方案A")
+        payload["time_series"][0]["load"] = 123.45
+        self.store.write_scheme("方案A", payload)
+
+        with patch.object(planning_store, "read_time_series_workbook_payload", side_effect=AssertionError("should use sqlite")):
+            loaded = self.store.read_time_series("方案A")
+
+        self.assertEqual(loaded["time_series"][0]["load"], 123.45)
+
     def test_read_scheme_reuses_cached_workbook_until_file_changes(self):
         payload = self.store.create_scheme("方案A")
         planning_store.PARAMETER_WORKBOOK_CACHE.clear()
@@ -294,7 +307,7 @@ class PlanningStoreTest(unittest.TestCase):
             first = self.store.read_scheme("方案A")
             first["diesel_generators"][0]["name"] = "缓存外部修改"
             second = self.store.read_scheme("方案A")
-            self.assertEqual(load_count, 2)
+            self.assertEqual(load_count, 1)
             self.assertNotEqual(second["diesel_generators"][0]["name"], "缓存外部修改")
 
             payload["diesel_generators"][0]["name"] = "缓存失效后重新读取"

@@ -2456,6 +2456,7 @@ class PowerPlanServerTest(unittest.TestCase):
             self.assertTrue(result_path.exists())
             curve_path = server.result_curves_workbook_path(result_path)
             self.assertTrue(curve_path.exists())
+            self.assertTrue(server.result_curves_sqlite_path(result_path).exists())
             workbook = load_workbook(result_path, data_only=True, read_only=True)
             try:
                 self.assertEqual(
@@ -2685,9 +2686,9 @@ class PowerPlanServerTest(unittest.TestCase):
 
         try:
             with patch.object(server, "load_workbook", side_effect=counting_load_workbook):
-                first = server.read_result_workbook_display_payload(result_path)
+                first = server.read_result_workbook_display_payload(result_path, include_hourly_curves=False)
                 first["results"]["overview_tables"][0]["rows"][0]["设备类型"] = "外部修改"
-                second = server.read_result_workbook_display_payload(result_path)
+                second = server.read_result_workbook_display_payload(result_path, include_hourly_curves=False)
                 self.assertEqual(load_count, 1)
                 self.assertEqual(second["results"]["overview_tables"][0]["rows"][0]["设备类型"], "柴发")
 
@@ -2696,7 +2697,7 @@ class PowerPlanServerTest(unittest.TestCase):
                 changed_workbook["规划结果"]["A2"] = "风机"
                 changed_workbook.save(result_path)
                 changed_workbook.close()
-                third = server.read_result_workbook_display_payload(result_path)
+                third = server.read_result_workbook_display_payload(result_path, include_hourly_curves=False)
 
             self.assertEqual(load_count, 2)
             self.assertEqual(third["results"]["overview_tables"][0]["rows"][0]["设备类型"], "风机")
@@ -2744,18 +2745,19 @@ class PowerPlanServerTest(unittest.TestCase):
 
         server.RESULT_DISPLAY_PAYLOAD_CACHE.clear()
         original_load_workbook = server.load_workbook
-        load_count = 0
+        curve_load_count = 0
 
         def counting_load_workbook(*args, **kwargs):
-            nonlocal load_count
-            load_count += 1
+            nonlocal curve_load_count
+            if Path(args[0]) == curve_path:
+                curve_load_count += 1
             return original_load_workbook(*args, **kwargs)
 
         try:
             with patch.object(server, "load_workbook", side_effect=counting_load_workbook):
                 first = server.read_result_workbook_display_payload(result_path)
                 second = server.read_result_workbook_display_payload(result_path)
-                self.assertEqual(load_count, 2)
+                self.assertEqual(curve_load_count, 1)
                 self.assertEqual(first["results"]["curves"]["green_daily"][0]["load_energy"], 56)
                 self.assertEqual(second["results"]["curves"]["green_daily"][0]["load_energy"], 56)
 
@@ -2766,13 +2768,29 @@ class PowerPlanServerTest(unittest.TestCase):
                 changed_curve_workbook.close()
                 third = server.read_result_workbook_display_payload(result_path)
 
-            self.assertEqual(load_count, 4)
+            self.assertEqual(curve_load_count, 2)
             self.assertEqual(third["metrics"][0]["label"], "度电成本")
             self.assertEqual(third["results"]["overview_tables"][0]["rows"][0]["设备类型"], "柴发")
             self.assertEqual(third["results"]["curves"]["green_daily"][0]["load_energy"], 78)
             self.assertEqual(third["results"]["curves"]["green_monthly"][0]["load_energy"], 310)
             self.assertEqual(third["results"]["curves"]["safety_daily"][0]["frequency_min"], 49.9)
             self.assertEqual(third["results"]["curves"]["green_hourly"][0]["load"], 100)
+
+            self.assertTrue(server.result_curves_sqlite_path(result_path).exists())
+            server.RESULT_DISPLAY_PAYLOAD_CACHE.clear()
+            server.COMPARISON_CURVE_SLICE_CACHE.clear()
+
+            def reject_curve_workbook_load(path, *args, **kwargs):
+                if Path(path) == curve_path:
+                    raise AssertionError("curve workbook should not be loaded when sqlite mirror is fresh")
+                return original_load_workbook(path, *args, **kwargs)
+
+            with patch.object(server, "load_workbook", side_effect=reject_curve_workbook_load):
+                sqlite_payload = server.read_result_workbook_display_payload(result_path)
+                sqlite_group = server.read_comparison_curve_group(result_path, "hourly", ["负荷总功率"])
+            self.assertEqual(sqlite_payload["results"]["curves"]["green_daily"][0]["load_energy"], 78)
+            self.assertEqual(sqlite_payload["results"]["curves"]["green_hourly"][0]["load"], 100)
+            self.assertEqual(sqlite_group["负荷总功率"][0]["y"], 100)
         finally:
             shutil.rmtree(planning_root, ignore_errors=True)
 
