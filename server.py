@@ -193,6 +193,8 @@ RESULT_CURVE_FIELD_LABELS = {
     "unmet_load_energy": "切负荷总电量",
     "renewable_ratio": "新能源占比",
     "renewable_curtailed_rate": "新能源弃电率",
+    "is_winter_period": "是否冬季时段",
+    "operation_stat_included": "是否纳入运行统计",
     "load_up_disturbance_power": "负荷上扰动功率",
     "load_down_disturbance_power": "负荷下扰动功率",
     "renewable_down_disturbance_power": "新能源下扰动功率",
@@ -221,7 +223,14 @@ RESULT_CURVE_FIELD_LABELS = {
     "frequency_fit_error_hz": "频率下限拟合误差",
     "frequency_upper_fit_error_hz": "频率上限拟合误差",
 }
-DEPRECATED_RESULT_CURVE_HEADERS = {"新能源N-1功率缺口", "renewable_n1_power_gap"}
+DEPRECATED_RESULT_CURVE_HEADERS = {
+    "新能源N-1功率缺口",
+    "renewable_n1_power_gap",
+    "是否冬季时段",
+    "is_winter_period",
+    "是否纳入运行统计",
+    "operation_stat_included",
+}
 RESULT_WORKBOOK_HEADER_TO_FIELD = {label: key for key, label in RESULT_CURVE_FIELD_LABELS.items()}
 RESULT_WORKBOOK_HEADER_TO_FIELD.update(
     {
@@ -239,6 +248,8 @@ RESULT_WORKBOOK_HEADER_TO_FIELD.update(
         "光伏总功率": "pv_power",
         "新能源总出力": "renewable_power",
         "新能源最大可发": "renewable_available",
+        "是否冬季时段": "is_winter_period",
+        "是否纳入运行统计": "operation_stat_included",
         "电储能总功率": "storage_power",
         "构网储能总容量": "grid_storage_capacity",
         "构网储能总功率": "grid_storage_power",
@@ -1516,6 +1527,8 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "renewable_available",
             "renewable_ratio",
             "renewable_curtailed_rate",
+            "is_winter_period",
+            "operation_stat_included",
             "storage_power",
             "grid_storage_capacity",
             "grid_storage_power",
@@ -1576,6 +1589,8 @@ def append_dispatch_rows_sheet(workbook: Workbook, dispatch_rows: list[dict]) ->
             "renewable_available": "新能源最大可发",
             "renewable_ratio": "新能源占比",
             "renewable_curtailed_rate": "新能源弃电率",
+            "is_winter_period": "是否冬季时段",
+            "operation_stat_included": "是否纳入运行统计",
             "storage_power": "电储能总功率",
             "grid_storage_capacity": "构网储能总容量",
             "grid_storage_power": "构网储能总功率",
@@ -2499,6 +2514,11 @@ EVALUATION_REPORT_INPUT_FIELD_LABELS = {
     "diesel_price": "柴油价格(万元/吨)",
     "diesel_minimum_on_hours": "柴发开机持续工作小时数下限",
     "diesel_minimum_off_hours": "柴发关机持续工作小时数下限",
+    "operation_mode": "工作模式",
+    "winter_start_month": "冬季开始月份",
+    "winter_start_day": "冬季开始日期",
+    "winter_end_month": "冬季结束月份",
+    "winter_end_day": "冬季结束日期",
     "green_power_ratio_lower": "绿色电量占比下限",
     "optimization_time_limit_minutes": "规划求解时间上限(分钟)",
     "preferred_solver": "优先求解器",

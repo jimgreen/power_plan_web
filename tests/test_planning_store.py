@@ -68,6 +68,11 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(payload["planning_parameters"][0]["initial_storage_soc_ratio"], 0.5)
         self.assertEqual(payload["planning_parameters"][0]["storage_balance_mode"], "daily")
         self.assertEqual(payload["planning_parameters"][0]["initial_hydrogen_storage_ratio"], 0.5)
+        self.assertEqual(payload["planning_parameters"][0]["operation_mode"], "annual")
+        self.assertEqual(payload["planning_parameters"][0]["winter_start_month"], 10)
+        self.assertEqual(payload["planning_parameters"][0]["winter_start_day"], 1)
+        self.assertEqual(payload["planning_parameters"][0]["winter_end_month"], 4)
+        self.assertEqual(payload["planning_parameters"][0]["winter_end_day"], 30)
         self.assertNotIn("storage_charge_efficiency", payload["planning_parameters"][0])
         self.assertNotIn("storage_discharge_efficiency", payload["planning_parameters"][0])
         self.assertEqual(payload["planning_parameters"][0]["storage_frequency_regulation_enabled"], 0)
@@ -221,6 +226,11 @@ class PlanningStoreTest(unittest.TestCase):
         payload["planning_parameters"][0]["load_up_disturbance_factor"] = 0.1
         payload["planning_parameters"][0]["load_down_disturbance_factor"] = 0.2
         payload["planning_parameters"][0]["renewable_down_disturbance_factor"] = 0.3
+        payload["planning_parameters"][0]["operation_mode"] = "summer"
+        payload["planning_parameters"][0]["winter_start_month"] = 9
+        payload["planning_parameters"][0]["winter_start_day"] = 15
+        payload["planning_parameters"][0]["winter_end_month"] = 5
+        payload["planning_parameters"][0]["winter_end_day"] = 10
 
         self.store.write_scheme("方案A", payload)
         saved = self.store.read_scheme("方案A")
@@ -256,6 +266,11 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertEqual(saved["planning_parameters"][0]["load_up_disturbance_factor"], 0.1)
         self.assertEqual(saved["planning_parameters"][0]["load_down_disturbance_factor"], 0.2)
         self.assertEqual(saved["planning_parameters"][0]["renewable_down_disturbance_factor"], 0.3)
+        self.assertEqual(saved["planning_parameters"][0]["operation_mode"], "summer")
+        self.assertEqual(saved["planning_parameters"][0]["winter_start_month"], 9)
+        self.assertEqual(saved["planning_parameters"][0]["winter_start_day"], 15)
+        self.assertEqual(saved["planning_parameters"][0]["winter_end_month"], 5)
+        self.assertEqual(saved["planning_parameters"][0]["winter_end_day"], 10)
 
     def test_read_scheme_overview_defers_time_series_rows(self):
         self.store.create_scheme("方案A")

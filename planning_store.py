@@ -165,6 +165,11 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "diesel_price",
             "diesel_minimum_on_hours",
             "diesel_minimum_off_hours",
+            "operation_mode",
+            "winter_start_month",
+            "winter_start_day",
+            "winter_end_month",
+            "winter_end_day",
             "green_power_ratio_lower",
             "optimization_time_limit_minutes",
             "preferred_solver",
@@ -309,6 +314,11 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "diesel_price": 0,
     "diesel_minimum_on_hours": 12,
     "diesel_minimum_off_hours": 12,
+    "operation_mode": "annual",
+    "winter_start_month": 10,
+    "winter_start_day": 1,
+    "winter_end_month": 4,
+    "winter_end_day": 30,
     "green_power_ratio_lower": 0,
     "optimization_time_limit_minutes": 60,
     "preferred_solver": "auto",
@@ -349,6 +359,19 @@ PLANNING_BOOLEAN_FIELDS = {
     "renewable_n_1_enabled",
     "renewable_disturbance_enabled",
     "load_disturbance_enabled",
+}
+
+OPERATION_MODE_ALIASES = {
+    "": "annual",
+    "annual": "annual",
+    "year": "annual",
+    "全年": "annual",
+    "全年运行": "annual",
+    "度夏": "summer",
+    "度夏运行": "summer",
+    "summer": "summer",
+    "summer_only": "summer",
+    "summer-only": "summer",
 }
 
 FIELD_DEFAULTS: dict[str, Any] = {
@@ -486,7 +509,19 @@ def normalize_planning_parameter_row(row: dict[str, Any]) -> dict[str, Any]:
     for field in PLANNING_BOOLEAN_FIELDS:
         normalized[field] = numeric_boolean_value(normalized.get(field, 0))
     normalized["preferred_solver"] = normalize_preferred_solver(normalized.get("preferred_solver"))
+    normalized["operation_mode"] = normalize_operation_mode(normalized.get("operation_mode"))
+    for field in ("winter_start_month", "winter_start_day", "winter_end_month", "winter_end_day"):
+        normalized[field] = int(max(1, round(numeric(normalized.get(field), DEFAULT_PLANNING_PARAMETERS[field]))))
     return normalized
+
+
+def normalize_operation_mode(value: Any) -> str:
+    mode = str(value or "annual").strip().lower()
+    return OPERATION_MODE_ALIASES.get(mode, "annual")
+
+
+def is_valid_operation_mode_value(value: Any) -> bool:
+    return str(value or "").strip().lower() in OPERATION_MODE_ALIASES
 
 
 def normalize_preferred_solver(value: Any) -> str:
@@ -1668,6 +1703,15 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
             messages.append({"level": "error", "message": f"{label}不能大于{maximum:g}"})
         return number
 
+    def integer_in_range(key: str, label: str, minimum: int, maximum: int) -> int | None:
+        number = number_in_range(key, label, minimum, maximum)
+        if number is None:
+            return None
+        if not float(number).is_integer():
+            messages.append({"level": "error", "message": f"{label}必须为整数"})
+            return None
+        return int(number)
+
     number_in_range("diesel_price", "柴油价格(万元/吨)", 0)
     for key, label in (
         ("diesel_minimum_on_hours", "柴发开机持续工作小时数下限"),
@@ -1676,6 +1720,21 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
         hours = number_in_range(key, label, 0, 24)
         if hours is not None and not float(hours).is_integer():
             messages.append({"level": "error", "message": f"{label}必须为整数"})
+    if not is_valid_operation_mode_value(row.get("operation_mode")):
+        messages.append({"level": "error", "message": "工作模式必须为全年运行或度夏运行"})
+    start_month = integer_in_range("winter_start_month", "冬季开始月份", 1, 12)
+    start_day = integer_in_range("winter_start_day", "冬季开始日期", 1, 31)
+    end_month = integer_in_range("winter_end_month", "冬季结束月份", 1, 12)
+    end_day = integer_in_range("winter_end_day", "冬季结束日期", 1, 31)
+    for month, day, label in (
+        (start_month, start_day, "冬季开始日期"),
+        (end_month, end_day, "冬季结束日期"),
+    ):
+        if month is None or day is None:
+            continue
+        month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
+        if day > month_days:
+            messages.append({"level": "error", "message": f"{label}不能超过{month}月{month_days}日"})
     number_in_range("green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", 0, 1)
     time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 1440)
     if time_limit is not None and not float(time_limit).is_integer():

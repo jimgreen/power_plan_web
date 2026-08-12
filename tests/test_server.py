@@ -6917,6 +6917,13 @@ class PowerPlanServerTest(unittest.TestCase):
             "柴油价格(万元/吨)",
             "柴发开机持续工作小时数下限",
             "柴发关机持续工作小时数下限",
+            "工作模式",
+            "全年运行",
+            "度夏运行",
+            "冬季开始月份",
+            "冬季开始日期",
+            "冬季结束月份",
+            "冬季结束日期",
             "绿色电量占比下限(0.0-1.0)",
             "规划求解时间上限(分钟)",
             "初始电储SOC(0.0-1.0)",
@@ -6951,7 +6958,9 @@ class PowerPlanServerTest(unittest.TestCase):
         self.assertLess(script.index('"frequency_security_constraint_enabled"'), script.index('"nominal_frequency_hz"'))
         self.assertLess(script.index('"diesel_price"'), script.index('"diesel_minimum_on_hours"'))
         self.assertLess(script.index('"diesel_minimum_on_hours"'), script.index('"diesel_minimum_off_hours"'))
-        self.assertLess(script.index('"diesel_minimum_off_hours"'), script.index('"green_power_ratio_lower"'))
+        self.assertLess(script.index('"diesel_minimum_off_hours"'), script.index('"operation_mode"'))
+        self.assertLess(script.index('"operation_mode"'), script.index('"winter_start_month"'))
+        self.assertLess(script.index('"winter_end_day"'), script.index('"green_power_ratio_lower"'))
         self.assertLess(script.index('"nominal_frequency_hz"'), script.index('"frequency_nadir_lower_hz"'))
         self.assertLess(script.index('"frequency_governor_time_constant_s"'), script.index('"frequency_nadir_evaluation_duration_s"'))
         self.assertLess(script.index('"nadir_linearization_interval_ratio"'), script.index('"network_synchronization_coefficient_base"'))

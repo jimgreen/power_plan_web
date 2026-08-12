@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Callable
 
 import numpy as np
 
 import dispatch_milp
 import estimate
+import planning_store
 from milp_solver import CalculationTimeoutError, is_timeout_result, solve_milp
 
 
@@ -22,6 +24,7 @@ FREQUENCY_EPS = 1e-9
 STRICT_POWER_BALANCE_TOLERANCE = 1e-5
 GRID_FORMING_WIND_ON_EPS = 1e-6
 NOMINAL_FREQUENCY_HZ = 50.0
+NON_LEAP_MONTH_DAYS = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 DEVICE_SPECS: dict[str, dict[str, str]] = {
     "diesel_generators": {"label": "柴发", "capacity_field": "capacity", "unit": "kW"},
@@ -33,6 +36,120 @@ DEVICE_SPECS: dict[str, dict[str, str]] = {
     "hydrogen_tanks": {"label": "储氢罐", "capacity_field": "hydrogen_tank_capacity", "unit": "Nm3"},
     "fuel_cells": {"label": "燃料电池", "capacity_field": "power_capacity", "unit": "kW"},
 }
+
+
+def operation_mode_config(planning_parameters: dict[str, Any]) -> dict[str, Any]:
+    mode = planning_store.normalize_operation_mode(planning_parameters.get("operation_mode"))
+    start = normalized_month_day(
+        planning_parameters.get("winter_start_month"),
+        planning_parameters.get("winter_start_day"),
+        DEFAULT_WINTER_START,
+    )
+    end = normalized_month_day(
+        planning_parameters.get("winter_end_month"),
+        planning_parameters.get("winter_end_day"),
+        DEFAULT_WINTER_END,
+    )
+    return {
+        "mode": mode,
+        "is_summer_mode": mode == "summer",
+        "winter_start_month": start[0],
+        "winter_start_day": start[1],
+        "winter_end_month": end[0],
+        "winter_end_day": end[1],
+        "winter_start_ordinal": month_day_ordinal(start[0], start[1]),
+        "winter_end_ordinal": month_day_ordinal(end[0], end[1]),
+    }
+
+
+DEFAULT_WINTER_START = (10, 1)
+DEFAULT_WINTER_END = (4, 30)
+
+
+def normalized_month_day(value_month: Any, value_day: Any, default: tuple[int, int]) -> tuple[int, int]:
+    month = int(min(12, max(1, round(numeric(value_month, default[0])))))
+    max_day = NON_LEAP_MONTH_DAYS[month - 1]
+    day = int(min(max_day, max(1, round(numeric(value_day, default[1])))))
+    return month, day
+
+
+def month_day_ordinal(month: int, day: int) -> int:
+    month = int(min(12, max(1, month)))
+    day = int(min(NON_LEAP_MONTH_DAYS[month - 1], max(1, day)))
+    return sum(NON_LEAP_MONTH_DAYS[: month - 1]) + day
+
+
+def month_day_from_hour_index(hour_index: int) -> tuple[int, int]:
+    hour = int(min(8760, max(1, hour_index)))
+    day_of_year = (hour - 1) // 24 + 1
+    remaining = day_of_year
+    for month, days in enumerate(NON_LEAP_MONTH_DAYS, start=1):
+        if remaining <= days:
+            return month, remaining
+        remaining -= days
+    return 12, 31
+
+
+def parse_month_day_from_datetime(value: Any) -> tuple[int, int] | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(?:\d{4}[-/年])?(\d{1,2})[-/月](\d{1,2})(?:日)?", text)
+    if not match:
+        return None
+    month = int(match.group(1))
+    day = int(match.group(2))
+    if month < 1 or month > 12:
+        return None
+    if day < 1 or day > NON_LEAP_MONTH_DAYS[month - 1]:
+        return None
+    return month, day
+
+
+def row_month_day(row: dict[str, Any], fallback_hour_index: int) -> tuple[int, int]:
+    parsed = parse_month_day_from_datetime(row.get("datetime"))
+    if parsed is not None:
+        return parsed
+    hour_index = int(numeric(row.get("hour_index"), fallback_hour_index) or fallback_hour_index)
+    return month_day_from_hour_index(hour_index)
+
+
+def month_day_in_range(month: int, day: int, start_ordinal: int, end_ordinal: int) -> bool:
+    ordinal = month_day_ordinal(month, day)
+    if start_ordinal <= end_ordinal:
+        return start_ordinal <= ordinal <= end_ordinal
+    return ordinal >= start_ordinal or ordinal <= end_ordinal
+
+
+def row_is_winter_period(row: dict[str, Any], fallback_hour_index: int, operation_config: dict[str, Any]) -> bool:
+    month, day = row_month_day(row, fallback_hour_index)
+    return month_day_in_range(
+        month,
+        day,
+        int(operation_config["winter_start_ordinal"]),
+        int(operation_config["winter_end_ordinal"]),
+    )
+
+
+def apply_operation_mode_to_time_series(
+    time_series: list[dict[str, Any]],
+    planning_parameters: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    operation_config = operation_mode_config(planning_parameters)
+    adjusted_rows: list[dict[str, Any]] = []
+    winter_hours = 0
+    for index, row in enumerate(time_series):
+        adjusted = dict(row) if isinstance(row, dict) else {}
+        is_winter = row_is_winter_period(adjusted, index + 1, operation_config)
+        adjusted["is_winter_period"] = 1 if is_winter else 0
+        adjusted["operation_stat_included"] = 0 if operation_config["is_summer_mode"] and is_winter else 1
+        if operation_config["is_summer_mode"] and is_winter:
+            adjusted["load"] = 0.0
+            winter_hours += 1
+        adjusted_rows.append(adjusted)
+    operation_config["winter_hours"] = winter_hours
+    operation_config["stat_included_hours"] = len(adjusted_rows) - winter_hours if operation_config["is_summer_mode"] else len(adjusted_rows)
+    return adjusted_rows, operation_config
 
 
 def _safe_linspace(v_min: float, v_max: float, n_points: int) -> np.ndarray:
@@ -435,8 +552,10 @@ def run_optimization(
         if len(time_series) != horizon_hours:
             raise ValueError(f"优化时段数不足，期望{horizon_hours}点，当前为{len(time_series)}")
 
+    planning_parameters = estimate.first_row(scheme_payload.get("planning_parameters"))
+    time_series, operation_config = apply_operation_mode_to_time_series(time_series, planning_parameters)
     emit(log, "info", "开始建立设备台数与时序运行联合优化模型", 5)
-    model = build_planning_model(scheme_payload, time_series)
+    model = build_planning_model(scheme_payload, time_series, operation_config=operation_config)
     emit_model_input_summary(model, log)
     emit_device_candidate_summary(model, log)
     emit(log, "info", "已加入台数上下限、建设成本、柴油成本和绿电占比约束", 15)
@@ -469,10 +588,16 @@ def run_optimization(
     }
 
 
-def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[str, Any]]) -> dict[str, Any]:
+def build_planning_model(
+    scheme_payload: dict[str, Any],
+    time_series: list[dict[str, Any]],
+    operation_config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     # Normalize workbook/UI payload data into arrays and typed device records
     # before the MILP builder sees it.
     planning_parameters = estimate.first_row(scheme_payload.get("planning_parameters"))
+    if operation_config is None:
+        time_series, operation_config = apply_operation_mode_to_time_series(time_series, planning_parameters)
     diesel_price = max(0.0, numeric(planning_parameters.get("diesel_price"), 0.0))
     diesel_objective_price = max(
         0.0,
@@ -550,6 +675,7 @@ def build_planning_model(scheme_payload: dict[str, Any], time_series: list[dict[
     return {
         "problem_name": str(scheme_payload.get("_optimization_problem_name") or "规划求解"),
         "time_series": time_series,
+        "operation_mode": operation_config,
         "loads": loads,
         "diesel_price": diesel_price,
         "diesel_objective_price": diesel_objective_price,
@@ -1915,6 +2041,7 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
             f"时段={hours}小时，"
             f"负荷总电量={format_log_number(load_energy)}kWh，"
             f"最大负荷={format_log_number(peak_load)}kW，"
+            f"工作模式={operation_mode_label(model.get('operation_mode', {}))}，"
             f"柴油价格={format_log_number(model['diesel_price'])}万元/吨，"
             f"柴发最小开机={model['diesel_minimum_on_hours']}小时，"
             f"柴发最小停机={model['diesel_minimum_off_hours']}小时，"
@@ -1939,6 +2066,17 @@ def emit_model_input_summary(model: dict[str, Any], log: LogSink | None = None) 
         ),
         8,
     )
+
+
+def operation_mode_label(operation_config: dict[str, Any]) -> str:
+    if not isinstance(operation_config, dict) or operation_config.get("mode") != "summer":
+        return "全年运行"
+    start_month = int(operation_config.get("winter_start_month", DEFAULT_WINTER_START[0]))
+    start_day = int(operation_config.get("winter_start_day", DEFAULT_WINTER_START[1]))
+    end_month = int(operation_config.get("winter_end_month", DEFAULT_WINTER_END[0]))
+    end_day = int(operation_config.get("winter_end_day", DEFAULT_WINTER_END[1]))
+    winter_hours = int(operation_config.get("winter_hours", 0))
+    return f"度夏运行（冬季{start_month}月{start_day}日-{end_month}月{end_day}日，置零{winter_hours}小时）"
 
 
 def emit_device_candidate_summary(model: dict[str, Any], log: LogSink | None = None) -> None:
@@ -2089,6 +2227,8 @@ def dispatch_rows_from_quantities(model: dict[str, Any], quantities: dict[tuple[
                 "wind_speed": round(numeric(source_row.get("wind_speed"), 0.0), 4),
                 "solar_irradiance": round(numeric(source_row.get("solar_irradiance"), 0.0), 4),
                 "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
+                "is_winter_period": int(numeric(source_row.get("is_winter_period"), 0.0)),
+                "operation_stat_included": int(numeric(source_row.get("operation_stat_included"), 1.0)),
                 "load": load,
                 "diesel_power": 0.0,
                 "diesel_capacity": 0.0,
@@ -2300,6 +2440,8 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
                 "wind_speed": round(numeric(source_row.get("wind_speed"), 0.0), 4),
                 "solar_irradiance": round(numeric(source_row.get("solar_irradiance"), 0.0), 4),
                 "temperature": round(numeric(source_row.get("temperature"), 0.0), 4),
+                "is_winter_period": int(numeric(source_row.get("is_winter_period"), 0.0)),
+                "operation_stat_included": int(numeric(source_row.get("operation_stat_included"), 1.0)),
                 "load": round(load, 4),
                 "diesel_power": round(diesel_power, 4),
                 "diesel_capacity": round(diesel_capacity, 4),
@@ -2342,35 +2484,36 @@ def dispatch_rows_from_solution(model: dict[str, Any], solution: np.ndarray) -> 
 
 
 def dispatch_totals(dispatch_rows: list[dict[str, Any]]) -> dict[str, float]:
+    stat_rows = estimate.rows_for_operation_statistics(dispatch_rows)
     totals = {
-        "load_energy": estimate.sum_numeric(dispatch_rows, "load"),
-        "wind_energy": estimate.sum_numeric(dispatch_rows, "wind_power"),
-        "pv_energy": estimate.sum_numeric(dispatch_rows, "pv_power"),
-        "storage_discharge_energy": estimate.sum_numeric(dispatch_rows, "storage_discharge"),
-        "storage_charge_energy": estimate.sum_numeric(dispatch_rows, "storage_charge"),
-        "diesel_energy": estimate.sum_numeric(dispatch_rows, "diesel_power"),
-        "curtailed_energy": estimate.sum_numeric(dispatch_rows, "curtailed_power"),
-        "unmet_load_energy": estimate.sum_numeric(dispatch_rows, "unmet_load"),
-        "hydrogen_production_energy": estimate.sum_numeric(dispatch_rows, "hydrogen_production_power"),
-        "fuel_cell_energy": estimate.sum_numeric(dispatch_rows, "fuel_cell_power"),
-        "wind_available_energy": estimate.sum_numeric(dispatch_rows, "wind_available"),
-        "pv_available_energy": estimate.sum_numeric(dispatch_rows, "pv_available"),
+        "load_energy": estimate.sum_numeric(stat_rows, "load"),
+        "wind_energy": estimate.sum_numeric(stat_rows, "wind_power"),
+        "pv_energy": estimate.sum_numeric(stat_rows, "pv_power"),
+        "storage_discharge_energy": estimate.sum_numeric(stat_rows, "storage_discharge"),
+        "storage_charge_energy": estimate.sum_numeric(stat_rows, "storage_charge"),
+        "diesel_energy": estimate.sum_numeric(stat_rows, "diesel_power"),
+        "curtailed_energy": estimate.sum_numeric(stat_rows, "curtailed_power"),
+        "unmet_load_energy": estimate.sum_numeric(stat_rows, "unmet_load"),
+        "hydrogen_production_energy": estimate.sum_numeric(stat_rows, "hydrogen_production_power"),
+        "fuel_cell_energy": estimate.sum_numeric(stat_rows, "fuel_cell_power"),
+        "wind_available_energy": estimate.sum_numeric(stat_rows, "wind_available"),
+        "pv_available_energy": estimate.sum_numeric(stat_rows, "pv_available"),
         "renewable_available_energy": sum(
             numeric(row.get("renewable_available"), numeric(row.get("wind_available"), 0.0) + numeric(row.get("pv_available"), 0.0))
-            for row in dispatch_rows
+            for row in stat_rows
         ),
         "renewable_energy": sum(
             numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0)
-            for row in dispatch_rows
+            for row in stat_rows
         ),
-        "wind_curtailed_energy": estimate.sum_numeric(dispatch_rows, "wind_curtailed_power"),
-        "pv_curtailed_energy": estimate.sum_numeric(dispatch_rows, "pv_curtailed_power"),
-        "hydrogen_storage_increase": sum(estimate.positive_delta(dispatch_rows, "hydrogen_storage", 0.0)),
-        "hydrogen_storage_decrease": sum(estimate.negative_delta(dispatch_rows, "hydrogen_storage", 0.0)),
+        "wind_curtailed_energy": estimate.sum_numeric(stat_rows, "wind_curtailed_power"),
+        "pv_curtailed_energy": estimate.sum_numeric(stat_rows, "pv_curtailed_power"),
+        "hydrogen_storage_increase": estimate.operation_delta_sum(dispatch_rows, "hydrogen_storage", 0.0, seek="increase"),
+        "hydrogen_storage_decrease": estimate.operation_delta_sum(dispatch_rows, "hydrogen_storage", 0.0, seek="decrease"),
     }
     totals["renewable_curtailed_rate"] = estimate.percent(totals["curtailed_energy"], totals["renewable_available_energy"])
-    totals["diesel_consumption"] = sum(numeric(row.get("diesel_consumption"), 0.0) for row in dispatch_rows)
-    totals["hydrogen_production"] = sum(numeric(row.get("hydrogen_production"), 0.0) for row in dispatch_rows)
+    totals["diesel_consumption"] = sum(numeric(row.get("diesel_consumption"), 0.0) for row in stat_rows)
+    totals["hydrogen_production"] = sum(numeric(row.get("hydrogen_production"), 0.0) for row in stat_rows)
     # Green electricity is primary renewable generation only. Storage and
     # hydrogen shift previously generated energy and must not be counted again
     # as new green generation, otherwise the same wind/PV energy is duplicated.
@@ -2496,6 +2639,7 @@ def build_results(
     frequency_risk_hours = frequency_risk_hour_count(dispatch_rows)
     annual_rows = [
         *capacity_summary_rows(planning_rows),
+        *operation_mode_result_rows(model),
         *estimate.annual_energy_rows(totals, green_ratio, curtailed_ratio),
         {"指标": "绿电年发电量", "数值": totals["green_generation_energy"], "单位": "kWh"},
         {"指标": "总发电量", "数值": totals["total_generation_energy"], "单位": "kWh"},
@@ -2610,6 +2754,21 @@ def build_metrics(totals: dict[str, float], costs: dict[str, float]) -> list[dic
     ]
 
 
+def operation_mode_result_rows(model: dict[str, Any]) -> list[dict[str, Any]]:
+    operation_config = model.get("operation_mode") if isinstance(model.get("operation_mode"), dict) else {}
+    if operation_config.get("mode") != "summer":
+        return [{"指标": "工作模式", "数值": "全年运行", "单位": ""}]
+    start_month = int(operation_config.get("winter_start_month", DEFAULT_WINTER_START[0]))
+    start_day = int(operation_config.get("winter_start_day", DEFAULT_WINTER_START[1]))
+    end_month = int(operation_config.get("winter_end_month", DEFAULT_WINTER_END[0]))
+    end_day = int(operation_config.get("winter_end_day", DEFAULT_WINTER_END[1]))
+    return [
+        {"指标": "工作模式", "数值": "度夏运行", "单位": ""},
+        {"指标": "冬季时段", "数值": f"{start_month}月{start_day}日-{end_month}月{end_day}日", "单位": ""},
+        {"指标": "纳入统计小时数", "数值": int(operation_config.get("stat_included_hours", 0)), "单位": "h"},
+    ]
+
+
 def capacity_summary_rows(planning_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     capacities = estimate.capacities_from_planning_rows(planning_rows)
     return [
@@ -2659,31 +2818,32 @@ def aggregate_daily_partial(dispatch_rows: list[dict[str, Any]]) -> list[dict[st
         rows = dispatch_rows[start : start + 24]
         if not rows:
             continue
-        previous_hydrogen_storage = numeric(dispatch_rows[start - 1].get("hydrogen_storage"), 0.0) if start > 0 else 0.0
-        hydrogen_storage_increase = sum(estimate.positive_delta(rows, "hydrogen_storage", previous_hydrogen_storage))
-        hydrogen_storage_decrease = sum(estimate.negative_delta(rows, "hydrogen_storage", previous_hydrogen_storage))
+        stat_rows = estimate.rows_for_operation_statistics(rows)
+        previous_hydrogen_storage = estimate.previous_contiguous_operation_stat_numeric(dispatch_rows, start, "hydrogen_storage", 0.0)
+        hydrogen_storage_increase = estimate.operation_delta_sum(rows, "hydrogen_storage", previous_hydrogen_storage, seek="increase")
+        hydrogen_storage_decrease = estimate.operation_delta_sum(rows, "hydrogen_storage", previous_hydrogen_storage, seek="decrease")
         daily_row = {
             "day": day_index,
-            "load_energy": round(estimate.sum_numeric(rows, "load"), 4),
-            "diesel_energy": round(estimate.sum_numeric(rows, "diesel_power"), 4),
-            "wind_energy": round(estimate.sum_numeric(rows, "wind_power"), 4),
-            "pv_energy": round(estimate.sum_numeric(rows, "pv_power"), 4),
-            "hydrogen_energy": round(estimate.sum_numeric(rows, "fuel_cell_power"), 4),
-            "fuel_cell_energy": round(estimate.sum_numeric(rows, "fuel_cell_power"), 4),
-            "storage_charge_energy": round(estimate.sum_numeric(rows, "storage_charge"), 4),
-            "storage_discharge_energy": round(estimate.sum_numeric(rows, "storage_discharge"), 4),
-            "hydrogen_production_energy": round(estimate.sum_numeric(rows, "hydrogen_production_power"), 4),
+            "load_energy": round(estimate.sum_numeric(stat_rows, "load"), 4),
+            "diesel_energy": round(estimate.sum_numeric(stat_rows, "diesel_power"), 4),
+            "wind_energy": round(estimate.sum_numeric(stat_rows, "wind_power"), 4),
+            "pv_energy": round(estimate.sum_numeric(stat_rows, "pv_power"), 4),
+            "hydrogen_energy": round(estimate.sum_numeric(stat_rows, "fuel_cell_power"), 4),
+            "fuel_cell_energy": round(estimate.sum_numeric(stat_rows, "fuel_cell_power"), 4),
+            "storage_charge_energy": round(estimate.sum_numeric(stat_rows, "storage_charge"), 4),
+            "storage_discharge_energy": round(estimate.sum_numeric(stat_rows, "storage_discharge"), 4),
+            "hydrogen_production_energy": round(estimate.sum_numeric(stat_rows, "hydrogen_production_power"), 4),
             "hydrogen_storage_increase": round(hydrogen_storage_increase, 4),
             "hydrogen_storage_decrease": round(hydrogen_storage_decrease, 4),
-            "wind_available_energy": round(estimate.sum_numeric(rows, "wind_available"), 4),
-            "pv_available_energy": round(estimate.sum_numeric(rows, "pv_available"), 4),
-            "renewable_available_energy": round(sum(numeric(row.get("renewable_available"), 0.0) for row in rows), 4),
-            "renewable_energy": round(sum(numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0) for row in rows), 4),
-            "wind_curtailed_energy": round(estimate.sum_numeric(rows, "wind_curtailed_power"), 4),
-            "pv_curtailed_energy": round(estimate.sum_numeric(rows, "pv_curtailed_power"), 4),
-            "curtailed_energy": round(estimate.sum_numeric(rows, "curtailed_power"), 4),
-            "unmet_load_energy": round(estimate.sum_numeric(rows, "unmet_load"), 4),
-            "unmet_load": round(estimate.sum_numeric(rows, "unmet_load"), 4),
+            "wind_available_energy": round(estimate.sum_numeric(stat_rows, "wind_available"), 4),
+            "pv_available_energy": round(estimate.sum_numeric(stat_rows, "pv_available"), 4),
+            "renewable_available_energy": round(sum(numeric(row.get("renewable_available"), 0.0) for row in stat_rows), 4),
+            "renewable_energy": round(sum(numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0) for row in stat_rows), 4),
+            "wind_curtailed_energy": round(estimate.sum_numeric(stat_rows, "wind_curtailed_power"), 4),
+            "pv_curtailed_energy": round(estimate.sum_numeric(stat_rows, "pv_curtailed_power"), 4),
+            "curtailed_energy": round(estimate.sum_numeric(stat_rows, "curtailed_power"), 4),
+            "unmet_load_energy": round(estimate.sum_numeric(stat_rows, "unmet_load"), 4),
+            "unmet_load": round(estimate.sum_numeric(stat_rows, "unmet_load"), 4),
         }
         estimate.add_energy_ratios(daily_row)
         daily.append(daily_row)

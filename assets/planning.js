@@ -179,6 +179,11 @@ const planningParameterSpecs = [
   ["diesel_price", "柴油价格(万元/吨)", "number", { min: 0, defaultValue: 0 }],
   ["diesel_minimum_on_hours", "柴发开机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 12 }],
   ["diesel_minimum_off_hours", "柴发关机持续工作小时数下限", "number", { min: 0, max: 24, integer: true, defaultValue: 12 }],
+  ["operation_mode", "工作模式", "select", { defaultValue: "annual", options: [["annual", "全年运行"], ["summer", "度夏运行"]] }],
+  ["winter_start_month", "冬季开始月份", "number", { min: 1, max: 12, integer: true, positive: true, defaultValue: 10 }],
+  ["winter_start_day", "冬季开始日期", "number", { min: 1, max: 31, integer: true, positive: true, defaultValue: 1 }],
+  ["winter_end_month", "冬季结束月份", "number", { min: 1, max: 12, integer: true, positive: true, defaultValue: 4 }],
+  ["winter_end_day", "冬季结束日期", "number", { min: 1, max: 31, integer: true, positive: true, defaultValue: 30 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 1440, integer: true, positive: true, defaultValue: 60 }],
   ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "原生MOSEK"], ["scipy", "SciPy HiGHS"]] }],
@@ -222,6 +227,11 @@ const planningParameterGroups = [
       "diesel_price",
       "diesel_minimum_on_hours",
       "diesel_minimum_off_hours",
+      "operation_mode",
+      "winter_start_month",
+      "winter_start_day",
+      "winter_end_month",
+      "winter_end_day",
       "green_power_ratio_lower",
       "optimization_time_limit_minutes",
       "preferred_solver",
@@ -4647,6 +4657,26 @@ function collectPlanningParameterWarnings() {
   if (Number.isFinite(steadyUpper) && Number.isFinite(steadyLower) && steadyUpper < steadyLower) {
     messages.push({ level: "error", message: "稳态频率上限(Hz)不能小于稳态频率下限(Hz)" });
   }
+  messages.push(...collectWinterDateWarnings(row));
+  return messages;
+}
+
+function collectWinterDateWarnings(row) {
+  const messages = [];
+  const startMonth = Number(row.winter_start_month);
+  const startDay = Number(row.winter_start_day);
+  const endMonth = Number(row.winter_end_month);
+  const endDay = Number(row.winter_end_day);
+  [
+    [startMonth, startDay, "冬季开始日期"],
+    [endMonth, endDay, "冬季结束日期"],
+  ].forEach(([month, day, label]) => {
+    if (!Number.isInteger(month) || !Number.isInteger(day) || month < 1 || month > 12 || day < 1 || day > 31) return;
+    const monthDays = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+    if (day > monthDays) {
+      messages.push({ level: "error", message: `${label}不能超过${month}月${monthDays}日` });
+    }
+  });
   return messages;
 }
 

@@ -109,31 +109,32 @@ def aggregate_daily(dispatch_rows: list[dict[str, Any]]) -> list[dict[str, Any]]
     daily = []
     for day_index in range(365):
         rows = dispatch_rows[day_index * 24 : (day_index + 1) * 24]
-        previous_hydrogen_storage = numeric(dispatch_rows[day_index * 24 - 1].get("hydrogen_storage"), 0.0) if day_index > 0 else 0.0
-        hydrogen_storage_increase = sum(positive_delta(rows, "hydrogen_storage", previous_hydrogen_storage))
-        hydrogen_storage_decrease = sum(negative_delta(rows, "hydrogen_storage", previous_hydrogen_storage))
+        stat_rows = rows_for_operation_statistics(rows)
+        previous_hydrogen_storage = previous_contiguous_operation_stat_numeric(dispatch_rows, day_index * 24, "hydrogen_storage", 0.0)
+        hydrogen_storage_increase = operation_delta_sum(rows, "hydrogen_storage", previous_hydrogen_storage, seek="increase")
+        hydrogen_storage_decrease = operation_delta_sum(rows, "hydrogen_storage", previous_hydrogen_storage, seek="decrease")
         daily_row = {
             "day": day_index + 1,
-            "load_energy": round(sum_numeric(rows, "load"), 4),
-            "diesel_energy": round(sum_numeric(rows, "diesel_power"), 4),
-            "wind_energy": round(sum_numeric(rows, "wind_power"), 4),
-            "pv_energy": round(sum_numeric(rows, "pv_power"), 4),
-            "hydrogen_energy": round(sum_numeric(rows, "fuel_cell_power"), 4),
-            "fuel_cell_energy": round(sum_numeric(rows, "fuel_cell_power"), 4),
-            "storage_charge_energy": round(sum_numeric(rows, "storage_charge"), 4),
-            "storage_discharge_energy": round(sum_numeric(rows, "storage_discharge"), 4),
-            "hydrogen_production_energy": round(sum_numeric(rows, "hydrogen_production_power"), 4),
+            "load_energy": round(sum_numeric(stat_rows, "load"), 4),
+            "diesel_energy": round(sum_numeric(stat_rows, "diesel_power"), 4),
+            "wind_energy": round(sum_numeric(stat_rows, "wind_power"), 4),
+            "pv_energy": round(sum_numeric(stat_rows, "pv_power"), 4),
+            "hydrogen_energy": round(sum_numeric(stat_rows, "fuel_cell_power"), 4),
+            "fuel_cell_energy": round(sum_numeric(stat_rows, "fuel_cell_power"), 4),
+            "storage_charge_energy": round(sum_numeric(stat_rows, "storage_charge"), 4),
+            "storage_discharge_energy": round(sum_numeric(stat_rows, "storage_discharge"), 4),
+            "hydrogen_production_energy": round(sum_numeric(stat_rows, "hydrogen_production_power"), 4),
             "hydrogen_storage_increase": round(hydrogen_storage_increase, 4),
             "hydrogen_storage_decrease": round(hydrogen_storage_decrease, 4),
-            "wind_available_energy": round(sum_numeric(rows, "wind_available"), 4),
-            "pv_available_energy": round(sum_numeric(rows, "pv_available"), 4),
-            "renewable_available_energy": round(sum(numeric(row.get("renewable_available"), numeric(row.get("wind_available"), 0.0) + numeric(row.get("pv_available"), 0.0)) for row in rows), 4),
-            "renewable_energy": round(sum(numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0) for row in rows), 4),
-            "wind_curtailed_energy": round(sum_numeric(rows, "wind_curtailed_power"), 4),
-            "pv_curtailed_energy": round(sum_numeric(rows, "pv_curtailed_power"), 4),
-            "curtailed_energy": round(sum_numeric(rows, "curtailed_power"), 4),
-            "unmet_load_energy": round(sum_numeric(rows, "unmet_load"), 4),
-            "unmet_load": round(sum_numeric(rows, "unmet_load"), 4),
+            "wind_available_energy": round(sum_numeric(stat_rows, "wind_available"), 4),
+            "pv_available_energy": round(sum_numeric(stat_rows, "pv_available"), 4),
+            "renewable_available_energy": round(sum(numeric(row.get("renewable_available"), numeric(row.get("wind_available"), 0.0) + numeric(row.get("pv_available"), 0.0)) for row in stat_rows), 4),
+            "renewable_energy": round(sum(numeric(row.get("wind_power"), 0.0) + numeric(row.get("pv_power"), 0.0) for row in stat_rows), 4),
+            "wind_curtailed_energy": round(sum_numeric(stat_rows, "wind_curtailed_power"), 4),
+            "pv_curtailed_energy": round(sum_numeric(stat_rows, "pv_curtailed_power"), 4),
+            "curtailed_energy": round(sum_numeric(stat_rows, "curtailed_power"), 4),
+            "unmet_load_energy": round(sum_numeric(stat_rows, "unmet_load"), 4),
+            "unmet_load": round(sum_numeric(stat_rows, "unmet_load"), 4),
         }
         add_energy_ratios(daily_row)
         daily.append(daily_row)
@@ -171,6 +172,59 @@ def negative_delta(rows: list[dict[str, Any]], field: str, initial_value: float 
 
 def sum_numeric(rows: list[dict[str, Any]], field: str) -> float:
     return sum(numeric(row.get(field), 0.0) for row in rows)
+
+
+def operation_stat_included(row: dict[str, Any]) -> bool:
+    value = row.get("operation_stat_included", 1)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return float(value) != 0.0
+    return str(value).strip().lower() not in {"0", "false", "no", "n", "否"}
+
+
+def rows_for_operation_statistics(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if isinstance(row, dict) and operation_stat_included(row)]
+
+
+def previous_contiguous_operation_stat_numeric(
+    rows: list[dict[str, Any]],
+    start_index: int,
+    field: str,
+    default: float = 0.0,
+) -> float | None:
+    if start_index <= 0:
+        return default
+    if start_index > len(rows):
+        return None
+    row = rows[start_index - 1]
+    if isinstance(row, dict) and operation_stat_included(row):
+        return numeric(row.get(field), default)
+    return None
+
+
+def operation_delta_sum(
+    rows: list[dict[str, Any]],
+    field: str,
+    initial_value: float | None = 0.0,
+    *,
+    seek: str,
+) -> float:
+    total = 0.0
+    previous = initial_value
+    has_previous = initial_value is not None
+    for row in rows:
+        if not isinstance(row, dict) or not operation_stat_included(row):
+            previous = None
+            has_previous = False
+            continue
+        current = numeric(row.get(field), 0.0)
+        if has_previous and previous is not None:
+            delta = current - previous
+            total += max(0.0, delta) if seek == "increase" else max(0.0, -delta)
+        previous = current
+        has_previous = True
+    return total
 
 
 def percent(part: float, total: float) -> float:

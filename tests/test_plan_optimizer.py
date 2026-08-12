@@ -231,6 +231,118 @@ class PlanOptimizerTest(unittest.TestCase):
         self.assertAlmostEqual(totals["green_power_ratio"], 60.0)
         self.assertAlmostEqual(totals["renewable_ratio"], totals["green_power_ratio"])
 
+    def test_summer_operation_mode_zeroes_winter_loads_without_mutating_source_rows(self):
+        rows = [
+            {"hour_index": 1, "datetime": "2025-01-01 00:00", "load": 100},
+            {"hour_index": 4345, "datetime": "2025-07-01 00:00", "load": 200},
+        ]
+        planning_parameters = {
+            "operation_mode": "summer",
+            "winter_start_month": 10,
+            "winter_start_day": 1,
+            "winter_end_month": 4,
+            "winter_end_day": 30,
+        }
+
+        adjusted, config = plan_optimizer.apply_operation_mode_to_time_series(rows, planning_parameters)
+
+        self.assertEqual(config["mode"], "summer")
+        self.assertEqual(config["winter_hours"], 1)
+        self.assertEqual(adjusted[0]["load"], 0.0)
+        self.assertEqual(adjusted[0]["is_winter_period"], 1)
+        self.assertEqual(adjusted[0]["operation_stat_included"], 0)
+        self.assertEqual(adjusted[1]["load"], 200)
+        self.assertEqual(adjusted[1]["is_winter_period"], 0)
+        self.assertEqual(adjusted[1]["operation_stat_included"], 1)
+        self.assertEqual(rows[0]["load"], 100)
+
+    def test_dispatch_totals_exclude_winter_rows_from_summer_energy_statistics(self):
+        rows = [
+            {
+                "operation_stat_included": 0,
+                "load": 0,
+                "diesel_power": 0,
+                "wind_power": 0,
+                "pv_power": 0,
+                "storage_discharge": 0,
+                "storage_charge": 0,
+                "hydrogen_production_power": 0,
+                "fuel_cell_power": 0,
+                "curtailed_power": 70,
+                "unmet_load": 0,
+                "wind_available": 40,
+                "pv_available": 30,
+                "renewable_available": 70,
+                "wind_curtailed_power": 40,
+                "pv_curtailed_power": 30,
+                "hydrogen_storage": 0,
+                "diesel_consumption": 0,
+                "hydrogen_production": 0,
+            },
+            {
+                "operation_stat_included": 1,
+                "load": 100,
+                "diesel_power": 20,
+                "wind_power": 50,
+                "pv_power": 10,
+                "storage_discharge": 0,
+                "storage_charge": 0,
+                "hydrogen_production_power": 0,
+                "fuel_cell_power": 0,
+                "curtailed_power": 10,
+                "unmet_load": 0,
+                "wind_available": 55,
+                "pv_available": 15,
+                "renewable_available": 70,
+                "wind_curtailed_power": 5,
+                "pv_curtailed_power": 5,
+                "hydrogen_storage": 0,
+                "diesel_consumption": 0.01,
+                "hydrogen_production": 0,
+            },
+        ]
+
+        totals = plan_optimizer.dispatch_totals(rows)
+
+        self.assertEqual(totals["load_energy"], 100)
+        self.assertEqual(totals["diesel_energy"], 20)
+        self.assertEqual(totals["wind_curtailed_energy"], 5)
+        self.assertEqual(totals["pv_curtailed_energy"], 5)
+        self.assertEqual(totals["curtailed_energy"], 10)
+        self.assertEqual(totals["renewable_available_energy"], 70)
+        self.assertAlmostEqual(totals["renewable_curtailed_rate"], 14.2857, places=4)
+
+    def test_build_results_adds_summer_operation_mode_rows_to_annual_table(self):
+        totals = self._zero_totals()
+        costs = self._zero_costs()
+        dispatch_rows = [
+            {"unmet_load": 0, "storage_soc": 0, "hydrogen_storage": 0},
+        ]
+
+        results = plan_optimizer.build_results(
+            planning_rows=[],
+            dispatch_rows=dispatch_rows,
+            totals=totals,
+            costs=costs,
+            model={
+                "green_ratio_lower": 0,
+                "frequency": {"nominal_frequency_hz": 50},
+                "operation_mode": {
+                    "mode": "summer",
+                    "winter_start_month": 10,
+                    "winter_start_day": 1,
+                    "winter_end_month": 4,
+                    "winter_end_day": 30,
+                    "stat_included_hours": 3648,
+                },
+            },
+        )
+
+        annual_values = {row["指标"]: row["数值"] for row in results["overview_tables"][1]["rows"]}
+        self.assertEqual(annual_values["工作模式"], "度夏运行")
+        self.assertEqual(annual_values["冬季时段"], "10月1日-4月30日")
+        self.assertEqual(annual_values["纳入统计小时数"], 3648)
+
     def test_energy_ratios_align_new_energy_share_with_green_ratio(self):
         row = {
             "load_energy": 1000.0,
