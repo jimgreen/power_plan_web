@@ -20,6 +20,7 @@ import queue
 import re
 import secrets
 import sqlite3
+import tempfile
 import threading
 import time
 import traceback
@@ -2026,10 +2027,16 @@ def write_result_curve_sqlite(result_path: Path, curves: dict) -> None:
     if not curve_path.exists() or not isinstance(curves, dict):
         return
     db_path = result_curves_sqlite_path(result_path)
-    tmp_path = db_path.with_name(f".{db_path.name}.tmp")
-    tmp_path.unlink(missing_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{db_path.name}.",
+        suffix=".tmp",
+        dir=db_path.parent,
+        delete=False,
+    ) as temp_file:
+        tmp_path = Path(temp_file.name)
     try:
-        with sqlite3.connect(tmp_path) as connection:
+        connection = sqlite3.connect(tmp_path)
+        try:
             connection.execute("PRAGMA journal_mode=OFF")
             connection.execute("PRAGMA synchronous=OFF")
             connection.execute(
@@ -2077,9 +2084,15 @@ def write_result_curve_sqlite(result_path: Path, curves: dict) -> None:
                     ("updated_at", datetime.now().isoformat(timespec="seconds")),
                 ],
             )
+            connection.commit()
+        finally:
+            connection.close()
         file_ops.replace_file_with_retry(tmp_path, db_path, "曲线SQLite缓存")
     finally:
-        tmp_path.unlink(missing_ok=True)
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def result_curve_json_safe(value):
@@ -2107,7 +2120,7 @@ def read_result_curve_sqlite_meta(result_path: Path) -> dict[str, str] | None:
     if not db_path.exists() or not curve_path.exists():
         return None
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             meta = {str(key): str(value) for key, value in connection.execute("SELECT key, value FROM meta")}
     except (OSError, sqlite3.Error):
         return None
@@ -2128,7 +2141,7 @@ def read_result_curve_sqlite_rows(result_path: Path, group_key: str, limit: int 
         sql += " LIMIT ?"
         params.append(limit)
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             rows = [json.loads(payload) for (payload,) in connection.execute(sql, params)]
     except (OSError, sqlite3.Error, json.JSONDecodeError):
         return None

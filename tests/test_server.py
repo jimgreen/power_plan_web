@@ -2794,6 +2794,52 @@ class PowerPlanServerTest(unittest.TestCase):
         finally:
             shutil.rmtree(planning_root, ignore_errors=True)
 
+    def test_curve_sqlite_writer_closes_connection_before_replacing_unique_temp_file(self):
+        planning_root = WEB_ROOT / "tests" / "tmp_curve_sqlite_writer"
+        shutil.rmtree(planning_root, ignore_errors=True)
+        planning_root.mkdir(parents=True)
+        result_path = planning_root / "opt_results.xlsx"
+        curve_path = server.result_curves_workbook_path(result_path)
+        curve_path.write_bytes(b"curve source")
+        db_path = server.result_curves_sqlite_path(result_path)
+        real_connect = server.sqlite3.connect
+        real_replace = server.file_ops.replace_file_with_retry
+        connections = []
+        temp_paths = []
+
+        def tracking_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        def checked_replace(source, target, label):
+            with self.assertRaises(server.sqlite3.ProgrammingError):
+                connections[-1].execute("SELECT 1")
+            temp_paths.append(Path(source))
+            return real_replace(source, target, label)
+
+        curves = {
+            "green_daily": [{"day": 1, "load_energy": 10}],
+            "green_monthly": [],
+            "green_hourly": [],
+            "safety_daily": [],
+        }
+        try:
+            with patch.object(server.sqlite3, "connect", side_effect=tracking_connect), patch.object(
+                server.file_ops,
+                "replace_file_with_retry",
+                side_effect=checked_replace,
+            ):
+                server.write_result_curve_sqlite(result_path, curves)
+                server.write_result_curve_sqlite(result_path, curves)
+
+            self.assertTrue(db_path.exists())
+            self.assertEqual(len(temp_paths), 2)
+            self.assertNotEqual(temp_paths[0], temp_paths[1])
+            self.assertFalse(list(planning_root.glob(f"{db_path.name}.*.tmp")))
+        finally:
+            shutil.rmtree(planning_root, ignore_errors=True)
+
     def test_comparison_workbook_reads_curves_from_split_curve_workbook(self):
         result_path = WEB_ROOT / "tests" / "tmp_comparison_split_results.xlsx"
         curve_path = server.result_curves_workbook_path(result_path)

@@ -307,6 +307,49 @@ class PlanningStoreTest(unittest.TestCase):
 
         self.assertEqual(loaded["time_series"][0]["load"], 123.45)
 
+    def test_time_series_sqlite_writer_closes_connection_before_replacing_unique_temp_file(self):
+        source_path = self.tmp_dir / "time_series.xlsx"
+        source_path.write_bytes(b"time series source")
+        db_path = self.tmp_dir / planning_store.TIME_SERIES_SQLITE_NAME
+        real_connect = planning_store.sqlite3.connect
+        real_replace = planning_store.file_ops.replace_file_with_retry
+        connections = []
+        temp_paths = []
+
+        def tracking_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            connections.append(connection)
+            return connection
+
+        def checked_replace(source, target, label):
+            with self.assertRaises(planning_store.sqlite3.ProgrammingError):
+                connections[-1].execute("SELECT 1")
+            temp_paths.append(Path(source))
+            return real_replace(source, target, label)
+
+        rows = [
+            {
+                "hour_index": 1,
+                "datetime": "2026-01-01 00:00",
+                "wind_speed": 1.0,
+                "solar_irradiance": 2.0,
+                "load": 3.0,
+                "temperature": 4.0,
+            }
+        ]
+        with patch.object(planning_store.sqlite3, "connect", side_effect=tracking_connect), patch.object(
+            planning_store.file_ops,
+            "replace_file_with_retry",
+            side_effect=checked_replace,
+        ):
+            planning_store.write_time_series_sqlite(db_path, source_path, rows)
+            planning_store.write_time_series_sqlite(db_path, source_path, rows)
+
+        self.assertTrue(db_path.exists())
+        self.assertEqual(len(temp_paths), 2)
+        self.assertNotEqual(temp_paths[0], temp_paths[1])
+        self.assertFalse(list(self.tmp_dir.glob(f"{db_path.name}.*.tmp")))
+
     def test_read_scheme_reuses_cached_workbook_until_file_changes(self):
         payload = self.store.create_scheme("方案A")
         planning_store.PARAMETER_WORKBOOK_CACHE.clear()

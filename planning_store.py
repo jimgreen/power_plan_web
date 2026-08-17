@@ -10,6 +10,7 @@ import json
 import shutil
 import sqlite3
 import tempfile
+from contextlib import closing
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -1100,7 +1101,7 @@ def read_time_series_sqlite_payload(parameter_path: Path, scheme: str) -> dict[s
         return None
     expected_signature = sqlite_source_signature(source_path)
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             meta = read_sqlite_meta(connection)
             if meta.get("schema_version") != TIME_SERIES_SQLITE_SCHEMA_VERSION:
                 return None
@@ -1134,7 +1135,7 @@ def should_refresh_time_series_sqlite(db_path: Path, source_path: Path) -> bool:
     if not db_path.exists() or not source_path.exists():
         return True
     try:
-        with sqlite3.connect(db_path) as connection:
+        with closing(sqlite3.connect(db_path)) as connection:
             meta = read_sqlite_meta(connection)
         return (
             meta.get("schema_version") != TIME_SERIES_SQLITE_SCHEMA_VERSION
@@ -1148,10 +1149,16 @@ def write_time_series_sqlite(db_path: Path, source_path: Path, rows: list[dict[s
     if not isinstance(rows, list) or not source_path.exists():
         return
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = db_path.with_name(f".{db_path.name}.tmp")
-    tmp_path.unlink(missing_ok=True)
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{db_path.name}.",
+        suffix=".tmp",
+        dir=db_path.parent,
+        delete=False,
+    ) as temp_file:
+        tmp_path = Path(temp_file.name)
     try:
-        with sqlite3.connect(tmp_path) as connection:
+        connection = sqlite3.connect(tmp_path)
+        try:
             connection.execute("PRAGMA journal_mode=OFF")
             connection.execute("PRAGMA synchronous=OFF")
             connection.execute(
@@ -1208,9 +1215,15 @@ def write_time_series_sqlite(db_path: Path, source_path: Path, rows: list[dict[s
                     ("updated_at", datetime.now().isoformat(timespec="seconds")),
                 ],
             )
+            connection.commit()
+        finally:
+            connection.close()
         file_ops.replace_file_with_retry(tmp_path, db_path, "时序SQLite缓存")
     finally:
-        tmp_path.unlink(missing_ok=True)
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def read_sqlite_meta(connection: sqlite3.Connection) -> dict[str, str]:
