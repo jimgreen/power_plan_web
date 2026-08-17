@@ -173,6 +173,7 @@ SHEET_SPECS: dict[str, tuple[str, list[str]]] = {
             "green_power_ratio_lower",
             "optimization_time_limit_minutes",
             "preferred_solver",
+            "modeling_interface",
             "initial_storage_soc_ratio",
             "storage_balance_mode",
             "initial_hydrogen_storage_ratio",
@@ -322,6 +323,7 @@ DEFAULT_PLANNING_PARAMETERS: dict[str, Any] = {
     "green_power_ratio_lower": 0,
     "optimization_time_limit_minutes": 60,
     "preferred_solver": "auto",
+    "modeling_interface": "cvxpy",
     "initial_storage_soc_ratio": 0.5,
     "storage_balance_mode": "daily",
     "initial_hydrogen_storage_ratio": 0.5,
@@ -372,6 +374,39 @@ OPERATION_MODE_ALIASES = {
     "summer": "summer",
     "summer_only": "summer",
     "summer-only": "summer",
+}
+
+PREFERRED_SOLVER_ALIASES = {
+    "": "auto",
+    "auto": "auto",
+    "automatic": "auto",
+    "自动": "auto",
+    "自动选择": "auto",
+    "grb": "gurobi",
+    "gurobi": "gurobi",
+    "cplx": "cplex",
+    "cplex": "cplex",
+    "msk": "mosek",
+    "mosek": "mosek",
+    "copt": "copt",
+    "mindopt": "mindopt",
+    "mind opt": "mindopt",
+    "highs": "scipy",
+    "scipy": "scipy",
+    "scipy highs": "scipy",
+    "scipy-highs": "scipy",
+}
+
+MODELING_INTERFACE_ALIASES = {
+    "": "cvxpy",
+    "cvxpy": "cvxpy",
+    "cvxpy通用接口": "cvxpy",
+    "通用接口": "cvxpy",
+    "native": "native",
+    "原生接口": "native",
+    "优化求解器原生接口": "native",
+    "优化求解器内置": "native",
+    "优化求解器内置接口": "native",
 }
 
 FIELD_DEFAULTS: dict[str, Any] = {
@@ -509,6 +544,7 @@ def normalize_planning_parameter_row(row: dict[str, Any]) -> dict[str, Any]:
     for field in PLANNING_BOOLEAN_FIELDS:
         normalized[field] = numeric_boolean_value(normalized.get(field, 0))
     normalized["preferred_solver"] = normalize_preferred_solver(normalized.get("preferred_solver"))
+    normalized["modeling_interface"] = normalize_modeling_interface(normalized.get("modeling_interface"))
     normalized["operation_mode"] = normalize_operation_mode(normalized.get("operation_mode"))
     for field in ("winter_start_month", "winter_start_day", "winter_end_month", "winter_end_day"):
         normalized[field] = int(max(1, round(numeric(normalized.get(field), DEFAULT_PLANNING_PARAMETERS[field]))))
@@ -526,23 +562,20 @@ def is_valid_operation_mode_value(value: Any) -> bool:
 
 def normalize_preferred_solver(value: Any) -> str:
     solver = str(value or "auto").strip().lower()
-    aliases = {
-        "": "auto",
-        "automatic": "auto",
-        "自动": "auto",
-        "自动选择": "auto",
-        "grb": "gurobi",
-        "gurobi": "gurobi",
-        "cplx": "cplex",
-        "cplex": "cplex",
-        "msk": "mosek",
-        "mosek": "mosek",
-        "highs": "scipy",
-        "scipy": "scipy",
-        "scipy highs": "scipy",
-        "scipy-highs": "scipy",
-    }
-    return aliases.get(solver, "auto")
+    return PREFERRED_SOLVER_ALIASES.get(solver, "auto")
+
+
+def is_valid_preferred_solver_value(value: Any) -> bool:
+    return str(value or "").strip().lower() in PREFERRED_SOLVER_ALIASES
+
+
+def normalize_modeling_interface(value: Any) -> str:
+    interface = str(value or "cvxpy").strip().lower()
+    return MODELING_INTERFACE_ALIASES.get(interface, "cvxpy")
+
+
+def is_valid_modeling_interface_value(value: Any) -> bool:
+    return str(value or "").strip().lower() in MODELING_INTERFACE_ALIASES
 
 
 def with_field_defaults(row: dict[str, Any], headers: list[str], key: str = "") -> dict[str, Any]:
@@ -1739,9 +1772,10 @@ def validate_planning_parameters(payload: dict[str, Any]) -> list[dict[str, str]
     time_limit = number_in_range("optimization_time_limit_minutes", "规划求解时间上限(分钟)", 10, 1440)
     if time_limit is not None and not float(time_limit).is_integer():
         messages.append({"level": "error", "message": "规划求解时间上限(分钟)必须为正整数"})
-    preferred_solver = normalize_preferred_solver(row.get("preferred_solver"))
-    if preferred_solver not in {"auto", "gurobi", "cplex", "mosek", "scipy"}:
-        messages.append({"level": "error", "message": "优先求解器必须为auto、gurobi、cplex、mosek或scipy"})
+    if not is_valid_preferred_solver_value(row.get("preferred_solver")):
+        messages.append({"level": "error", "message": "优先求解器选项无效"})
+    if not is_valid_modeling_interface_value(row.get("modeling_interface")):
+        messages.append({"level": "error", "message": "建模接口方式选项无效"})
     initial_storage_soc = number_in_range("initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", 0, 1)
     storage_soc_window = active_storage_battery_soc_window(payload)
     if initial_storage_soc is not None and storage_soc_window is not None:

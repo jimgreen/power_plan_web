@@ -1,8 +1,9 @@
-"""MILP solver adapter with Gurobi, CPLEX, MOSEK, and SciPy backends."""
+"""MILP solver adapter for CVXPY and solver-native backends."""
 
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+import importlib.util
 from types import SimpleNamespace
 from typing import Any, Callable
 import time
@@ -18,13 +19,16 @@ CUSTOM_SOLVER_OPTIONS = {
     "solver_log_line_limit",
     "solver_log_interval",
     "solver_backend",
+    "modeling_interface",
 }
-DEFAULT_SOLVER_ORDER = ("gurobi", "cplex", "mosek", "scipy")
+DEFAULT_SOLVER_ORDER = ("gurobi", "cplex", "mosek", "copt", "mindopt", "scipy")
 SOLVER_BACKENDS = {
     "gurobi": "native",
     "cplex": "native",
     "mosek": "native",
-    "scipy": "scipy-highs",
+    "copt": "native",
+    "mindopt": "native",
+    "scipy": "native",
 }
 SOLVER_ALIASES = {
     "": "auto",
@@ -36,6 +40,9 @@ SOLVER_ALIASES = {
     "cplex": "cplex",
     "msk": "mosek",
     "mosek": "mosek",
+    "copt": "copt",
+    "mindopt": "mindopt",
+    "mind opt": "mindopt",
     "highs": "scipy",
     "scipy": "scipy",
 }
@@ -43,7 +50,35 @@ SOLVER_LABELS = {
     "gurobi": "Gurobi",
     "cplex": "CPLEX",
     "mosek": "MOSEK",
+    "copt": "COPT",
+    "mindopt": "MindOpt",
     "scipy": "SciPy",
+}
+MODELING_INTERFACE_ALIASES = {
+    "": "cvxpy",
+    "cvxpy": "cvxpy",
+    "cvxpy通用接口": "cvxpy",
+    "通用接口": "cvxpy",
+    "native": "native",
+    "原生接口": "native",
+    "优化求解器原生接口": "native",
+    "优化求解器内置": "native",
+    "优化求解器内置接口": "native",
+}
+CVXPY_SOLVER_NAMES = {
+    "gurobi": "GUROBI",
+    "cplex": "CPLEX",
+    "mosek": "MOSEK",
+    "copt": "COPT",
+    "scipy": "SCIPY",
+}
+NATIVE_SOLVER_MODULES = {
+    "gurobi": "gurobipy",
+    "cplex": "cplex",
+    "mosek": "mosek",
+    "copt": "coptpy",
+    "mindopt": "mindoptpy",
+    "scipy": "scipy",
 }
 
 TIMEOUT_TEXT_MARKERS = (
@@ -55,6 +90,7 @@ TIMEOUT_TEXT_MARKERS = (
     "timeout",
     "timed out",
     "time out",
+    "user_limit",
     "maximum time",
     "max time",
     "optimizer_max_time",
@@ -158,6 +194,7 @@ def solve_milp(
     # place so planning and evaluation can share the same solve entry point.
     options = dict(options or {})
     solver = normalize_solver_name(options.pop("solver", "auto"))
+    modeling_interface = normalize_modeling_interface(options.pop("modeling_interface", "cvxpy"))
     emit_solver_input_summary(
         objective,
         integrality,
@@ -166,6 +203,7 @@ def solve_milp(
         constraint_lower,
         constraint_upper,
         solver,
+        modeling_interface,
         log,
     )
 
@@ -178,7 +216,22 @@ def solve_milp(
 
     for index, candidate in enumerate(solver_order):
         try:
-            return solve_milp_with_backend(
+            candidate_options = options_for_solver_backend(options, candidate, modeling_interface)
+            if modeling_interface == "native":
+                return solve_milp_with_backend(
+                    candidate,
+                    objective,
+                    integrality,
+                    lower_bounds,
+                    upper_bounds,
+                    constraint_matrix,
+                    constraint_lower,
+                    constraint_upper,
+                    candidate_options,
+                    log,
+                    problem_name,
+                )
+            return solve_milp_with_cvxpy(
                 candidate,
                 objective,
                 integrality,
@@ -187,7 +240,7 @@ def solve_milp(
                 constraint_matrix,
                 constraint_lower,
                 constraint_upper,
-                options_for_solver_backend(options, candidate),
+                candidate_options,
                 log,
                 problem_name,
             )
@@ -205,9 +258,14 @@ def normalize_solver_name(value: Any) -> str:
     return SOLVER_ALIASES.get(solver, solver)
 
 
-def options_for_solver_backend(options: dict[str, Any], solver: str) -> dict[str, Any]:
+def normalize_modeling_interface(value: Any) -> str:
+    interface = str(value or "cvxpy").strip().lower()
+    return MODELING_INTERFACE_ALIASES.get(interface, "cvxpy")
+
+
+def options_for_solver_backend(options: dict[str, Any], solver: str, modeling_interface: str = "native") -> dict[str, Any]:
     next_options = dict(options or {})
-    next_options["solver_backend"] = SOLVER_BACKENDS.get(solver, "")
+    next_options["solver_backend"] = "cvxpy" if modeling_interface == "cvxpy" else SOLVER_BACKENDS.get(solver, "native")
     return next_options
 
 
@@ -263,6 +321,32 @@ def solve_milp_with_backend(
             log,
             problem_name,
         )
+    if solver == "copt":
+        return solve_milp_with_copt(
+            objective,
+            integrality,
+            lower_bounds,
+            upper_bounds,
+            constraint_matrix,
+            constraint_lower,
+            constraint_upper,
+            options,
+            log,
+            problem_name,
+        )
+    if solver == "mindopt":
+        return solve_milp_with_mindopt(
+            objective,
+            integrality,
+            lower_bounds,
+            upper_bounds,
+            constraint_matrix,
+            constraint_lower,
+            constraint_upper,
+            options,
+            log,
+            problem_name,
+        )
     if solver == "scipy":
         return solve_milp_with_scipy(
             objective,
@@ -279,6 +363,154 @@ def solve_milp_with_backend(
     raise ValueError(f"未知MILP求解器：{solver}")
 
 
+def solver_capabilities() -> dict[str, Any]:
+    """Report Python integration availability for each modeling interface."""
+
+    try:
+        import cvxpy as cp
+
+        installed_cvxpy_solvers = {str(name).upper() for name in cp.installed_solvers()}
+        cvxpy_version = str(getattr(cp, "__version__", ""))
+    except Exception:
+        installed_cvxpy_solvers = set()
+        cvxpy_version = ""
+
+    solvers: dict[str, dict[str, Any]] = {}
+    for solver in DEFAULT_SOLVER_ORDER:
+        cvxpy_name = CVXPY_SOLVER_NAMES.get(solver, "")
+        solvers[solver] = {
+            "label": SOLVER_LABELS[solver],
+            "native": module_available(NATIVE_SOLVER_MODULES[solver]),
+            "cvxpy": bool(cvxpy_name and cvxpy_name in installed_cvxpy_solvers),
+        }
+    return {
+        "default_interface": "cvxpy",
+        "interfaces": {
+            "cvxpy": {"label": "CVXPY通用接口", "available": bool(cvxpy_version), "version": cvxpy_version},
+            "native": {"label": "优化求解器原生接口", "available": True},
+        },
+        "solvers": solvers,
+    }
+
+
+def module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ValueError, AttributeError):
+        return False
+
+
+def solve_milp_with_cvxpy(
+    solver: str,
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    constraint_matrix: Any,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+    options: dict[str, Any],
+    log: LogSink | None,
+    problem_name: str,
+) -> SimpleNamespace:
+    import cvxpy as cp
+
+    cvxpy_solver = CVXPY_SOLVER_NAMES.get(solver)
+    if not cvxpy_solver:
+        raise RuntimeError(f"CVXPY当前版本不支持{SOLVER_LABELS.get(solver, solver)}接口")
+    installed_solvers = {str(name).upper() for name in cp.installed_solvers()}
+    if cvxpy_solver not in installed_solvers:
+        raise RuntimeError(f"CVXPY未检测到{SOLVER_LABELS.get(solver, solver)}求解器")
+
+    emit(log, "info", f"调用CVXPY通用建模接口，当前求解器为{SOLVER_LABELS[solver]}", None)
+    objective = np.asarray(objective, dtype=float)
+    integrality = np.asarray(integrality, dtype=int)
+    lower_bounds = np.asarray(lower_bounds, dtype=float)
+    upper_bounds = np.asarray(upper_bounds, dtype=float)
+    constraint_lower = np.asarray(constraint_lower, dtype=float)
+    constraint_upper = np.asarray(constraint_upper, dtype=float)
+    matrix = constraint_matrix.tocsr()
+
+    integer_indices = np.flatnonzero(integrality).astype(int).tolist()
+    variable_attributes: dict[str, Any] = {}
+    if integer_indices:
+        variable_attributes["integer"] = (integer_indices,)
+    variables = cp.Variable(len(objective), name="x", **variable_attributes)
+    constraints: list[Any] = []
+    finite_variable_lower = np.isfinite(lower_bounds)
+    finite_variable_upper = np.isfinite(upper_bounds)
+    if np.any(finite_variable_lower):
+        constraints.append(variables[finite_variable_lower] >= lower_bounds[finite_variable_lower])
+    if np.any(finite_variable_upper):
+        constraints.append(variables[finite_variable_upper] <= upper_bounds[finite_variable_upper])
+
+    finite_constraint_lower = np.isfinite(constraint_lower)
+    finite_constraint_upper = np.isfinite(constraint_upper)
+    equality = finite_constraint_lower & finite_constraint_upper & np.isclose(constraint_lower, constraint_upper)
+    if np.any(equality):
+        constraints.append(matrix[equality] @ variables == constraint_lower[equality])
+    upper_only = finite_constraint_upper & ~equality
+    if np.any(upper_only):
+        constraints.append(matrix[upper_only] @ variables <= constraint_upper[upper_only])
+    lower_only = finite_constraint_lower & ~equality
+    if np.any(lower_only):
+        constraints.append(matrix[lower_only] @ variables >= constraint_lower[lower_only])
+
+    problem = cp.Problem(cp.Minimize(objective @ variables), constraints)
+    solve_options = cvxpy_solve_options(solver, options)
+    solve_options["verbose"] = False
+    problem.solve(solver=cvxpy_solver, **solve_options)
+
+    status = str(problem.status or "unknown")
+    emit(log, "info", f"CVXPY调用{SOLVER_LABELS[solver]}完成：status={status}", None)
+    solution = np.asarray(variables.value, dtype=float).reshape(-1) if variables.value is not None else None
+    objective_value = float(problem.value) if problem.value is not None and np.isfinite(problem.value) else None
+    return SimpleNamespace(
+        success=status in {str(cp.OPTIMAL), str(cp.OPTIMAL_INACCURATE)},
+        x=solution,
+        fun=objective_value,
+        message=f"CVXPY {SOLVER_LABELS[solver]} status {status}",
+        solver=solver,
+        backend="cvxpy",
+        status=status,
+    )
+
+
+def cvxpy_solve_options(solver: str, options: dict[str, Any]) -> dict[str, Any]:
+    time_limit = options.get("time_limit")
+    mip_gap = options.get("mip_rel_gap")
+    if solver == "gurobi":
+        return compact_options({"TimeLimit": time_limit, "MIPGap": mip_gap})
+    if solver == "cplex":
+        return {
+            "cplex_params": compact_options(
+                {"timelimit": time_limit, "mip.tolerances.mipgap": mip_gap}
+            )
+        }
+    if solver == "mosek":
+        return {
+            "mosek_params": compact_options(
+                {
+                    "MSK_DPAR_OPTIMIZER_MAX_TIME": time_limit,
+                    "MSK_DPAR_MIO_TOL_REL_GAP": mip_gap,
+                }
+            )
+        }
+    if solver == "copt":
+        return compact_options({"TimeLimit": time_limit, "RelGap": mip_gap})
+    if solver == "scipy":
+        return {
+            "scipy_options": compact_options(
+                {"method": "highs", "time_limit": time_limit, "mip_rel_gap": mip_gap}
+            )
+        }
+    raise ValueError(f"CVXPY不支持求解器：{solver}")
+
+
+def compact_options(options: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in options.items() if value is not None}
+
+
 def emit_solver_input_summary(
     objective: np.ndarray,
     integrality: np.ndarray,
@@ -287,6 +519,7 @@ def emit_solver_input_summary(
     constraint_lower: np.ndarray,
     constraint_upper: np.ndarray,
     solver: str,
+    modeling_interface: str,
     log: LogSink | None,
 ) -> None:
     # Record a compact view of the model before solving so runtime logs are
@@ -312,7 +545,7 @@ def emit_solver_input_summary(
         "info",
         (
             "求解器输入："
-            f"solver={solver or 'auto'}，"
+            f"solver={solver or 'auto'}，interface={modeling_interface}，"
             f"变量={len(objective)}个，二进制={binary_count}个，整数={integer_count}个，"
             f"目标非零项={nonzero_objective_count}个，"
             f"等式约束={int(np.count_nonzero(equality))}条，"
@@ -679,6 +912,222 @@ def put_mosek_linear_problem_data(
             coo.col[nonzero_mask].astype(np.int32).tolist(),
             coo.data[nonzero_mask].astype(float).tolist(),
         )
+
+
+def solve_milp_with_copt(
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    constraint_matrix: Any,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+    options: dict[str, Any],
+    log: LogSink | None,
+    problem_name: str,
+) -> SimpleNamespace:
+    import coptpy
+
+    emit(log, "info", "调用COPT原生后端求解混合整数线性规划", None)
+    copt = coptpy.COPT
+    objective = np.asarray(objective, dtype=float)
+    integrality = np.asarray(integrality, dtype=int)
+    native_infinity = getattr(copt, "INFINITY", 1e20)
+    lower_bounds = finite_native_bounds(np.asarray(lower_bounds, dtype=float), native_infinity)
+    upper_bounds = finite_native_bounds(np.asarray(upper_bounds, dtype=float), native_infinity)
+    constraint_lower = np.asarray(constraint_lower, dtype=float)
+    constraint_upper = np.asarray(constraint_upper, dtype=float)
+    matrix = constraint_matrix.tocsr()
+
+    environment = coptpy.Envr()
+    model = environment.createModel(problem_name or "MILP")
+    try:
+        time_limit = options.get("time_limit")
+        if time_limit is not None:
+            model.setParam(copt.Param.TimeLimit, float(time_limit))
+        mip_gap = options.get("mip_rel_gap")
+        if mip_gap is not None:
+            model.setParam(copt.Param.RelGap, float(mip_gap))
+
+        variable_types = np.array(
+            [
+                copt.BINARY
+                if is_binary_integer(integrality[index], lower_bounds[index], upper_bounds[index])
+                else copt.INTEGER
+                if integrality[index]
+                else copt.CONTINUOUS
+                for index in range(len(objective))
+            ]
+        )
+        variables = model.addMVar(
+            len(objective),
+            lb=lower_bounds,
+            ub=upper_bounds,
+            obj=objective,
+            vtype=variable_types,
+            nameprefix="x",
+        )
+        model.setObjective(objective @ variables, copt.MINIMIZE)
+        add_copt_constraints(copt, model, matrix, variables, constraint_lower, constraint_upper)
+        model.solve()
+
+        status = model.status
+        has_solution = bool(model.hasmipsol if np.any(integrality) else model.haslpsol)
+        solution = np.asarray(variables.x, dtype=float).reshape(-1) if has_solution else None
+        objective_value = float(model.objval) if has_solution else None
+        status_text = "time limit" if status == getattr(copt, "TIMEOUT", None) else str(status)
+        return SimpleNamespace(
+            success=status == copt.OPTIMAL,
+            x=solution,
+            fun=objective_value,
+            message=f"COPT status {status_text}",
+            solver="copt",
+            backend=options.get("solver_backend") or "native",
+            status=status,
+        )
+    finally:
+        close_optional_solver_object(model)
+        close_optional_solver_object(environment)
+
+
+def add_copt_constraints(
+    copt: Any,
+    model: Any,
+    matrix: Any,
+    variables: Any,
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> None:
+    add_native_matrix_constraint_blocks(
+        model,
+        matrix,
+        variables,
+        lower,
+        upper,
+        copt.EQUAL,
+        copt.LESS_EQUAL,
+        copt.GREATER_EQUAL,
+    )
+
+
+def solve_milp_with_mindopt(
+    objective: np.ndarray,
+    integrality: np.ndarray,
+    lower_bounds: np.ndarray,
+    upper_bounds: np.ndarray,
+    constraint_matrix: Any,
+    constraint_lower: np.ndarray,
+    constraint_upper: np.ndarray,
+    options: dict[str, Any],
+    log: LogSink | None,
+    problem_name: str,
+) -> SimpleNamespace:
+    import mindoptpy
+
+    emit(log, "info", "调用MindOpt原生后端求解混合整数线性规划", None)
+    mdo = mindoptpy.MDO
+    objective = np.asarray(objective, dtype=float)
+    integrality = np.asarray(integrality, dtype=int)
+    native_infinity = getattr(mdo, "INFINITY", 1e20)
+    lower_bounds = finite_native_bounds(np.asarray(lower_bounds, dtype=float), native_infinity)
+    upper_bounds = finite_native_bounds(np.asarray(upper_bounds, dtype=float), native_infinity)
+    constraint_lower = np.asarray(constraint_lower, dtype=float)
+    constraint_upper = np.asarray(constraint_upper, dtype=float)
+    matrix = constraint_matrix.tocsr()
+
+    model = mindoptpy.Model(problem_name or "MILP")
+    try:
+        time_limit = options.get("time_limit")
+        if time_limit is not None:
+            model.setParam(mdo.Param.MaxTime, float(time_limit))
+        mip_gap = options.get("mip_rel_gap")
+        if mip_gap is not None:
+            model.setParam(mdo.Param.MIP_GapRel, float(mip_gap))
+
+        variable_types = np.array(
+            [
+                mdo.BINARY
+                if is_binary_integer(integrality[index], lower_bounds[index], upper_bounds[index])
+                else mdo.INTEGER
+                if integrality[index]
+                else mdo.CONTINUOUS
+                for index in range(len(objective))
+            ]
+        )
+        variables = model.addMVar(
+            shape=(len(objective),),
+            lb=lower_bounds,
+            ub=upper_bounds,
+            obj=objective,
+            vtype=variable_types,
+            name="x",
+        )
+        model.setObjective(objective @ variables, mdo.MINIMIZE)
+        add_native_matrix_constraint_blocks(
+            model,
+            matrix,
+            variables,
+            constraint_lower,
+            constraint_upper,
+            mdo.EQUAL,
+            mdo.LESS_EQUAL,
+            mdo.GREATER_EQUAL,
+        )
+        model.optimize()
+
+        status = model.getAttr(mdo.Attr.Status)
+        solution_count = int(model.getAttr(mdo.Attr.SolCount) or 0)
+        solution = np.asarray(variables.getAttr(mdo.Attr.X), dtype=float).reshape(-1) if solution_count else None
+        objective_value = float(model.getAttr(mdo.Attr.ObjVal)) if solution_count else None
+        status_text = "time limit" if status == getattr(mdo.Status, "TIME_LIMIT", None) else str(status)
+        return SimpleNamespace(
+            success=status == mdo.Status.OPTIMAL,
+            x=solution,
+            fun=objective_value,
+            message=f"MindOpt status {status_text}",
+            solver="mindopt",
+            backend=options.get("solver_backend") or "native",
+            status=status,
+        )
+    finally:
+        close_optional_solver_object(model)
+
+
+def add_native_matrix_constraint_blocks(
+    model: Any,
+    matrix: Any,
+    variables: Any,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    equal_sense: Any,
+    less_equal_sense: Any,
+    greater_equal_sense: Any,
+) -> None:
+    finite_lower = np.isfinite(lower)
+    finite_upper = np.isfinite(upper)
+    equality = finite_lower & finite_upper & np.isclose(lower, upper)
+    for mask, sense, rhs in (
+        (equality, equal_sense, lower),
+        (finite_upper & ~equality, less_equal_sense, upper),
+        (finite_lower & ~equality, greater_equal_sense, lower),
+    ):
+        if np.any(mask):
+            model.addMConstr(matrix[mask], variables, sense, rhs[mask])
+
+
+def finite_native_bounds(values: np.ndarray, infinity: float) -> np.ndarray:
+    return np.where(np.isposinf(values), float(infinity), np.where(np.isneginf(values), -float(infinity), values))
+
+
+def close_optional_solver_object(value: Any) -> None:
+    for method_name in ("dispose", "close"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            try:
+                method()
+            except Exception:
+                pass
+            return
 
 
 def solve_milp_with_scipy(

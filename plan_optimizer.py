@@ -12,7 +12,7 @@ import numpy as np
 import dispatch_milp
 import estimate
 import planning_store
-from milp_solver import CalculationTimeoutError, is_timeout_result, solve_milp
+from milp_solver import CalculationTimeoutError, is_timeout_result, normalize_modeling_interface, solve_milp
 
 
 LogSink = Callable[[dict[str, Any]], None]
@@ -611,6 +611,7 @@ def build_planning_model(
     optimization_time_limit_minutes = int(min(1440, max(10, round(numeric(raw_time_limit_minutes, 60)))))
     optimization_time_limit_seconds = optimization_time_limit_minutes * 60
     preferred_solver = normalize_preferred_solver(planning_parameters.get("preferred_solver"))
+    modeling_interface = normalize_modeling_interface(planning_parameters.get("modeling_interface"))
     diesel_minimum_on_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_on_hours"), 0)))))
     diesel_minimum_off_hours = int(min(24, max(0, round(numeric(planning_parameters.get("diesel_minimum_off_hours"), 0)))))
     initial_storage_soc_ratio = min(1.0, max(0.0, numeric(planning_parameters.get("initial_storage_soc_ratio"), 0.5)))
@@ -683,6 +684,7 @@ def build_planning_model(
         "optimization_time_limit_minutes": optimization_time_limit_minutes,
         "optimization_time_limit_seconds": optimization_time_limit_seconds,
         "preferred_solver": preferred_solver,
+        "modeling_interface": modeling_interface,
         "diesel_minimum_on_hours": diesel_minimum_on_hours,
         "diesel_minimum_off_hours": diesel_minimum_off_hours,
         "initial_storage_soc_ratio": initial_storage_soc_ratio,
@@ -1123,11 +1125,12 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
     dispatch_milp.emit_builder_diagnostics(builder, log, "规划求解MILP")
     preferred_solver = str(model.get("preferred_solver") or "auto").strip().lower()
     effective_solver = preferred_solver if preferred_solver != "auto" else PLANNING_SOLVER
-    backend_label = planning_solver_backend_label(effective_solver)
+    modeling_interface = normalize_modeling_interface(model.get("modeling_interface"))
+    backend_label = planning_solver_backend_label(effective_solver, modeling_interface)
     emit(
         log,
         "info",
-        f"求解参数：solver={effective_solver}，backend={backend_label}，time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
+        f"求解参数：solver={effective_solver}，modeling_interface={modeling_interface}，backend={backend_label}，time_limit={model['optimization_time_limit_seconds']}秒，mip_rel_gap=0.01",
         22,
     )
     emit(log, "info", "求解设备台数和全年运行联合混合整数线性规划", 25)
@@ -1135,6 +1138,7 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         builder,
         options={
             "solver": effective_solver,
+            "modeling_interface": modeling_interface,
             "time_limit": model["optimization_time_limit_seconds"],
             "mip_rel_gap": 0.01,
             "disp": False,
@@ -1218,6 +1222,9 @@ def normalize_preferred_solver(value: Any) -> str:
         "cplex": "cplex",
         "msk": "mosek",
         "mosek": "mosek",
+        "copt": "copt",
+        "mindopt": "mindopt",
+        "mind opt": "mindopt",
         "highs": "scipy",
         "scipy": "scipy",
         "scipy highs": "scipy",
@@ -1226,12 +1233,12 @@ def normalize_preferred_solver(value: Any) -> str:
     return aliases.get(solver, "auto")
 
 
-def planning_solver_backend_label(solver: Any) -> str:
+def planning_solver_backend_label(solver: Any, modeling_interface: Any = "cvxpy") -> str:
+    if normalize_modeling_interface(modeling_interface) == "cvxpy":
+        return "CVXPY通用接口"
     normalized = normalize_preferred_solver(solver)
-    if normalized in {"gurobi", "cplex", "mosek"}:
+    if normalized in {"gurobi", "cplex", "mosek", "copt", "mindopt", "scipy"}:
         return "原生后端"
-    if normalized == "scipy":
-        return "SciPy HiGHS后端"
     return "自动选择"
 
 

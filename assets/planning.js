@@ -40,6 +40,7 @@ const state = {
   loadGeneratorSourceName: "",
   curveGeneratorTarget: "wind_speed",
   isSwitchingScheme: false,
+  solverCapabilities: null,
 };
 
 let activePlanningParameterGroup = "normal";
@@ -186,7 +187,8 @@ const planningParameterSpecs = [
   ["winter_end_day", "冬季结束日期", "number", { min: 1, max: 31, integer: true, positive: true, defaultValue: 30 }],
   ["green_power_ratio_lower", "绿色电量占比下限(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0 }],
   ["optimization_time_limit_minutes", "规划求解时间上限(分钟)", "number", { min: 10, max: 1440, integer: true, positive: true, defaultValue: 60 }],
-  ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "原生MOSEK"], ["scipy", "SciPy HiGHS"]] }],
+  ["preferred_solver", "优先求解器", "select", { defaultValue: "auto", options: [["auto", "自动选择"], ["gurobi", "Gurobi"], ["cplex", "CPLEX"], ["mosek", "MOSEK"], ["copt", "COPT"], ["mindopt", "MindOpt"], ["scipy", "SciPy HiGHS"]] }],
+  ["modeling_interface", "建模接口方式", "select", { defaultValue: "cvxpy", options: [["cvxpy", "CVXPY通用接口"], ["native", "优化求解器原生接口"]] }],
   ["initial_storage_soc_ratio", "初始电储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
   ["storage_balance_mode", "电储能平衡模式", "select", { defaultValue: "daily", options: [["daily", "日内平衡"], ["weekly", "周内平衡"], ["monthly", "月度平衡"], ["annual", "年度平衡"], ["none", "不闭环"]] }],
   ["initial_hydrogen_storage_ratio", "初始氢储SOC(0.0-1.0)", "number", { min: 0, max: 1, defaultValue: 0.5 }],
@@ -235,6 +237,7 @@ const planningParameterGroups = [
       "green_power_ratio_lower",
       "optimization_time_limit_minutes",
       "preferred_solver",
+      "modeling_interface",
       "initial_storage_soc_ratio",
       "storage_balance_mode",
       "initial_hydrogen_storage_ratio",
@@ -552,6 +555,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindAdaptiveLayout();
   syncAdaptiveLayout();
   loadLoadCurveTemplates().catch(showError);
+  loadSolverCapabilities().catch(() => null);
   loadSchemes().catch(showError);
 });
 
@@ -1306,6 +1310,11 @@ async function loadSchemes() {
     renderSummary();
     syncSchemeActionState();
   }
+}
+
+async function loadSolverCapabilities() {
+  state.solverCapabilities = await api("/api/planning/solver-capabilities");
+  if (state.payload) renderPlanningParameters();
 }
 
 async function loadLoadCurveTemplates() {
@@ -4177,7 +4186,11 @@ function planningParameterControl(key, type, options, value, group = null, group
   if (type === "select") {
     const selectedValue = String(value || options.defaultValue || "");
     const optionMarkup = (options.options || [])
-      .map(([optionValue, optionLabel]) => `<option value="${escapeHtml(optionValue)}" ${String(optionValue) === selectedValue ? "selected" : ""}>${escapeHtml(optionLabel)}</option>`)
+      .map(([optionValue, optionLabel]) => {
+        const unavailable = key === "preferred_solver" && optionValue !== "auto" && !solverAvailableForCurrentInterface(optionValue);
+        const displayLabel = unavailable ? `${optionLabel}（当前接口不可用）` : optionLabel;
+        return `<option value="${escapeHtml(optionValue)}" ${String(optionValue) === selectedValue ? "selected" : ""} ${unavailable ? "disabled" : ""}>${escapeHtml(displayLabel)}</option>`;
+      })
       .join("");
     return `<select class="planning-select" data-planning-key="${key}" data-planning-type="select" ${disabled ? "disabled" : ""}>${optionMarkup}</select>`;
   }
@@ -4204,8 +4217,19 @@ function onPlanningGroupToggle(event) {
 function onPlanningParameterInput(event) {
   const input = event.target;
   syncPlanningParameterInput(input);
+  if (input.dataset.planningKey === "modeling_interface") {
+    renderPlanningParameters();
+  }
   renderLimitSummary();
   renderSummary();
+}
+
+function solverAvailableForCurrentInterface(solver) {
+  const capabilities = state.solverCapabilities?.solvers?.[solver];
+  if (!capabilities) return true;
+  const row = state.payload?.planning_parameters?.[0] || {};
+  const modelingInterface = String(row.modeling_interface || "cvxpy");
+  return capabilities[modelingInterface] !== false;
 }
 
 function bindPlanningParameterInputs() {

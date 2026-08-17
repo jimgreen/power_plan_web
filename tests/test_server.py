@@ -8066,6 +8066,25 @@ class PowerPlanServerTest(unittest.TestCase):
 
         self.assertEqual(frontend_parameters, server.planning_store.SHEET_SPECS["planning_parameters"][1])
 
+    def test_planning_frontend_exposes_modeling_interface_and_solver_capabilities(self):
+        script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
+        html = (WEB_ROOT / "planning.html").read_text(encoding="utf-8")
+
+        self.assertIn('["modeling_interface", "建模接口方式", "select"', script)
+        self.assertIn('["cvxpy", "CVXPY通用接口"]', script)
+        self.assertIn('["native", "优化求解器原生接口"]', script)
+        self.assertIn('["copt", "COPT"]', script)
+        self.assertIn('["mindopt", "MindOpt"]', script)
+        self.assertIn('/api/planning/solver-capabilities', script)
+        self.assertIn("assets/planning.js?v=20260817-modeling-interface", html)
+
+    def test_planning_solver_capabilities_endpoint(self):
+        with patch.object(server.milp_solver, "solver_capabilities", return_value={"solvers": {"scipy": {"native": True, "cvxpy": True}}}):
+            status, headers, body = server.handle_planning_api_path("/api/planning/solver-capabilities", "GET", b"")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body.decode("utf-8"))["solvers"]["scipy"]["native"], True)
+
     def test_planning_device_cost_columns_follow_name(self):
         script = (WEB_ROOT / "assets" / "planning.js").read_text(encoding="utf-8")
 

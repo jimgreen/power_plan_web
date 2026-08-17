@@ -791,6 +791,31 @@ class PlanningStoreTest(unittest.TestCase):
         self.assertNotIn("优先求解器必须为数值", message_text)
         self.assertNotIn("优先求解器选项无效", message_text)
 
+    def test_modeling_interface_defaults_and_solver_options(self):
+        payload = planning_store.default_payload("方案A")
+        row = payload["planning_parameters"][0]
+        headers = planning_store.SHEET_SPECS["planning_parameters"][1]
+
+        self.assertEqual(row["modeling_interface"], "cvxpy")
+        self.assertIn("modeling_interface", headers)
+        self.assertLess(headers.index("preferred_solver"), headers.index("modeling_interface"))
+        for solver in ("gurobi", "cplex", "mosek", "copt", "mindopt", "scipy"):
+            with self.subTest(solver=solver):
+                row["preferred_solver"] = solver
+                messages = planning_store.validate_payload(payload, require_time_series=False)
+                self.assertFalse(any("优先求解器选项无效" in item["message"] for item in messages))
+
+    def test_modeling_interface_aliases_normalize_and_invalid_value_is_rejected(self):
+        native = planning_store.normalize_planning_parameter_row({"modeling_interface": "优化求解器原生接口"})
+        cvxpy = planning_store.normalize_planning_parameter_row({"modeling_interface": "CVXPY通用接口"})
+        self.assertEqual(native["modeling_interface"], "native")
+        self.assertEqual(cvxpy["modeling_interface"], "cvxpy")
+
+        payload = planning_store.default_payload("方案A")
+        payload["planning_parameters"][0]["modeling_interface"] = "invalid"
+        messages = planning_store.validate_payload(payload, require_time_series=False)
+        self.assertTrue(any("建模接口方式选项无效" in item["message"] for item in messages))
+
     def test_frequency_security_planning_parameters_include_extended_defaults_and_ranges(self):
         payload = planning_store.default_payload("方案A")
         row = payload["planning_parameters"][0]

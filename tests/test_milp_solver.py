@@ -29,12 +29,34 @@ class MilpSolverTest(unittest.TestCase):
     def _fake_result(self, solver):
         return SimpleNamespace(success=True, x=np.array([3.0]), fun=3.0, message="ok", solver=solver)
 
+    def test_default_modeling_interface_uses_cvxpy(self):
+        args = self._tiny_problem()
+        with patch.object(milp_solver, "solve_milp_with_cvxpy", return_value=self._fake_result("scipy"), create=True) as cvxpy_mock, \
+                patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected native scipy")):
+            result = milp_solver.solve_milp(*args, options={"solver": "scipy"}, problem_name="测试模型")
+
+        self.assertEqual(result.solver, "scipy")
+        cvxpy_mock.assert_called_once()
+
+    def test_cvxpy_interface_does_not_call_native_cplex(self):
+        args = self._tiny_problem()
+        with patch.object(milp_solver, "solve_milp_with_cvxpy", return_value=self._fake_result("cplex"), create=True) as cvxpy_mock, \
+                patch.object(milp_solver, "solve_milp_with_cplex", side_effect=AssertionError("unexpected native cplex")):
+            result = milp_solver.solve_milp(
+                *args,
+                options={"solver": "cplex", "modeling_interface": "cvxpy"},
+                problem_name="测试模型",
+            )
+
+        self.assertEqual(result.solver, "cplex")
+        cvxpy_mock.assert_called_once()
+
     def test_auto_tries_cplex_after_gurobi_failure(self):
         args = self._tiny_problem()
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=RuntimeError("no gurobi")), \
                 patch.object(milp_solver, "solve_milp_with_cplex", return_value=self._fake_result("cplex"), create=True) as cplex_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy") as scipy_mock:
-            result = milp_solver.solve_milp(*args, options={}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "cplex")
         cplex_mock.assert_called_once()
@@ -45,8 +67,10 @@ class MilpSolverTest(unittest.TestCase):
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=RuntimeError("no gurobi")), \
                 patch.object(milp_solver, "solve_milp_with_cplex", side_effect=RuntimeError("no cplex"), create=True) as cplex_mock, \
                 patch.object(milp_solver, "solve_milp_with_mosek", side_effect=RuntimeError("no mosek"), create=True) as mosek_mock, \
+                patch.object(milp_solver, "solve_milp_with_copt", side_effect=RuntimeError("no copt"), create=True), \
+                patch.object(milp_solver, "solve_milp_with_mindopt", side_effect=RuntimeError("no mindopt"), create=True), \
                 patch.object(milp_solver, "solve_milp_with_scipy", return_value=self._fake_result("scipy")) as scipy_mock:
-            result = milp_solver.solve_milp(*args, options={}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "scipy")
         cplex_mock.assert_called_once()
@@ -59,7 +83,7 @@ class MilpSolverTest(unittest.TestCase):
                 patch.object(milp_solver, "solve_milp_with_cplex", side_effect=RuntimeError("no cplex"), create=True), \
                 patch.object(milp_solver, "solve_milp_with_mosek", return_value=self._fake_result("mosek"), create=True) as mosek_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy") as scipy_mock:
-            result = milp_solver.solve_milp(*args, options={}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "mosek")
         mosek_mock.assert_called_once()
@@ -70,7 +94,7 @@ class MilpSolverTest(unittest.TestCase):
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=AssertionError("unexpected gurobi")), \
                 patch.object(milp_solver, "solve_milp_with_cplex", return_value=self._fake_result("cplex"), create=True) as cplex_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
-            result = milp_solver.solve_milp(*args, options={"solver": "cplex"}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"solver": "cplex", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "cplex")
         cplex_mock.assert_called_once()
@@ -86,7 +110,7 @@ class MilpSolverTest(unittest.TestCase):
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=AssertionError("unexpected gurobi")), \
                 patch.object(milp_solver, "solve_milp_with_cplex", side_effect=fake_cplex, create=True), \
                 patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
-            milp_solver.solve_milp(*args, options={"solver": "cplex"}, problem_name="测试模型")
+            milp_solver.solve_milp(*args, options={"solver": "cplex", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(seen_options["solver_backend"], "native")
 
@@ -101,7 +125,7 @@ class MilpSolverTest(unittest.TestCase):
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=fake_gurobi), \
                 patch.object(milp_solver, "solve_milp_with_cplex", side_effect=AssertionError("unexpected cplex"), create=True), \
                 patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
-            milp_solver.solve_milp(*args, options={"solver": "gurobi"}, problem_name="测试模型")
+            milp_solver.solve_milp(*args, options={"solver": "gurobi", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(seen_options["solver_backend"], "native")
 
@@ -110,7 +134,7 @@ class MilpSolverTest(unittest.TestCase):
         with patch.object(milp_solver, "solve_milp_with_cplex", side_effect=RuntimeError("no cplex"), create=True) as cplex_mock, \
                 patch.object(milp_solver, "solve_milp_with_gurobi", return_value=self._fake_result("gurobi")) as gurobi_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy") as scipy_mock:
-            result = milp_solver.solve_milp(*args, options={"solver": "cplex"}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"solver": "cplex", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "gurobi")
         cplex_mock.assert_called_once()
@@ -122,7 +146,7 @@ class MilpSolverTest(unittest.TestCase):
         with patch.object(milp_solver, "solve_milp_with_gurobi", side_effect=AssertionError("unexpected gurobi")), \
                 patch.object(milp_solver, "solve_milp_with_cplex", return_value=self._fake_result("cplex"), create=True) as cplex_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
-            result = milp_solver.solve_milp(*args, options={"solver": "cplx"}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"solver": "cplx", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "cplex")
         cplex_mock.assert_called_once()
@@ -133,7 +157,7 @@ class MilpSolverTest(unittest.TestCase):
                 patch.object(milp_solver, "solve_milp_with_cplex", side_effect=AssertionError("unexpected cplex"), create=True), \
                 patch.object(milp_solver, "solve_milp_with_mosek", return_value=self._fake_result("mosek"), create=True) as mosek_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
-            result = milp_solver.solve_milp(*args, options={"solver": "mosek"}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"solver": "mosek", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "mosek")
         mosek_mock.assert_called_once()
@@ -144,7 +168,7 @@ class MilpSolverTest(unittest.TestCase):
                 patch.object(milp_solver, "solve_milp_with_cplex", side_effect=AssertionError("unexpected cplex"), create=True), \
                 patch.object(milp_solver, "solve_milp_with_mosek", return_value=self._fake_result("mosek"), create=True) as mosek_mock, \
                 patch.object(milp_solver, "solve_milp_with_scipy", side_effect=AssertionError("unexpected scipy")):
-            result = milp_solver.solve_milp(*args, options={"solver": "msk"}, problem_name="测试模型")
+            result = milp_solver.solve_milp(*args, options={"solver": "msk", "modeling_interface": "native"}, problem_name="测试模型")
 
         self.assertEqual(result.solver, "mosek")
         mosek_mock.assert_called_once()
@@ -214,6 +238,73 @@ class MilpSolverTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             milp_solver.solve_milp(*args, options={"solver": "unknown"}, problem_name="测试模型")
 
+    def test_native_copt_and_mindopt_dispatch_to_their_adapters(self):
+        args = self._tiny_problem()
+        for solver, adapter_name in (("copt", "solve_milp_with_copt"), ("mindopt", "solve_milp_with_mindopt")):
+            with self.subTest(solver=solver), \
+                    patch.object(milp_solver, adapter_name, return_value=self._fake_result(solver), create=True) as adapter:
+                result = milp_solver.solve_milp(
+                    *args,
+                    options={"solver": solver, "modeling_interface": "native"},
+                    problem_name="测试模型",
+                )
+
+            self.assertEqual(result.solver, solver)
+            adapter.assert_called_once()
+
+    def test_native_selected_solver_failure_uses_default_fallback_order(self):
+        args = self._tiny_problem()
+        with patch.object(milp_solver, "solve_milp_with_copt", side_effect=RuntimeError("no copt"), create=True) as copt_mock, \
+                patch.object(milp_solver, "solve_milp_with_gurobi", return_value=self._fake_result("gurobi")) as gurobi_mock:
+            result = milp_solver.solve_milp(
+                *args,
+                options={"solver": "copt", "modeling_interface": "native"},
+                problem_name="测试模型",
+            )
+
+        self.assertEqual(result.solver, "gurobi")
+        copt_mock.assert_called_once()
+        gurobi_mock.assert_called_once()
+
+    def test_cvxpy_unsupported_selected_solver_uses_default_fallback_order(self):
+        args = self._tiny_problem()
+        calls = []
+
+        def fake_cvxpy(solver, *call_args):
+            calls.append(solver)
+            if solver == "mindopt":
+                raise RuntimeError("cvxpy does not support mindopt")
+            return self._fake_result(solver)
+
+        with patch.object(milp_solver, "solve_milp_with_cvxpy", side_effect=fake_cvxpy):
+            result = milp_solver.solve_milp(
+                *args,
+                options={"solver": "mindopt", "modeling_interface": "cvxpy"},
+                problem_name="测试模型",
+            )
+
+        self.assertEqual(result.solver, "gurobi")
+        self.assertEqual(calls, ["mindopt", "gurobi"])
+
+    def test_modeling_interface_aliases_are_normalized(self):
+        self.assertEqual(milp_solver.normalize_modeling_interface("CVXPY通用接口"), "cvxpy")
+        self.assertEqual(milp_solver.normalize_modeling_interface("优化求解器原生接口"), "native")
+        self.assertEqual(milp_solver.normalize_modeling_interface("优化求解器内置"), "native")
+        self.assertEqual(milp_solver.normalize_modeling_interface("unknown"), "cvxpy")
+
+    def test_real_cvxpy_scipy_milp_succeeds(self):
+        args = self._tiny_problem()
+        result = milp_solver.solve_milp(
+            *args,
+            options={"solver": "scipy", "modeling_interface": "cvxpy", "solver_log": False},
+            problem_name="CVXPY测试模型",
+        )
+
+        self.assertTrue(result.success, result.message)
+        self.assertEqual(result.solver, "scipy")
+        self.assertEqual(result.backend, "cvxpy")
+        self.assertAlmostEqual(result.x[0], 3.0, places=6)
+
     def test_solver_log_stream_emits_complete_lines(self):
         events = []
         stream = milp_solver.SolverLogStream(events.append, prefix="求解器: ")
@@ -231,7 +322,12 @@ class MilpSolverTest(unittest.TestCase):
         args = self._tiny_problem()
         events = []
 
-        result = milp_solver.solve_milp(*args, options={"solver": "scipy", "solver_log": True}, log=events.append, problem_name="测试模型")
+        result = milp_solver.solve_milp(
+            *args,
+            options={"solver": "scipy", "modeling_interface": "native", "solver_log": True},
+            log=events.append,
+            problem_name="测试模型",
+        )
 
         self.assertTrue(result.success)
         self.assertEqual(result.solver, "scipy")

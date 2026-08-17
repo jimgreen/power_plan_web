@@ -708,6 +708,23 @@ class PlanOptimizerTest(unittest.TestCase):
 
         self.assertEqual(seen_options["solver"], "cplex")
 
+    def test_planning_optimization_passes_modeling_interface_to_milp_adapter(self):
+        payload = self._payload()
+        payload["planning_parameters"][0]["preferred_solver"] = "cplex"
+        payload["planning_parameters"][0]["modeling_interface"] = "native"
+        model = plan_optimizer.build_planning_model(payload, payload["time_series"][:1])
+        seen_options = {}
+
+        def fake_solve_milp(c, integrality, lower_bounds, upper_bounds, constraints, constraint_lower, constraint_upper, options, log, problem_name):
+            seen_options.update(options)
+            return SimpleNamespace(success=True, x=np.array(lower_bounds, dtype=float), fun=0.0, message="ok")
+
+        with patch.object(plan_optimizer, "solve_milp", side_effect=fake_solve_milp):
+            plan_optimizer.solve_planning_model(model)
+
+        self.assertEqual(model["modeling_interface"], "native")
+        self.assertEqual(seen_options["modeling_interface"], "native")
+
     def test_planning_optimization_passes_preferred_gurobi_solver_to_milp_adapter(self):
         payload = self._payload()
         payload["planning_parameters"][0]["preferred_solver"] = "gurobi"

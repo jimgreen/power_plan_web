@@ -2522,6 +2522,7 @@ EVALUATION_REPORT_INPUT_FIELD_LABELS = {
     "green_power_ratio_lower": "绿色电量占比下限",
     "optimization_time_limit_minutes": "规划求解时间上限(分钟)",
     "preferred_solver": "优先求解器",
+    "modeling_interface": "建模接口方式",
     "initial_storage_soc_ratio": "初始电储SOC",
     "storage_balance_mode": "电储能平衡模式",
     "initial_hydrogen_storage_ratio": "初始氢储SOC",
@@ -2565,8 +2566,14 @@ EVALUATION_REPORT_VALUE_LABELS = {
         "auto": "自动选择",
         "gurobi": "Gurobi",
         "cplex": "CPLEX",
-        "mosek": "原生MOSEK",
+        "mosek": "MOSEK",
+        "copt": "COPT",
+        "mindopt": "MindOpt",
         "scipy": "SciPy HiGHS",
+    },
+    "modeling_interface": {
+        "cvxpy": "CVXPY通用接口",
+        "native": "优化求解器原生接口",
     },
     "storage_balance_mode": {
         "daily": "日内平衡",
@@ -9137,6 +9144,8 @@ def handle_planning_api_path(
 ) -> tuple[int, dict[str, str], bytes]:
     prefix = "/api/planning/schemes"
     try:
+        if path == "/api/planning/solver-capabilities" and method == "GET":
+            return _json_response(milp_solver.solver_capabilities())
         if path == "/api/planning/time-series/import" and method == "POST":
             payload = _read_json_body(body)
             filename = str(payload.get("filename", ""))
