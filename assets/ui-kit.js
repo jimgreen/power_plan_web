@@ -845,6 +845,215 @@
     window.addEventListener("powerplan:contextchange", renderStrip);
   }
 
+  /** 全站左侧栏纵向可拖拽分割条与一键隐藏/展开引擎（支持持久化记忆与图表重绘） */
+  function mountSidebarSplitter() {
+    const pageKey = (window.location.pathname.split("/").pop() || "index.html").toLowerCase();
+    const STORAGE_PREFIX = "powerPlanSidebarLayout:";
+
+    const readLayout = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_PREFIX + pageKey);
+        return raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        return {};
+      }
+    };
+
+    const writeLayout = (data) => {
+      try {
+        localStorage.setItem(STORAGE_PREFIX + pageKey, JSON.stringify(data));
+      } catch (_) {
+        // 忽略本地存储受限异常
+      }
+    };
+
+    const triggerResize = () => {
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+    };
+
+    const createToggleButton = (collapsed) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "sidebar-splitter-toggle";
+      const syncBtn = (isCollapsed) => {
+        btn.setAttribute("aria-label", tr(isCollapsed ? "展开左侧栏" : "隐藏左侧栏"));
+        btn.setAttribute("title", tr(isCollapsed ? "展开左侧栏" : "隐藏左侧栏"));
+        btn.setAttribute("aria-expanded", String(!isCollapsed));
+        btn.innerHTML = isCollapsed
+          ? `<svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="6 3 11 8 6 13"></polyline></svg>`
+          : `<svg viewBox="0 0 16 16" aria-hidden="true"><polyline points="10 3 5 8 10 13"></polyline></svg>`;
+      };
+      syncBtn(collapsed);
+      btn._syncCollapsed = syncBtn;
+      return btn;
+    };
+
+    // 模式 A：evaluation.html / frequency.html 已有原生纵向分割条，直接叠加一键隐藏/展开与折叠恢复能力
+    const existingHandle = document.querySelector("#evaluationMainResizeHandle, #frequencyMainResizeHandle");
+    const evalWorkspace = existingHandle?.closest(".evaluation-workspace");
+    if (existingHandle && evalWorkspace && !existingHandle.querySelector(".sidebar-splitter-toggle")) {
+      const saved = readLayout();
+      let collapsed = Boolean(saved.collapsed);
+      let lastWidth = Number(saved.width) || 340;
+      const toggleBtn = createToggleButton(collapsed);
+
+      const applyEvalCollapsed = (nextCollapsed, persist = true) => {
+        if (nextCollapsed && !collapsed) {
+          const curVar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--evaluation-result-rail-width"));
+          if (Number.isFinite(curVar) && curVar >= 160) lastWidth = Math.round(curVar);
+        }
+        collapsed = Boolean(nextCollapsed);
+        evalWorkspace.classList.toggle("is-sidebar-collapsed", collapsed);
+        toggleBtn._syncCollapsed(collapsed);
+        if (!collapsed && lastWidth >= 160) {
+          document.documentElement.style.setProperty("--evaluation-result-rail-width", `${lastWidth}px`);
+        }
+        if (persist) writeLayout({ collapsed, width: lastWidth });
+        triggerResize();
+      };
+
+      existingHandle.classList.add("has-sidebar-toggle");
+      existingHandle.appendChild(toggleBtn);
+      toggleBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+      toggleBtn.addEventListener("mousedown", (e) => e.stopPropagation());
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        applyEvalCollapsed(!collapsed);
+      });
+      existingHandle.addEventListener("dblclick", (e) => {
+        if (e.target.closest(".sidebar-splitter-toggle")) return;
+        applyEvalCollapsed(!collapsed);
+      });
+      if (collapsed) applyEvalCollapsed(true, false);
+      return;
+    }
+
+    // 模式 B：planning / optimize / reliability / sensitivity 统一注入可拖拽 + 可收起纵向分割条
+    let workspace = null;
+    let defaultWidth = 236;
+    let minWidth = 170;
+    let maxWidth = 520;
+
+    if (pageKey === "planning.html") {
+      workspace = document.querySelector("section.workspace");
+      defaultWidth = 240;
+    } else if (pageKey === "optimize.html") {
+      workspace = document.querySelector("section.optimization-workspace");
+      defaultWidth = 236;
+    } else if (pageKey === "reliability.html") {
+      workspace = document.querySelector("section.reliability-workspace");
+      defaultWidth = 336;
+      minWidth = 240;
+      maxWidth = 560;
+    } else if (pageKey === "sensitivity.html") {
+      workspace = document.querySelector("section.sensitivity-workspace");
+      defaultWidth = 296;
+      minWidth = 220;
+      maxWidth = 520;
+    }
+
+    if (!workspace || workspace.querySelector(".sidebar-splitter")) return;
+
+    const saved = readLayout();
+    let width = Number.isFinite(Number(saved.width)) ? Math.min(maxWidth, Math.max(minWidth, Number(saved.width))) : defaultWidth;
+    let collapsed = Boolean(saved.collapsed);
+
+    const splitter = document.createElement("div");
+    splitter.className = "sidebar-splitter";
+    splitter.setAttribute("role", "separator");
+    splitter.setAttribute("tabindex", "0");
+    splitter.setAttribute("aria-orientation", "vertical");
+    splitter.setAttribute("aria-label", tr("调整左侧栏宽度，双击重置"));
+
+    const toggleBtn = createToggleButton(collapsed);
+    splitter.appendChild(toggleBtn);
+    workspace.classList.add("has-sidebar-splitter");
+    workspace.appendChild(splitter);
+
+    const applyState = (nextWidth, nextCollapsed, persist = true) => {
+      width = Math.min(maxWidth, Math.max(minWidth, Math.round(nextWidth)));
+      collapsed = Boolean(nextCollapsed);
+      workspace.style.setProperty("--sidebar-width", `${width}px`);
+      workspace.classList.toggle("is-sidebar-collapsed", collapsed);
+      splitter.setAttribute("aria-valuenow", String(collapsed ? 0 : width));
+      toggleBtn._syncCollapsed(collapsed);
+      if (persist) writeLayout({ width, collapsed });
+      triggerResize();
+    };
+
+    applyState(width, collapsed, false);
+
+    toggleBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    toggleBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      applyState(width, !collapsed, true);
+    });
+
+    splitter.addEventListener("dblclick", (e) => {
+      if (e.target.closest(".sidebar-splitter-toggle")) return;
+      if (collapsed) applyState(width, false, true);
+      else applyState(defaultWidth, false, true);
+    });
+
+    splitter.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        applyState(width, !collapsed, true);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (!collapsed) applyState(width - 16, false, true);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        applyState(collapsed ? width : width + 16, false, true);
+      }
+    });
+
+    splitter.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest(".sidebar-splitter-toggle")) return;
+      event.preventDefault();
+      const wsRect = workspace.getBoundingClientRect();
+      const wsPadLeft = parseFloat(getComputedStyle(workspace).paddingLeft) || 8;
+      splitter.classList.add("is-dragging");
+      document.body.classList.add("is-sidebar-resizing");
+      try {
+        splitter.setPointerCapture(event.pointerId);
+      } catch (_) {}
+
+      let liveWidth = width;
+      let liveCollapsed = collapsed;
+
+      const onMove = (moveEvent) => {
+        const raw = moveEvent.clientX - wsRect.left - wsPadLeft;
+        if (raw < 108) {
+          liveCollapsed = true;
+          workspace.classList.add("is-sidebar-collapsed");
+          toggleBtn._syncCollapsed(true);
+        } else {
+          liveCollapsed = false;
+          liveWidth = Math.min(maxWidth, Math.max(minWidth, Math.round(raw)));
+          workspace.classList.remove("is-sidebar-collapsed");
+          workspace.style.setProperty("--sidebar-width", `${liveWidth}px`);
+          toggleBtn._syncCollapsed(false);
+        }
+      };
+
+      const onUp = () => {
+        splitter.classList.remove("is-dragging");
+        document.body.classList.remove("is-sidebar-resizing");
+        splitter.removeEventListener("pointermove", onMove);
+        splitter.removeEventListener("pointerup", onUp);
+        splitter.removeEventListener("pointercancel", onUp);
+        applyState(liveWidth, liveCollapsed, true);
+      };
+
+      splitter.addEventListener("pointermove", onMove);
+      splitter.addEventListener("pointerup", onUp);
+      splitter.addEventListener("pointercancel", onUp);
+    });
+  }
+
   /** 注册全局快捷键：Ctrl+S 快捷保存、Esc 关闭右键菜单与原生弹窗 */
   function bindGlobalShortcuts() {
     document.addEventListener("keydown", (event) => {
@@ -874,6 +1083,7 @@
     mountTopbarUtilities();
     mountGlobalTaskDrawer();
     mountWorkflowNextStrip();
+    mountSidebarSplitter();
     enhanceSchemeRail();
     bindGlobalShortcuts();
   }

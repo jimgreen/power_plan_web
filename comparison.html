@@ -6,8 +6,8 @@
   <title>结果对比 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="assets/planning.css?v=20260530-axis-popover">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v5">
-  <script src="assets/ui-kit.js?v=20261126-ui-v5"></script>
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v9">
+  <script src="assets/ui-kit.js?v=20261126-ui-v9"></script>
 </head>
 <body>
   <main class="planning-shell">
@@ -32,17 +32,25 @@
     <section class="workspace comparison-workspace">
       <section class="comparison-panel">
         <section class="comparison-tab-bar" aria-label="结果对比标签栏">
-          <div id="comparisonTabs" class="comparison-tabs" role="tablist"></div>
+          <div class="comparison-tabs-row">
+            <div id="comparisonTabs" class="comparison-tabs" role="tablist"></div>
+            <button id="addComparisonTab" class="comparison-add-tab" type="button">+ 添加</button>
+          </div>
           <div class="comparison-decision-bar" aria-label="对比决策工具">
-            <label class="comparison-baseline-field">
-              <span>基准</span>
-              <select id="comparisonBaselineSelect" aria-label="选择基准方案">
-                <option value="">无基准</option>
-              </select>
-            </label>
-            <button id="comparisonDeltaToggle" type="button" aria-pressed="false">差值 Δ/%</button>
-            <button id="comparisonReliabilityToggle" type="button" aria-pressed="false">可靠性维度</button>
-            <button id="exportComparisonCsv" type="button">导出 CSV</button>
+            <div class="comparison-decision-left">
+              <span id="comparisonCountBadge" class="scheme-count-badge">0/8</span>
+              <label class="comparison-baseline-field">
+                <span>基准</span>
+                <select id="comparisonBaselineSelect" aria-label="选择基准方案">
+                  <option value="">无基准</option>
+                </select>
+              </label>
+              <button id="comparisonDeltaToggle" type="button" aria-pressed="false">差值 Δ/%</button>
+              <button id="comparisonReliabilityToggle" type="button" aria-pressed="false">可靠性维度</button>
+            </div>
+            <div class="comparison-decision-right">
+              <button id="exportComparisonCsv" type="button">导出 CSV</button>
+            </div>
           </div>
           <div id="comparisonResultWarnings" class="result-file-warnings comparison-result-warnings" hidden></div>
         </section>
@@ -88,6 +96,6 @@
   <script src="assets/auth.js?v=20260510-auth"></script>
   <script src="assets/page_state.js?v=20261126-ui-v2"></script>
   <script src="assets/result_curves.js?v=20260530-page-state3"></script>
-  <script src="assets/comparison.js?v=20261126-ui-v2"></script>
+  <script src="assets/comparison.js?v=20261126-ui-v8"></script>
 </body>
 </html>

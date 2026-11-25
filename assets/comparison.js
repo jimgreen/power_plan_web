@@ -229,8 +229,8 @@ function applyResultFilesToTab(tab, results, selected = "") {
 }
 
 function bindAddTab() {
-  document.getElementById("comparisonTabs").addEventListener("click", async (event) => {
-    if (!event.target.closest("#addComparisonTab")) return;
+  const addButton = document.getElementById("addComparisonTab");
+  addButton?.addEventListener("click", async () => {
     if (state.tabs.length >= MAX_TABS) return;
     const tab = {
       id: `tab-${Date.now()}`,
@@ -245,16 +245,34 @@ function bindAddTab() {
     renderComparisonTabs();
     refreshComparisonData().catch(showError);
   });
+  window.addEventListener("powerplan:themechange", () => renderComparisonTabs());
 }
 
 function leftTabForNewComparison() {
   return state.tabs[state.tabs.length - 1] || null;
 }
 
+function comparisonSeriesDotColor(index) {
+  const series = window.PowerPlanUI?.getChartPalette?.()?.series || [
+    "#38BDF8",
+    "#FBBF24",
+    "#34D399",
+    "#FB7185",
+    "#A78BFA",
+    "#94A3B8",
+    "#2DD4BF",
+    "#FB923C",
+  ];
+  return series[index % series.length];
+}
+
 function renderComparisonTabs() {
   const container = document.getElementById("comparisonTabs");
-  container.innerHTML = state.tabs.map((tab, index) => renderComparisonTab(tab, index)).join("") + renderAddComparisonTab();
-  document.getElementById("addComparisonTab").disabled = state.tabs.length >= MAX_TABS;
+  container.innerHTML = state.tabs.map((tab, index) => renderComparisonTab(tab, index)).join("");
+  const addBtn = document.getElementById("addComparisonTab");
+  if (addBtn) addBtn.disabled = state.tabs.length >= MAX_TABS;
+  const countBadge = document.getElementById("comparisonCountBadge");
+  if (countBadge) countBadge.textContent = `${state.tabs.length}/${MAX_TABS}`;
   renderComparisonResultWarnings();
 
   container.querySelectorAll("[data-comparison-tab]").forEach((element) => {
@@ -322,22 +340,18 @@ function renderComparisonTabs() {
   });
 }
 
-function renderAddComparisonTab() {
-  return `<button id="addComparisonTab" class="comparison-add-tab" type="button">添加对比</button>`;
-}
-
 function renderComparisonTab(tab, index) {
   const active = tab.id === state.activeTabId ? " active" : "";
+  const dotColor = comparisonSeriesDotColor(index);
   return `
-    <section class="comparison-tab${active}" data-comparison-tab="${escapeHtml(tab.id)}" draggable="true">
-      <div class="comparison-tab-head">
-        <strong>对比${index + 1}</strong>
-        ${index === 0 ? "" : `<button type="button" data-close-comparison-tab="${escapeHtml(tab.id)}" aria-label="关闭对比${index + 1}">×</button>`}
-      </div>
+    <section class="comparison-tab comparison-pill${active}" data-comparison-tab="${escapeHtml(tab.id)}" draggable="true" title="拖动可调整对比顺序">
+      <span class="comparison-pill-dot" style="background:${dotColor}" aria-hidden="true"></span>
       <div class="comparison-tab-selectors">
         <select data-scheme-select="${escapeHtml(tab.id)}" aria-label="方案列表">${renderSchemeOptions(tab.scheme)}</select>
+        <span class="comparison-pill-sep" aria-hidden="true">/</span>
         <select data-result-select="${escapeHtml(tab.id)}" aria-label="结果列表">${renderResultOptions(tab)}</select>
       </div>
+      ${index === 0 ? "" : `<button type="button" class="comparison-pill-close" data-close-comparison-tab="${escapeHtml(tab.id)}" aria-label="关闭对比${index + 1}">×</button>`}
     </section>`;
 }
 

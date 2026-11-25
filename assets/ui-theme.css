@@ -639,7 +639,7 @@ body[data-home-theme] .workspace {
   row-gap: 6px !important;
 }
 
-body .workspace:not(.comparison-workspace):not(.tasks-workspace):not(.user-management-workspace):not(.evaluation-workspace):not(.reliability-workspace) {
+body .workspace:not(.comparison-workspace):not(.tasks-workspace):not(.user-management-workspace):not(.evaluation-workspace):not(.reliability-workspace):not(.has-sidebar-splitter) {
   grid-template-columns: 236px minmax(0, 1fr) !important;
 }
 
@@ -3117,16 +3117,208 @@ html[data-theme] button:disabled {
   background: var(--accent-soft);
 }
 
-/* 结果对比页决策工具栏、差值徽标与可靠性对比卡片 */
-.comparison-tab-bar {
+/* 结果对比页：单行紧凑对比胶囊栏 + 一体化决策微工具条 */
+body .comparison-panel,
+body[data-home-theme] .comparison-panel {
   display: flex !important;
-  flex-wrap: wrap;
+  flex-direction: column !important;
+  gap: 6px !important;
+}
+
+body .comparison-panel > .comparison-tab-bar {
+  flex: 0 0 auto !important;
+  min-height: 0 !important;
+  height: auto !important;
+}
+
+body .comparison-panel > .comparison-reliability-card {
+  flex: 0 0 auto !important;
+  max-height: 180px;
+  overflow: auto;
+}
+
+body .comparison-panel > .comparison-table-grid {
+  flex: 0 0 auto !important;
+  height: var(--comparison-table-height, 30vh) !important;
+  min-height: 0 !important;
+}
+
+body .comparison-panel > .comparison-table-curve-resize-handle {
+  flex: 0 0 8px !important;
+  height: 8px !important;
+}
+
+body .comparison-panel > .comparison-curve-board {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+}
+
+body .comparison-panel .comparison-tab-bar,
+body[data-home-theme] .comparison-panel .comparison-tab-bar {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: stretch !important;
+  gap: 6px !important;
+  padding: 6px 8px !important;
+  min-height: 0 !important;
+}
+
+.comparison-tabs-row {
+  display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  min-height: 30px;
+}
+
+body .comparison-tabs {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  min-height: 30px !important;
+  height: auto !important;
+  overflow-x: auto !important;
+  overflow-y: hidden !important;
+  padding: 0 !important;
+  scrollbar-width: thin;
+}
+
+body .comparison-tab.comparison-pill,
+body[data-home-theme] .comparison-tab.comparison-pill {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 6px 0 8px !important;
+  margin: 0 !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+  cursor: grab;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+body .comparison-tab.comparison-pill:hover {
+  border-color: var(--accent) !important;
+  background: var(--bg-subtle) !important;
+}
+
+/* 取消刺眼高饱和整块亮蓝，统一低调细描边聚焦 */
+body .comparison-tab.comparison-pill.active,
+body[data-home-theme] .comparison-tab.comparison-pill.active {
+  background: var(--bg-surface) !important;
+  border-color: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent) !important;
+  color: var(--text-primary) !important;
+}
+
+.comparison-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+body .comparison-tab.comparison-pill .comparison-tab-selectors {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+body .comparison-tab.comparison-pill .comparison-tab-selectors select {
+  height: 24px !important;
+  min-height: 24px !important;
+  padding: 0 4px !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  max-width: 140px;
+  min-width: 54px;
+  box-shadow: none !important;
+}
+
+body .comparison-tab.comparison-pill .comparison-tab-selectors select:hover,
+body .comparison-tab.comparison-pill .comparison-tab-selectors select:focus {
+  background: var(--bg-subtle) !important;
+  outline: none !important;
+}
+
+.comparison-pill-sep {
+  color: var(--text-muted);
+  font-size: 12px;
+  user-select: none;
+}
+
+body .comparison-pill-close {
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  min-height: 18px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 4px !important;
+  background: transparent !important;
+  color: var(--text-muted) !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer;
+}
+
+body .comparison-pill-close:hover {
+  background: var(--danger-soft) !important;
+  color: var(--danger) !important;
+}
+
+body .comparison-tabs-row .comparison-add-tab,
+body[data-home-theme] .comparison-tabs-row .comparison-add-tab {
+  flex: 0 0 auto !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 10px !important;
+  border-radius: 6px !important;
+  border: 1px dashed var(--accent-border) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+  cursor: pointer;
+}
+
+body .comparison-tabs-row .comparison-add-tab:hover:not(:disabled) {
+  border-style: solid !important;
+  border-color: var(--accent) !important;
 }
 
 .comparison-decision-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+}
+
+.comparison-decision-left,
+.comparison-decision-right {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -3736,6 +3928,161 @@ body .user-menu-actions button[data-logout]:hover {
   flex: 0 0 auto !important;
   padding: 0 7px !important;
   font-size: 11.5px !important;
+}
+
+/* ==========================================================================
+   全站左侧栏纵向可拖拽分割器与一键隐藏/展开（planning / optimize / evaluation / frequency / reliability / sensitivity）
+   ========================================================================== */
+
+body.is-sidebar-resizing,
+body.is-sidebar-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* 三列布局接管：左侧栏 | 10px 纵向分割器 | 右侧主区 */
+body .workspace.has-sidebar-splitter,
+body .reliability-workspace.has-sidebar-splitter,
+body .workspace.sensitivity-workspace.has-sidebar-splitter {
+  grid-template-columns: minmax(0, var(--sidebar-width, 240px)) 10px minmax(0, 1fr) !important;
+  column-gap: 4px !important;
+}
+
+body .workspace.has-sidebar-splitter > .scheme-rail,
+body .workspace.has-sidebar-splitter > .summary-rail,
+body .workspace.has-sidebar-splitter > #schemeListResizeHandle,
+body .workspace.has-sidebar-splitter > #optimizationSchemeListResizeHandle {
+  grid-column: 1 !important;
+  min-width: 0 !important;
+}
+
+body .reliability-workspace.has-sidebar-splitter > .reliability-settings,
+body .sensitivity-workspace.has-sidebar-splitter > .sensitivity-config-rail {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+}
+
+body .workspace.has-sidebar-splitter > .editor-panel,
+body .workspace.has-sidebar-splitter > .optimization-panel {
+  grid-column: 3 !important;
+  min-width: 0 !important;
+}
+
+body .reliability-workspace.has-sidebar-splitter > .reliability-main,
+body .sensitivity-workspace.has-sidebar-splitter > .sensitivity-main-panel {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+}
+
+.sidebar-splitter {
+  grid-column: 2 !important;
+  grid-row: 1 / -1 !important;
+  align-self: stretch;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  min-height: 120px;
+  cursor: col-resize;
+  touch-action: none;
+  z-index: 12;
+}
+
+.sidebar-splitter::before {
+  content: "";
+  width: 2px;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--border-strong);
+  opacity: 0.72;
+  transition: background 0.14s ease, width 0.14s ease, opacity 0.14s ease;
+}
+
+.sidebar-splitter:hover::before,
+.sidebar-splitter:focus-visible::before,
+.sidebar-splitter.is-dragging::before {
+  width: 3px;
+  background: var(--accent);
+  opacity: 1;
+}
+
+/* 居中精致收起/展开微按钮（同时复用于 evaluation/frequency 的原生分割条） */
+.evaluation-main-resize-handle.has-sidebar-toggle {
+  position: relative !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.sidebar-splitter-toggle {
+  position: sticky;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px !important;
+  height: 44px !important;
+  min-width: 16px !important;
+  min-height: 44px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-surface) !important;
+  color: var(--text-secondary) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28) !important;
+  z-index: 15;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease, transform 0.14s ease;
+}
+
+.sidebar-splitter-toggle svg {
+  width: 11px;
+  height: 11px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-splitter-toggle:hover {
+  border-color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent) !important;
+}
+
+/* 折叠隐藏状态：左侧栏零占位，右侧主区铺满近 100% 视口 */
+body .workspace.has-sidebar-splitter.is-sidebar-collapsed,
+body .reliability-workspace.has-sidebar-splitter.is-sidebar-collapsed,
+body .workspace.sensitivity-workspace.has-sidebar-splitter.is-sidebar-collapsed,
+body .workspace.evaluation-workspace.is-sidebar-collapsed {
+  grid-template-columns: 0px 14px minmax(0, 1fr) !important;
+  column-gap: 4px !important;
+}
+
+body .is-sidebar-collapsed > .scheme-rail,
+body .is-sidebar-collapsed > .summary-rail,
+body .is-sidebar-collapsed > .evaluation-result-rail,
+body .is-sidebar-collapsed > .reliability-settings,
+body .is-sidebar-collapsed > .sensitivity-config-rail,
+body .is-sidebar-collapsed > #schemeListResizeHandle,
+body .is-sidebar-collapsed > #optimizationSchemeListResizeHandle,
+body .is-sidebar-collapsed > #evaluationSchemeListResizeHandle,
+body .is-sidebar-collapsed > #frequencySchemeListResizeHandle {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
 }
 
 @media print {
