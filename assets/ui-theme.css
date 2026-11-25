@@ -2468,11 +2468,11 @@ body.home-page,
   min-width: 0 !important;
 }
 
-/* 顶栏严格锁定 100% 视口宽度，三语切换绝不挤出右侧控件 */
+/* 顶栏严格锁定 100% 视口宽度，允许下拉浮层向下展开不被裁切 */
 html[data-theme] body .topbar {
   width: 100% !important;
   max-width: 100vw !important;
-  overflow: hidden !important;
+  overflow: visible !important;
   gap: 8px !important;
   padding: 0 10px !important;
 }
@@ -3521,6 +3521,221 @@ body .workspace.sensitivity-workspace {
 @media (max-width: 1080px) {
   .report-kpi-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .report-grid-two, .report-grid-three { grid-template-columns: 1fr; }
+}
+
+/* 顶栏用户折叠菜单（仅显示用户名，悬停/点击弹出角色、用户管理与退出） */
+body .user-status.user-menu-host,
+body[data-home-theme] .user-status.user-menu-host {
+  position: relative !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  overflow: visible !important;
+}
+
+body .user-menu-trigger {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 8px !important;
+  border: 1px solid var(--border-color) !important;
+  border-radius: var(--radius-btn) !important;
+  background: var(--bg-subtle) !important;
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  white-space: nowrap !important;
+  box-shadow: none !important;
+}
+
+body .user-menu-trigger:hover,
+body .user-menu-host:hover .user-menu-trigger,
+body .user-menu-host.is-open .user-menu-trigger {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.user-menu-trigger strong {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit !important;
+}
+
+.user-menu-caret {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.72;
+  transition: transform 0.14s ease;
+}
+
+.user-menu-host:hover .user-menu-caret,
+.user-menu-host.is-open .user-menu-caret {
+  transform: rotate(180deg);
+}
+
+.user-menu-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+  z-index: 1200;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+}
+
+/* 顶部透明桥接区，防止鼠标从触发器滑向菜单时缝隙触发关闭 */
+.user-menu-popover::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 0;
+  right: 0;
+  height: 8px;
+}
+
+.user-menu-host:hover .user-menu-popover,
+.user-menu-host:focus-within .user-menu-popover,
+.user-menu-host.is-open .user-menu-popover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.user-menu-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px 7px;
+  margin-bottom: 5px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.user-menu-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-menu-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+body .user-menu-actions a,
+body .user-menu-actions button,
+body[data-home-theme] .user-menu-actions a,
+body[data-home-theme] .user-menu-actions button {
+  width: 100% !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 8px !important;
+  justify-content: flex-start !important;
+  border: 1px solid transparent !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+}
+
+body .user-menu-actions a:hover,
+body .user-menu-actions button:hover {
+  background: var(--bg-subtle) !important;
+  border-color: var(--border-color) !important;
+  color: var(--accent) !important;
+}
+
+body .user-menu-actions button[data-logout]:hover {
+  color: var(--danger) !important;
+  background: var(--danger-soft) !important;
+}
+
+/* 中等宽度视口下自动收紧顶栏间距，保证 8 个导航项完整可见不遮挡 */
+@media (max-width: 1480px) {
+  body .topbar,
+  body[data-home-theme] .topbar {
+    padding: 0 10px !important;
+    gap: 8px !important;
+  }
+  body .brand,
+  body[data-home-theme] .brand,
+  .reliability-page .brand {
+    font-size: 13px !important;
+    max-width: clamp(132px, 16vw, 224px);
+  }
+  body .main-nav,
+  body[data-home-theme] .main-nav,
+  .reliability-page .main-nav {
+    gap: 2px !important;
+  }
+  body .main-nav a,
+  body[data-home-theme] .main-nav a,
+  .reliability-page .main-nav a {
+    padding: 0 7px !important;
+    font-size: 12.5px !important;
+  }
+  .topbar-utilities {
+    gap: 5px;
+  }
+  body .theme-switch,
+  body .language-switch {
+    padding: 0 6px !important;
+    gap: 3px !important;
+  }
+  body .theme-switch select,
+  body .language-switch select {
+    min-width: 62px !important;
+    max-width: 102px !important;
+    font-size: 11.5px !important;
+  }
+}
+
+/* 任务并发页操作列 4 按钮单行整齐排布，不折行、不裁切 */
+.task-col-actions {
+  width: 228px !important;
+}
+
+.task-actions-cell {
+  overflow: visible !important;
+}
+
+.task-actions {
+  display: inline-flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 4px !important;
+}
+
+.task-actions button,
+.task-actions .task-view-link {
+  white-space: nowrap !important;
+  flex: 0 0 auto !important;
+  padding: 0 7px !important;
+  font-size: 11.5px !important;
 }
 
 @media print {

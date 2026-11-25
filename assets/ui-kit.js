@@ -411,16 +411,80 @@
       else utilities.appendChild(langWrap);
     }
 
-    // 确保管理员在任意子页面都能一键访问用户管理
-    if (userStatus && !userStatus.querySelector('a[href="users.html"]')) {
+    // 确保管理员在任意子页面都能一键访问用户管理，并将用户区折叠为“用户名胶囊 + 悬停/点击浮层菜单”
+    if (userStatus) {
+      let adminLink = userStatus.querySelector('a[href="users.html"]');
       const logoutBtn = userStatus.querySelector("[data-logout]");
-      const adminLink = document.createElement("a");
-      adminLink.href = "users.html";
-      adminLink.dataset.adminOnly = "";
-      adminLink.hidden = true;
-      adminLink.textContent = "用户管理";
-      if (logoutBtn) userStatus.insertBefore(adminLink, logoutBtn);
-      else userStatus.appendChild(adminLink);
+      if (!adminLink) {
+        adminLink = document.createElement("a");
+        adminLink.href = "users.html";
+        adminLink.dataset.adminOnly = "";
+        adminLink.hidden = true;
+        adminLink.textContent = "用户管理";
+        if (logoutBtn) userStatus.insertBefore(adminLink, logoutBtn);
+        else userStatus.appendChild(adminLink);
+      }
+
+      if (!userStatus.classList.contains("user-menu-host")) {
+        const usernameEl = userStatus.querySelector("[data-auth-username]");
+        const roleEl = userStatus.querySelector("[data-auth-role]");
+
+        userStatus.classList.add("user-menu-host");
+
+        const trigger = document.createElement("button");
+        trigger.type = "button";
+        trigger.className = "user-menu-trigger";
+        trigger.setAttribute("aria-haspopup", "menu");
+        trigger.setAttribute("aria-expanded", "false");
+        trigger.innerHTML =
+          `<svg class="topbar-icon user-menu-avatar" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle><path d="M4 20a8 8 0 0 1 16 0"></path></svg>` +
+          `<svg class="user-menu-caret" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+        const caret = trigger.querySelector(".user-menu-caret");
+        if (usernameEl) {
+          trigger.insertBefore(usernameEl, caret);
+        }
+
+        const popover = document.createElement("div");
+        popover.className = "user-menu-popover";
+        popover.setAttribute("role", "menu");
+
+        const header = document.createElement("div");
+        header.className = "user-menu-header";
+        const mirrorName = document.createElement("span");
+        mirrorName.className = "user-menu-name";
+        mirrorName.dataset.authUsername = "";
+        mirrorName.textContent = usernameEl?.textContent || "";
+        header.appendChild(mirrorName);
+        if (roleEl) header.appendChild(roleEl);
+
+        const actions = document.createElement("div");
+        actions.className = "user-menu-actions";
+        adminLink.setAttribute("role", "menuitem");
+        actions.appendChild(adminLink);
+        if (logoutBtn) {
+          logoutBtn.setAttribute("role", "menuitem");
+          actions.appendChild(logoutBtn);
+        }
+
+        popover.append(header, actions);
+        userStatus.innerHTML = "";
+        userStatus.append(trigger, popover);
+
+        const setOpen = (open) => {
+          userStatus.classList.toggle("is-open", open);
+          trigger.setAttribute("aria-expanded", String(open));
+        };
+        trigger.addEventListener("click", (event) => {
+          event.stopPropagation();
+          setOpen(!userStatus.classList.contains("is-open"));
+        });
+        document.addEventListener("click", (event) => {
+          if (!userStatus.contains(event.target)) setOpen(false);
+        });
+        document.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") setOpen(false);
+        });
+      }
     }
   }
 
@@ -525,7 +589,7 @@
     pill.className = "global-task-pill";
     pill.setAttribute("aria-expanded", "false");
     pill.setAttribute("aria-controls", "globalTaskDrawer");
-    pill.innerHTML = `<span class="global-task-dot" aria-hidden="true"></span><span class="global-task-label">任务</span><span id="globalTaskBadge" class="global-task-badge">0</span>`;
+    pill.innerHTML = `<span class="global-task-dot" aria-hidden="true"></span><span class="global-task-label">任务</span><span id="globalTaskBadge" class="global-task-badge" hidden></span>`;
     utilities.insertBefore(pill, utilities.firstChild);
 
     const backdrop = document.createElement("div");
@@ -592,7 +656,16 @@
       pill.classList.toggle("is-queued", running.length === 0 && queued.length > 0);
       const badge = document.getElementById("globalTaskBadge");
       if (badge) {
-        badge.textContent = running.length > 0 ? `${running.length} 运行${queued.length ? ` · ${queued.length} 排` : ""}` : queued.length > 0 ? `${queued.length} 排队` : "空闲";
+        if (running.length > 0) {
+          badge.textContent = queued.length ? `${running.length}+${queued.length}` : String(running.length);
+          badge.hidden = false;
+        } else if (queued.length > 0) {
+          badge.textContent = String(queued.length);
+          badge.hidden = false;
+        } else {
+          badge.textContent = "";
+          badge.hidden = true;
+        }
       }
       if (drawer.hidden) return;
 
