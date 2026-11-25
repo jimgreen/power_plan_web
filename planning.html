@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="precision-dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="assets/planning.css?v=20260817-modeling-interface">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261125-ui-refactor">
+  <script src="assets/ui-kit.js?v=20261125-ui-refactor"></script>
 </head>
 <body>
   <main class="planning-shell">
@@ -22,7 +24,7 @@
         <a href="tasks.html">任务并发</a>
       </nav>
       <div class="user-status" data-auth-user hidden>
-        <span>当前用户:</span><strong data-auth-username></strong><em data-auth-role></em>
+        <strong data-auth-username></strong><em data-auth-role></em>
         <button type="button" data-logout>退出</button>
       </div>
     </header>
@@ -127,7 +129,7 @@
               </div>
               <div id="timeSeriesImportResizeHandle" class="time-series-import-resize-handle" role="separator" aria-orientation="horizontal" aria-label="调整导入曲线预览高度" tabindex="0"></div>
               <div id="timeSeriesImportPreview" class="data-table time-series-import-preview">
-                <div class="empty-summary">打开文件后，在这里预览8760点曲线。</div>
+                <div class="empty-summary">—</div>
               </div>
               <div class="map-picker-foot">
                 <span id="timeSeriesImportSummary">未选择文件</span>
@@ -162,7 +164,7 @@
               </div>
               <svg id="loadGeneratorPreview" class="load-generator-preview" role="img" aria-label="生成负荷曲线预览"></svg>
               <div class="map-picker-foot">
-                <span id="loadGeneratorHint">输入最大值、最小值、平均值，并选择生成模式。</span>
+                <span id="loadGeneratorHint">—</span>
                 <button id="generateLoadCurve" type="button">生成负荷曲线</button>
                 <input id="loadCurveImportFile" type="file" accept=".csv,.xlsx" hidden>
                 <button id="saveLoadTemplate" type="button">保存模板</button>
@@ -276,7 +278,7 @@
       </aside>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20260817-modeling-interface3"></script>
+  <script src="assets/i18n.js?v=20261125-ui-refactor"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
   <script src="assets/page_state.js?v=20260530-page-state2"></script>
   <script src="assets/planning.js?v=20260817-modeling-interface"></script>

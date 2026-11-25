@@ -102,6 +102,19 @@ const timeSeriesImportSeries = [
 ];
 
 const timeSeriesValueKeys = new Set(["wind_speed", "solar_irradiance", "temperature", "load"]);
+function syncPlanningSeriesColors() {
+  const p = window.PowerPlanUI?.getChartPalette?.();
+  if (!p) return;
+  const map = { wind_speed: p.wind, solar_irradiance: p.solar, temperature: p.temperature, load: p.load };
+  summarySeries.forEach((item) => { if (map[item[0]]) item[2] = map[item[0]]; });
+  timeSeriesImportSeries.forEach((item) => { if (map[item[0]]) item[2] = map[item[0]]; });
+}
+syncPlanningSeriesColors();
+window.addEventListener("powerplan:themechange", () => {
+  syncPlanningSeriesColors();
+  try { if (typeof renderChart === "function") renderChart(); } catch (_) {}
+  try { if (typeof renderSummary === "function") renderSummary(); } catch (_) {}
+});
 const weatherPreviewSeries = timeSeriesImportSeries.filter(([key]) => key !== "load");
 
 const curveGeneratorSpecs = {
@@ -1418,7 +1431,8 @@ function renderPlanningSwitchingState(name) {
 }
 
 async function createScheme() {
-  const name = normalizeSchemeName(prompt("请输入新方案名称"));
+  const rawName = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入新方案名称", "", { title: "新建方案" }) : prompt("请输入新方案名称");
+  const name = normalizeSchemeName(rawName);
   if (!name) return;
   if (schemeNameExists(name)) {
     alert("方案名称已存在，请使用其他名称");
@@ -1433,7 +1447,8 @@ async function createScheme() {
 
 async function copyScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
-  const target = normalizeSchemeName(prompt("请输入复制后的方案名称", `${state.currentScheme}_副本`));
+  const rawTarget = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入复制后的方案名称", `${state.currentScheme}_副本`, { title: "复制方案" }) : prompt("请输入复制后的方案名称", `${state.currentScheme}_副本`);
+  const target = normalizeSchemeName(rawTarget);
   if (!target) return;
   const payload = { source: state.currentScheme, target };
   const existingTarget = schemeItemByName(target);
@@ -1442,7 +1457,7 @@ async function copyScheme() {
     return;
   }
   if (existingTarget || schemeNameExists(target)) {
-    const confirmed = confirm(`方案名称已存在：${target}\n是否覆盖？`);
+    const confirmed = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm(`覆盖已存在方案「${target}」？`, { confirmText: "覆盖" }) : confirm(`方案名称已存在：${target}\n是否覆盖？`);
     if (!confirmed) return;
     payload.overwrite = true;
   }
@@ -1467,7 +1482,8 @@ async function onSchemeImportFileChange(event) {
   if (!file) return;
   try {
     const defaultName = normalizeSchemeName(file.name.replace(/\.zip$/i, "")) || "导入方案";
-    const target = normalizeSchemeName(prompt("请输入导入后的方案名称", defaultName));
+    const rawTarget = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入导入后的方案名称", defaultName, { title: "导入方案" }) : prompt("请输入导入后的方案名称", defaultName);
+    const target = normalizeSchemeName(rawTarget);
     if (!target) return;
     const existingTarget = schemeItemByName(target);
     if (existingTarget?.can_manage === false) {
@@ -1476,7 +1492,7 @@ async function onSchemeImportFileChange(event) {
     }
     const payload = { filename: file.name, name: target };
     if (existingTarget || schemeNameExists(target)) {
-      const confirmed = confirm(`方案名称已存在：${target}\n是否覆盖？`);
+      const confirmed = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm(`覆盖已存在方案「${target}」？`, { confirmText: "覆盖" }) : confirm(`方案名称已存在：${target}\n是否覆盖？`);
       if (!confirmed) return;
       payload.overwrite = true;
     }
@@ -1514,7 +1530,8 @@ async function exportScheme() {
 async function renameScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
   if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能修改名称");
-  const target = normalizeSchemeName(prompt("请输入新的方案名称", state.currentScheme));
+  const rawTarget = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入新的方案名称", state.currentScheme, { title: "修改名称" }) : prompt("请输入新的方案名称", state.currentScheme);
+  const target = normalizeSchemeName(rawTarget);
   if (!target || target === state.currentScheme) return;
   if (schemeNameExists(target, state.currentScheme)) {
     alert("方案名称已存在，请使用其他名称");
@@ -1537,7 +1554,7 @@ async function shareScheme() {
   if (!detail) return;
   const sharedUsers = Array.isArray(detail.shared_with_usernames) ? detail.shared_with_usernames : [];
   const currentText = sharedUsers.length ? `当前已分享给：${sharedUsers.join("、")}` : "当前还没有分享给其他用户";
-  const input = prompt(`${currentText}\n请输入要分享的用户名；如果要取消分享，请输入 -用户名。`, "");
+  const input = window.PowerPlanUI ? await window.PowerPlanUI.prompt(`${currentText}\n请输入要分享的用户名（取消分享请加前缀 -）`, "", { title: "分享方案" }) : prompt(`${currentText}\n请输入要分享的用户名；如果要取消分享，请输入 -用户名。`, "");
   if (input === null) return;
   const text = String(input || "").trim();
   if (!text) return;
@@ -1577,7 +1594,7 @@ async function saveScheme() {
       alert(`参数校验未通过：\n${blockingWarnings.map((item) => `- ${item.message}`).join("\n")}`);
       return;
     }
-    if (advisoryWarnings.length && !confirm(`参数存在警告：\n${advisoryWarnings.map((item) => `- ${item.message}`).join("\n")}\n是否继续保存？`)) {
+    if (advisoryWarnings.length && !(window.PowerPlanUI ? await window.PowerPlanUI.confirm(`参数存在警告：\n${advisoryWarnings.map((item) => `- ${item.message}`).join("\n")}\n是否继续保存？`, { warn: true, title: "参数警告" }) : confirm(`参数存在警告：\n${advisoryWarnings.map((item) => `- ${item.message}`).join("\n")}\n是否继续保存？`))) {
       renderSummary();
       return;
     }
@@ -1625,7 +1642,8 @@ async function deleteScheme() {
   if (!state.currentScheme) return alert("请先选择方案");
   if (!currentSchemeCanManage()) return alert("共享方案只能查看或复制，不能删除");
   const deletedIndex = state.schemes.findIndex((scheme) => scheme.name === state.currentScheme);
-  if (!confirm(`确认删除方案“${state.currentScheme}”？删除后无法恢复。`)) return;
+  const okDelete = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm(`删除方案「${state.currentScheme}」？`, { confirmText: "删除" }) : confirm(`确认删除方案“${state.currentScheme}”？删除后无法恢复。`);
+  if (!okDelete) return;
   const result = await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}`, { method: "DELETE" }).catch(showError);
   if (!result) return;
   await selectNextSchemeAfterDelete(Math.max(0, deletedIndex));
@@ -2405,7 +2423,7 @@ async function saveLoadTemplate() {
     return;
   }
   const defaultName = currentLoadTemplateName();
-  const name = prompt("请输入负荷模板名称", defaultName);
+  const name = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入负荷模板名称", defaultName, { title: "保存模板" }) : prompt("请输入负荷模板名称", defaultName);
   if (name === null) return;
   const cleanName = normalizeSchemeName(name);
   if (!cleanName) {
@@ -2429,7 +2447,8 @@ async function saveLoadTemplateRequest(name, rows, overwrite) {
   } catch (error) {
     const message = error.message || String(error);
     if (!overwrite && (error.code === "exists" || message.includes("模板名称已存在"))) {
-      if (confirm(`模板名称已存在：${name}。是否覆盖保存？`)) {
+      const okOverwrite = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm(`覆盖模板「${name}」？`, { confirmText: "覆盖" }) : confirm(`模板名称已存在：${name}。是否覆盖保存？`);
+      if (okOverwrite) {
         await saveLoadTemplateRequest(name, rows, true);
       } else {
         setLoadGeneratorHint("负荷模板保存已取消");
@@ -3681,34 +3700,49 @@ function selectCurve(curveKey, options = {}) {
   if (options.remember !== false) rememberPlanningPageState({ selectedCurve: target[0] });
 }
 
+let _chartHoverRaf = 0;
+let _chartHoverEvent = null;
+let _chartHoverLastKey = "";
+
 function onChartMouseMove(event) {
   if (!state.chartMeta) return;
-  const svg = document.getElementById("timeChart");
-  const cursor = document.getElementById("chartCursor");
-  const cursorLine = document.getElementById("chartCursorLine");
-  const cursorPoint = document.getElementById("chartCursorPoint");
-  const tip = document.getElementById("chartTip");
-  if (!svg || !cursor || !cursorLine || !cursorPoint || !tip) return;
-  const meta = state.chartMeta;
-  const rect = svg.getBoundingClientRect();
-  const localX = ((event.clientX - rect.left) / Math.max(1, rect.width)) * meta.width;
-  const ratio = Math.min(1, Math.max(0, (localX - meta.padLeft) / meta.plotWidth));
-  const index = Math.round(ratio * Math.max(1, meta.rows.length - 1));
-  const row = meta.rows[index];
-  if (!row) return;
-  const pointX = meta.padLeft + (index / Math.max(1, meta.rows.length - 1)) * meta.plotWidth;
-  const value = Number(row[meta.curveKey]);
-  const safeValue = Number.isFinite(value) ? value : 0;
-  const pointY = meta.padTop + meta.plotHeight - ((safeValue - meta.minValue) / meta.valueSpan) * meta.plotHeight;
-  cursor.hidden = false;
-  cursorLine.setAttribute("x1", pointX.toFixed(1));
-  cursorLine.setAttribute("x2", pointX.toFixed(1));
-  cursorPoint.setAttribute("cx", pointX.toFixed(1));
-  cursorPoint.setAttribute("cy", pointY.toFixed(1));
-  cursorPoint.setAttribute("fill", meta.color);
-  tip.hidden = false;
-  tip.innerHTML = `${escapeHtml(meta.curveTitle)}：${escapeHtml(formatNumber(safeValue))}${escapeHtml(meta.unit)}<br>小时：${escapeHtml(row.hour_index ?? index + 1)}<br>时间：${escapeHtml(row.datetime || "")}`;
-  positionFloatingTipInRect(tip, rect, event);
+  _chartHoverEvent = event;
+  if (_chartHoverRaf) return;
+  _chartHoverRaf = window.requestAnimationFrame(() => {
+    _chartHoverRaf = 0;
+    const ev = _chartHoverEvent;
+    if (!ev || !state.chartMeta) return;
+    const svg = document.getElementById("timeChart");
+    const cursor = document.getElementById("chartCursor");
+    const cursorLine = document.getElementById("chartCursorLine");
+    const cursorPoint = document.getElementById("chartCursorPoint");
+    const tip = document.getElementById("chartTip");
+    if (!svg || !cursor || !cursorLine || !cursorPoint || !tip) return;
+    const meta = state.chartMeta;
+    const rect = svg.getBoundingClientRect();
+    const localX = ((ev.clientX - rect.left) / Math.max(1, rect.width)) * meta.width;
+    const ratio = Math.min(1, Math.max(0, (localX - meta.padLeft) / meta.plotWidth));
+    const index = Math.round(ratio * Math.max(1, meta.rows.length - 1));
+    const row = meta.rows[index];
+    if (!row) return;
+    const hoverKey = `${meta.curveKey}:${index}:${row[meta.curveKey]}`;
+    if (hoverKey !== _chartHoverLastKey || tip.hidden) {
+      _chartHoverLastKey = hoverKey;
+      const pointX = meta.padLeft + (index / Math.max(1, meta.rows.length - 1)) * meta.plotWidth;
+      const value = Number(row[meta.curveKey]);
+      const safeValue = Number.isFinite(value) ? value : 0;
+      const pointY = meta.padTop + meta.plotHeight - ((safeValue - meta.minValue) / meta.valueSpan) * meta.plotHeight;
+      cursor.hidden = false;
+      cursorLine.setAttribute("x1", pointX.toFixed(1));
+      cursorLine.setAttribute("x2", pointX.toFixed(1));
+      cursorPoint.setAttribute("cx", pointX.toFixed(1));
+      cursorPoint.setAttribute("cy", pointY.toFixed(1));
+      cursorPoint.setAttribute("fill", meta.color);
+      tip.hidden = false;
+      tip.innerHTML = `${escapeHtml(meta.curveTitle)}：${escapeHtml(formatNumber(safeValue))}${escapeHtml(meta.unit)}<br>小时：${escapeHtml(row.hour_index ?? index + 1)}<br>时间：${escapeHtml(row.datetime || "")}`;
+    }
+    positionFloatingTipInRect(tip, rect, ev);
+  });
 }
 
 function startChartValueDrag(event) {

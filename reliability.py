@@ -18,6 +18,8 @@ import random
 import statistics
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
 import estimate
 
 
@@ -562,18 +564,29 @@ def sample_two_state_unit_availability(
     if initial not in {"stationary", "all_up"}:
         raise ValueError("初始状态仅支持stationary或all_up")
     transition = two_state_transition_probabilities(q, mttr_hours, time_step_hours)
+    p_down = float(transition["up_to_down"])
+    p_up = float(transition["down_to_up"])
+    if count == 0:
+        return []
+    if q <= 0.0 and p_down <= 0.0:
+        return [[True] * horizon for _ in range(count)]
+    if q >= 1.0 and p_up <= 0.0 and initial != "all_up":
+        return [[False] * horizon for _ in range(count)]
+
     rng = random.Random(int(seed))
+    rand = rng.random
     states: list[list[bool]] = []
     for _ in range(count):
-        up = True if initial == "all_up" else rng.random() >= q
-        unit_states: list[bool] = []
-        for _hour in range(horizon):
-            unit_states.append(bool(up))
-            draw = rng.random()
+        up = True if initial == "all_up" else rand() >= q
+        unit_states = [True] * horizon
+        for hour_idx in range(horizon):
+            if not up:
+                unit_states[hour_idx] = False
+            draw = rand()
             if up:
-                if draw < transition["up_to_down"]:
+                if draw < p_down:
                     up = False
-            elif draw < transition["down_to_up"]:
+            elif draw < p_up:
                 up = True
         states.append(unit_states)
     return states
@@ -779,6 +792,36 @@ def summarize_storage(
     }
 
 
+def _spec_counts_array(spec: Mapping[str, Any], horizon: int) -> np.ndarray:
+    """将设备可用规格快速转为长度为 horizon 的每小时可用台数数组。"""
+
+    mode = spec["mode"]
+    if mode == "all_up":
+        return np.full(horizon, int(spec["unit_count"]), dtype=np.float64)
+    if mode == "counts":
+        return np.asarray(spec["values"][:horizon], dtype=np.float64)
+    unit_states = spec["values"]
+    if not unit_states:
+        return np.zeros(horizon, dtype=np.float64)
+    arr = np.asarray([unit[:horizon] for unit in unit_states], dtype=np.bool_)
+    return arr.sum(axis=0, dtype=np.int32).astype(np.float64)
+
+
+def _tiled_profile_array(profile: Sequence[Any], horizon: int) -> np.ndarray:
+    """将周期曲线快速扩展为长度为 horizon 的浮点数组。"""
+
+    if profile is None or len(profile) == 0:
+        return np.zeros(horizon, dtype=np.float64)
+    base = np.asarray(profile, dtype=np.float64)
+    length = base.shape[0]
+    if length == horizon:
+        return base
+    if length > horizon:
+        return base[:horizon]
+    reps = (horizon + length - 1) // length
+    return np.tile(base, reps)[:horizon]
+
+
 def dispatch_hourly(
     case: Mapping[str, Any],
     availability: Mapping[str, Any] | None = None,
@@ -798,10 +841,12 @@ def dispatch_hourly(
     discharge until repaired.
     """
 
-    load_profile = [max(0.0, numeric(value, 0.0)) for value in case.get("load_kw", [])]
-    if not load_profile:
+    raw_load = case.get("load_kw", [])
+    if not raw_load:
         raise ValueError("可靠性case缺少load_kw时序")
-    horizon = len(load_profile) if hours is None else non_negative_int(hours, field_name="调度小时数")
+    base_load = np.maximum(0.0, np.asarray([numeric(value, 0.0) for value in raw_load], dtype=np.float64))
+    load_len = int(base_load.shape[0])
+    horizon = load_len if hours is None else non_negative_int(hours, field_name="调度小时数")
     if horizon <= 0:
         raise ValueError("调度小时数必须大于0")
     dt = numeric(case.get("time_step_hours"), 1.0)
@@ -817,21 +862,107 @@ def dispatch_hourly(
     if policy not in {"renewable_storage_diesel", "renewable_diesel_storage"}:
         raise ValueError("未知快速调度策略")
 
-    groups = [dict(group) for group in case.get("groups", [])]
-    groups_by_type = {
-        device_type: [group for group in groups if group.get("device_type") == device_type]
-        for device_type in DEVICE_TYPE_LABELS
-    }
+    groups = list(case.get("groups", []))
     specs = normalize_availability(case, availability, horizon)
 
-    battery_groups = groups_by_type["battery"]
-    battery_energy: dict[str, list[float]] = {}
+    # 1. NumPy 预计算整年各小时可用台数、风光出力、柴发容量与 PCS 充放电能力/效率
+    load_arr = _tiled_profile_array(base_load, horizon)
+    wind_arr = np.zeros(horizon, dtype=np.float64)
+    pv_arr = np.zeros(horizon, dtype=np.float64)
+    diesel_cap_arr = np.zeros(horizon, dtype=np.float64)
+    pcs_cap_arr = np.zeros(horizon, dtype=np.float64)
+    pcs_chg_weighted = np.zeros(horizon, dtype=np.float64)
+    pcs_dis_weighted = np.zeros(horizon, dtype=np.float64)
+
+    counts_by_id: dict[str, np.ndarray] = {}
+    available_unit_hours: dict[str, float] = {}
+    battery_groups: list[Mapping[str, Any]] = []
+
+    for group in groups:
+        group_id = str(group["id"])
+        counts_arr = _spec_counts_array(specs[group_id], horizon)
+        counts_by_id[group_id] = counts_arr
+        available_unit_hours[group_id] = float(counts_arr.sum()) * dt
+        dtype = group.get("device_type")
+        if dtype == "wind":
+            prof = _tiled_profile_array(group.get("available_power_per_unit_kw") or (0.0,), horizon)
+            wind_arr += counts_arr * prof
+        elif dtype == "pv":
+            prof = _tiled_profile_array(group.get("available_power_per_unit_kw") or (0.0,), horizon)
+            pv_arr += counts_arr * prof
+        elif dtype == "diesel":
+            unit_cap = float(group.get("unit_capacity_kw", 0.0))
+            if unit_cap:
+                diesel_cap_arr += counts_arr * unit_cap
+        elif dtype == "pcs":
+            unit_cap = float(group.get("unit_capacity_kw", 0.0))
+            if unit_cap:
+                power = counts_arr * unit_cap
+                pcs_cap_arr += power
+                pcs_chg_weighted += power * float(group.get("charge_efficiency", 0.95))
+                pcs_dis_weighted += power * float(group.get("discharge_efficiency", 0.95))
+        elif dtype == "battery":
+            battery_groups.append(group)
+
+    renewable_arr = np.maximum(0.0, wind_arr + pv_arr)
+    pcs_has_cap = pcs_cap_arr > NUMERIC_EPSILON
+    pcs_chg_eff_arr = np.where(pcs_has_cap, pcs_chg_weighted / np.where(pcs_has_cap, pcs_cap_arr, 1.0), 0.0)
+    pcs_dis_eff_arr = np.where(pcs_has_cap, pcs_dis_weighted / np.where(pcs_has_cap, pcs_cap_arr, 1.0), 0.0)
+
+    # 2. 扁平化电池单元状态，消除循环内所有字典查找与列表分配
+    pack_energy: list[float] = []
+    pack_lower: list[float] = []
+    pack_upper: list[float] = []
+    pack_decay: list[float] = []
+    pack_avail_mode: list[int] = []  # 0=all_up, 1=unit_bool_list, 2=count_list
+    pack_avail_data: list[Any] = []
+    pack_unit_idx: list[int] = []
+    pack_group_slice: list[tuple[str, int, int, float]] = []
+    has_any_self_discharge = False
+    has_any_battery_outage = False
+
     for group in battery_groups:
         group_id = str(group["id"])
-        initial_energy = float(group.get("unit_capacity_kwh", 0.0)) * float(group.get("initial_soc_ratio", 0.5))
-        battery_energy[group_id] = [initial_energy for _ in range(int(group.get("unit_count", 0)))]
+        uc = int(group.get("unit_count", 0))
+        unit_cap = float(group.get("unit_capacity_kwh", 0.0))
+        init_e = unit_cap * float(group.get("initial_soc_ratio", 0.5))
+        lo = unit_cap * float(group.get("soc_lower", 0.0))
+        hi = unit_cap * float(group.get("soc_upper", 1.0))
+        sd = float(group.get("self_discharge_rate_per_day", 0.0)) / 24.0 * dt
+        decay = 1.0 - sd if sd > 0.0 else 1.0
+        if sd > 0.0:
+            has_any_self_discharge = True
+        spec = specs[group_id]
+        mode = spec["mode"]
+        start_idx = len(pack_energy)
+        for u_idx in range(uc):
+            pack_energy.append(init_e)
+            pack_lower.append(lo)
+            pack_upper.append(hi)
+            pack_decay.append(decay)
+            if mode == "all_up":
+                pack_avail_mode.append(0)
+                pack_avail_data.append(None)
+                pack_unit_idx.append(u_idx)
+            elif mode == "unit_states":
+                u_states = spec["values"][u_idx]
+                if all(u_states[:horizon]):
+                    pack_avail_mode.append(0)
+                    pack_avail_data.append(None)
+                else:
+                    has_any_battery_outage = True
+                    pack_avail_mode.append(1)
+                    pack_avail_data.append(u_states)
+                pack_unit_idx.append(u_idx)
+            else:
+                has_any_battery_outage = True
+                pack_avail_mode.append(2)
+                pack_avail_data.append(spec["values"])
+                pack_unit_idx.append(u_idx)
+        pack_group_slice.append((group_id, start_idx, len(pack_energy), unit_cap))
 
-    load_energy = 0.0
+    n_packs = len(pack_energy)
+    load_energy = float(load_arr.sum()) * dt
     renewable_energy = 0.0
     diesel_energy = 0.0
     storage_charge_energy = 0.0
@@ -845,166 +976,235 @@ def dispatch_hourly(
     current_outage = 0.0
     previous_shortage = False
     hourly_rows: list[dict[str, Any]] = []
-    available_unit_hours = {str(group["id"]): 0.0 for group in groups}
 
-    for hour in range(horizon):
-        source_hour = hour % len(load_profile)
-        load = load_profile[source_hour]
-        load_energy += load * dt
+    # 3. 快速路径：无电池且不需逐小时明细时，直接全 NumPy 向量化闭式求解
+    if n_packs == 0 and not include_hourly:
+        net_arr = renewable_arr - load_arr
+        curtail_arr = np.maximum(0.0, net_arr)
+        deficit_arr = np.maximum(0.0, -net_arr)
+        diesel_arr = np.minimum(deficit_arr, diesel_cap_arr)
+        unmet_arr = np.maximum(0.0, deficit_arr - diesel_arr)
 
-        for group in battery_groups:
-            group_id = str(group["id"])
-            self_discharge = float(group.get("self_discharge_rate_per_day", 0.0)) / 24.0 * dt
-            if self_discharge <= 0:
-                continue
-            battery_energy[group_id] = [max(0.0, value * (1.0 - self_discharge)) for value in battery_energy[group_id]]
+        renewable_energy = float(np.minimum(load_arr, renewable_arr).sum()) * dt
+        diesel_energy = float(diesel_arr.sum()) * dt
+        curtailed_energy = float(curtail_arr.sum()) * dt
+        ens = float(unmet_arr.sum()) * dt
+        max_deficit = float(unmet_arr.max()) if horizon > 0 else 0.0
+        shortage_mask = unmet_arr > threshold
+        if bool(shortage_mask.any()):
+            lole = float(shortage_mask.sum()) * dt
+            # 统计连续失负荷段数与最长连续失负荷时长
+            padded = np.concatenate(([False], shortage_mask, [False]))
+            diffs = np.diff(padded.astype(np.int8))
+            starts = np.flatnonzero(diffs == 1)
+            ends = np.flatnonzero(diffs == -1)
+            lolf = int(starts.shape[0])
+            longest_outage = float((ends - starts).max()) * dt
+    else:
+        # 4. 电池高速扁平循环（转为 Python list 避免 NumPy 标量索引开销）
+        load_list = load_arr.tolist()
+        ren_list = renewable_arr.tolist()
+        diesel_cap_list = diesel_cap_arr.tolist()
+        pcs_cap_list = pcs_cap_arr.tolist()
+        pcs_chg_eff_list = pcs_chg_eff_arr.tolist()
+        pcs_dis_eff_list = pcs_dis_eff_arr.tolist()
+        wind_list = wind_arr.tolist() if include_hourly else None
+        pv_list = pv_arr.tolist() if include_hourly else None
+        counts_lists = {gid: arr.astype(int).tolist() for gid, arr in counts_by_id.items()} if include_hourly else None
 
-        counts: dict[str, int] = {}
-        for group in groups:
-            group_id = str(group["id"])
-            count = available_unit_count(specs[group_id], hour)
-            counts[group_id] = count
-            available_unit_hours[group_id] += count * dt
+        storage_first = policy == "renewable_storage_diesel"
+        eps = NUMERIC_EPSILON
+        installed_batt_cap = sum(uc_cap * (end_i - start_i) for _, start_i, end_i, uc_cap in pack_group_slice)
+        # 复用局部缓冲区，避免每小时重新分配小列表
+        avail_indices_buf = [0] * n_packs
+        rooms_buf = [0.0] * n_packs
 
-        wind_power = 0.0
-        for group in groups_by_type["wind"]:
-            profile = group.get("available_power_per_unit_kw") or [0.0]
-            wind_power += counts[str(group["id"])] * float(profile[source_hour % len(profile)])
-        pv_power = 0.0
-        for group in groups_by_type["pv"]:
-            profile = group.get("available_power_per_unit_kw") or [0.0]
-            pv_power += counts[str(group["id"])] * float(profile[source_hour % len(profile)])
-        renewable_power = max(0.0, wind_power + pv_power)
+        for hour in range(horizon):
+            load = load_list[hour]
+            ren = ren_list[hour]
 
-        diesel_capacity = sum(
-            counts[str(group["id"])] * float(group.get("unit_capacity_kw", 0.0))
-            for group in groups_by_type["diesel"]
-        )
-        pcs_charge_capacity, charge_efficiency = weighted_pcs_efficiency(
-            groups_by_type["pcs"], specs, hour, "charge_efficiency"
-        )
-        pcs_discharge_capacity, discharge_efficiency = weighted_pcs_efficiency(
-            groups_by_type["pcs"], specs, hour, "discharge_efficiency"
-        )
-        battery_available_indices = {
-            str(group["id"]): available_unit_indices(specs[str(group["id"])], hour)
-            for group in battery_groups
-        }
+            if has_any_self_discharge:
+                for k in range(n_packs):
+                    dec = pack_decay[k]
+                    if dec < 1.0:
+                        val = pack_energy[k] * dec
+                        pack_energy[k] = val if val > 0.0 else 0.0
 
-        battery_headroom = 0.0
-        battery_drawable = 0.0
-        for group in battery_groups:
-            group_id = str(group["id"])
-            unit_capacity = float(group.get("unit_capacity_kwh", 0.0))
-            lower = unit_capacity * float(group.get("soc_lower", 0.0))
-            upper = unit_capacity * float(group.get("soc_upper", 1.0))
-            for unit_index in battery_available_indices[group_id]:
-                energy = battery_energy[group_id][unit_index]
-                battery_headroom += max(0.0, upper - energy)
-                battery_drawable += max(0.0, energy - lower)
+            pcs_cap = pcs_cap_list[hour]
+            storage_charge = 0.0
+            storage_discharge = 0.0
+            diesel_power = 0.0
+            unmet = 0.0
+            curtailment = 0.0
 
-        storage_charge = 0.0
-        storage_discharge = 0.0
-        diesel_power = 0.0
-        unmet = 0.0
-        curtailment = 0.0
-
-        net = renewable_power - load
-        if net >= 0.0:
-            if pcs_charge_capacity > 0.0 and charge_efficiency > 0.0 and battery_headroom > 0.0:
-                storage_charge = min(
-                    net,
-                    pcs_charge_capacity,
-                    battery_headroom / max(charge_efficiency * dt, NUMERIC_EPSILON),
-                )
-                internal_charge = storage_charge * charge_efficiency * dt
-                allocate_battery_energy(
-                    battery_groups,
-                    battery_energy,
-                    battery_available_indices,
-                    internal_charge,
-                    direction="charge",
-                )
-            curtailment = max(0.0, net - storage_charge)
-        else:
-            deficit = -net
-
-            def discharge_storage(remaining: float) -> tuple[float, float]:
-                if (
-                    remaining <= 0.0
-                    or pcs_discharge_capacity <= 0.0
-                    or discharge_efficiency <= 0.0
-                    or battery_drawable <= 0.0
-                ):
-                    return 0.0, remaining
-                power = min(
-                    remaining,
-                    pcs_discharge_capacity,
-                    battery_drawable * discharge_efficiency / dt,
-                )
-                internal_draw = power * dt / discharge_efficiency
-                applied = allocate_battery_energy(
-                    battery_groups,
-                    battery_energy,
-                    battery_available_indices,
-                    internal_draw,
-                    direction="discharge",
-                )
-                delivered = applied * discharge_efficiency / dt
-                return delivered, max(0.0, remaining - delivered)
-
-            if policy == "renewable_storage_diesel":
-                storage_discharge, deficit = discharge_storage(deficit)
-                diesel_power = min(deficit, diesel_capacity)
-                deficit -= diesel_power
+            net = ren - load
+            if net >= 0.0:
+                chg_eff = pcs_chg_eff_list[hour]
+                if n_packs > 0 and pcs_cap > 0.0 and chg_eff > 0.0 and net > 0.0:
+                    # 统计可用电池可充空间
+                    cand_count = 0
+                    total_room = 0.0
+                    if not has_any_battery_outage:
+                        for k in range(n_packs):
+                            rm = pack_upper[k] - pack_energy[k]
+                            if rm > eps:
+                                avail_indices_buf[cand_count] = k
+                                rooms_buf[cand_count] = rm
+                                total_room += rm
+                                cand_count += 1
+                    else:
+                        for k in range(n_packs):
+                            m = pack_avail_mode[k]
+                            if m == 0 or (m == 1 and pack_avail_data[k][hour]) or (m == 2 and pack_unit_idx[k] < pack_avail_data[k][hour]):
+                                rm = pack_upper[k] - pack_energy[k]
+                                if rm > eps:
+                                    avail_indices_buf[cand_count] = k
+                                    rooms_buf[cand_count] = rm
+                                    total_room += rm
+                                    cand_count += 1
+                    if total_room > eps:
+                        eff_dt = chg_eff * dt
+                        cap_limit = total_room / (eff_dt if eff_dt > eps else eps)
+                        storage_charge = net if net < pcs_cap else pcs_cap
+                        if cap_limit < storage_charge:
+                            storage_charge = cap_limit
+                        internal_charge = storage_charge * eff_dt
+                        applied = internal_charge if internal_charge < total_room else total_room
+                        if applied > eps:
+                            if cand_count == 1:
+                                idx0 = avail_indices_buf[0]
+                                rm0 = rooms_buf[0]
+                                pack_energy[idx0] += applied if applied < rm0 else rm0
+                            else:
+                                remaining = applied
+                                last_pos = cand_count - 1
+                                inv_total = applied / total_room
+                                for pos in range(cand_count):
+                                    k = avail_indices_buf[pos]
+                                    rm = rooms_buf[pos]
+                                    portion = remaining if pos == last_pos else rm * inv_total
+                                    if portion > rm:
+                                        portion = rm
+                                    pack_energy[k] += portion
+                                    remaining -= portion
+                curtailment = net - storage_charge
+                if curtailment < 0.0:
+                    curtailment = 0.0
             else:
-                diesel_power = min(deficit, diesel_capacity)
-                deficit -= diesel_power
-                storage_discharge, deficit = discharge_storage(deficit)
-            unmet = max(0.0, deficit)
+                deficit = -net
+                d_cap = diesel_cap_list[hour]
+                if not storage_first:
+                    diesel_power = deficit if deficit < d_cap else d_cap
+                    deficit -= diesel_power
 
-        renewable_energy += min(load + storage_charge, renewable_power) * dt
-        diesel_energy += diesel_power * dt
-        storage_charge_energy += storage_charge * dt
-        storage_discharge_energy += storage_discharge * dt
-        curtailed_energy += curtailment * dt
-        ens += unmet * dt
-        max_deficit = max(max_deficit, unmet)
-        shortage = unmet > threshold
-        if shortage:
-            lole += dt
-            current_outage += dt
-            longest_outage = max(longest_outage, current_outage)
-            if not previous_shortage:
-                lolf += 1
-        else:
-            current_outage = 0.0
-        previous_shortage = shortage
+                if deficit > 0.0 and n_packs > 0 and pcs_cap > 0.0:
+                    dis_eff = pcs_dis_eff_list[hour]
+                    if dis_eff > 0.0:
+                        cand_count = 0
+                        total_room = 0.0
+                        if not has_any_battery_outage:
+                            for k in range(n_packs):
+                                rm = pack_energy[k] - pack_lower[k]
+                                if rm > eps:
+                                    avail_indices_buf[cand_count] = k
+                                    rooms_buf[cand_count] = rm
+                                    total_room += rm
+                                    cand_count += 1
+                        else:
+                            for k in range(n_packs):
+                                m = pack_avail_mode[k]
+                                if m == 0 or (m == 1 and pack_avail_data[k][hour]) or (m == 2 and pack_unit_idx[k] < pack_avail_data[k][hour]):
+                                    rm = pack_energy[k] - pack_lower[k]
+                                    if rm > eps:
+                                        avail_indices_buf[cand_count] = k
+                                        rooms_buf[cand_count] = rm
+                                        total_room += rm
+                                        cand_count += 1
+                        if total_room > eps:
+                            max_dis_power = total_room * dis_eff / dt
+                            power = deficit if deficit < pcs_cap else pcs_cap
+                            if max_dis_power < power:
+                                power = max_dis_power
+                            internal_draw = power * dt / dis_eff
+                            applied = internal_draw if internal_draw < total_room else total_room
+                            if applied > eps:
+                                if cand_count == 1:
+                                    idx0 = avail_indices_buf[0]
+                                    rm0 = rooms_buf[0]
+                                    pack_energy[idx0] -= applied if applied < rm0 else rm0
+                                else:
+                                    remaining = applied
+                                    last_pos = cand_count - 1
+                                    inv_total = applied / total_room
+                                    for pos in range(cand_count):
+                                        k = avail_indices_buf[pos]
+                                        rm = rooms_buf[pos]
+                                        portion = remaining if pos == last_pos else rm * inv_total
+                                        if portion > rm:
+                                            portion = rm
+                                        pack_energy[k] -= portion
+                                        remaining -= portion
+                                storage_discharge = applied * dis_eff / dt
+                                deficit -= storage_discharge
+                                if deficit < 0.0:
+                                    deficit = 0.0
 
-        if include_hourly:
-            storage = summarize_storage(battery_groups, battery_energy, battery_available_indices)
-            hourly_rows.append(
-                {
-                    "hour": hour + 1,
-                    "source_hour": source_hour + 1,
-                    "load_kw": round(load, 6),
-                    "wind_power_kw": round(wind_power, 6),
-                    "pv_power_kw": round(pv_power, 6),
-                    "storage_charge_kw": round(storage_charge, 6),
-                    "storage_discharge_kw": round(storage_discharge, 6),
-                    "diesel_power_kw": round(diesel_power, 6),
-                    "unmet_load_kw": round(unmet, 6),
-                    "curtailed_power_kw": round(curtailment, 6),
-                    "storage_soc_ratio": round(storage["soc_ratio"], 8),
-                    "available_units": {group_id: int(value) for group_id, value in counts.items()},
-                }
-            )
+                if storage_first and deficit > 0.0:
+                    diesel_power = deficit if deficit < d_cap else d_cap
+                    deficit -= diesel_power
 
+                unmet = deficit if deficit > 0.0 else 0.0
+
+            used_ren = load + storage_charge
+            renewable_energy += (used_ren if used_ren < ren else ren) * dt
+            diesel_energy += diesel_power * dt
+            storage_charge_energy += storage_charge * dt
+            storage_discharge_energy += storage_discharge * dt
+            curtailed_energy += curtailment * dt
+            ens += unmet * dt
+            if unmet > max_deficit:
+                max_deficit = unmet
+            if unmet > threshold:
+                lole += dt
+                current_outage += dt
+                if current_outage > longest_outage:
+                    longest_outage = current_outage
+                if not previous_shortage:
+                    lolf += 1
+                    previous_shortage = True
+            else:
+                current_outage = 0.0
+                previous_shortage = False
+
+            if include_hourly:
+                stored_e = sum(pack_energy) if n_packs > 0 else 0.0
+                soc_ratio = stored_e / installed_batt_cap if installed_batt_cap > 0.0 else 0.0
+                hourly_rows.append(
+                    {
+                        "hour": hour + 1,
+                        "source_hour": (hour % load_len) + 1,
+                        "load_kw": round(load, 6),
+                        "wind_power_kw": round(wind_list[hour], 6),
+                        "pv_power_kw": round(pv_list[hour], 6),
+                        "storage_charge_kw": round(storage_charge, 6),
+                        "storage_discharge_kw": round(storage_discharge, 6),
+                        "diesel_power_kw": round(diesel_power, 6),
+                        "unmet_load_kw": round(unmet, 6),
+                        "curtailed_power_kw": round(curtailment, 6),
+                        "storage_soc_ratio": round(soc_ratio, 8),
+                        "available_units": {gid: counts_lists[gid][hour] for gid in counts_lists},
+                    }
+                )
+
+    # 5. 汇总末时刻储能状态（与 summarize_storage 口径完全一致）
+    battery_energy_dict = {
+        group_id: pack_energy[start_i:end_i] for group_id, start_i, end_i, _ in pack_group_slice
+    }
     final_available_indices = {
         str(group["id"]): available_unit_indices(specs[str(group["id"])], horizon - 1)
         for group in battery_groups
     }
-    end_storage = summarize_storage(battery_groups, battery_energy, final_available_indices)
+    end_storage = summarize_storage(battery_groups, battery_energy_dict, final_available_indices)
     duration = horizon * dt
     lpsp = ens / load_energy if load_energy > NUMERIC_EPSILON else 0.0
     lolp = lole / duration if duration > NUMERIC_EPSILON else 0.0
@@ -1059,7 +1259,6 @@ def dispatch_hourly(
     if include_hourly:
         result["hourly"] = hourly_rows
     return result
-
 
 def n_minus_one_device_types(value: Any) -> set[str]:
     if value in (None, "", []):
@@ -1285,9 +1484,17 @@ def run_sequential_monte_carlo(
             observed_stats[device_id]["duration_hours"] += horizon * numeric(case.get("time_step_hours"), 1.0)
 
         if calculate_contributions and result["summary"]["ens_kwh"] > NUMERIC_EPSILON:
+            unavail_by_id = {
+                str(item["device_id"]): float(item["observed_unavailability"])
+                for item in result["availability_stats"]
+            }
             for group in case.get("groups", []):
                 device_id = str(group["id"])
-                if int(group.get("unit_count", 0)) <= 0 or float(group.get("forced_outage_rate", 0.0)) <= 0.0:
+                if (
+                    int(group.get("unit_count", 0)) <= 0
+                    or float(group.get("forced_outage_rate", 0.0)) <= 0.0
+                    or unavail_by_id.get(device_id, 0.0) <= NUMERIC_EPSILON
+                ):
                     contribution_samples[device_id]["ens"].append(0.0)
                     contribution_samples[device_id]["lole"].append(0.0)
                     continue

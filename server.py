@@ -1990,7 +1990,7 @@ def read_comparison_workbook(path: Path, include_hourly_curves: bool = True) -> 
     if include_hourly_curves:
         ensure_split_result_workbook(path)
     curve_signature = result_curve_file_signature(path)
-    return COMPARISON_WORKBOOK_CACHE.get(
+    return COMPARISON_WORKBOOK_CACHE.get_readonly(
         path,
         lambda resolved: read_comparison_workbook_uncached(resolved, include_hourly_curves=include_hourly_curves),
         variant=("comparison", bool(include_hourly_curves), curve_signature),
@@ -2249,7 +2249,7 @@ def read_comparison_curve_group(path: Path, curve_group: str, curve_names: list[
     ensure_split_result_workbook(path)
     selected_names = tuple(name for name in curve_names if name)
     curve_signature = result_curve_file_signature(path)
-    return COMPARISON_CURVE_SLICE_CACHE.get(
+    return COMPARISON_CURVE_SLICE_CACHE.get_readonly(
         path,
         lambda resolved: read_comparison_curve_group_uncached(resolved, curve_group, selected_names),
         variant=("comparison_curve_slice", curve_group, selected_names, curve_signature),
@@ -2355,12 +2355,17 @@ def read_result_workbook_display_payload_for_response(path: Path, include_hourly
     try:
         if not path.exists():
             return None
-        return read_result_workbook_display_payload(path, include_hourly_curves=include_hourly_curves)
+        return read_result_workbook_display_payload(path, include_hourly_curves=include_hourly_curves, readonly=True)
     except (ValueError, FileNotFoundError):
         return None
 
 
-def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool = True) -> dict:
+def read_result_workbook_display_payload(
+    path: Path,
+    include_hourly_curves: bool = True,
+    *,
+    readonly: bool = False,
+) -> dict:
     if include_hourly_curves:
         ensure_split_result_workbook(path)
     curve_signature = result_curve_file_signature(path)
@@ -2368,6 +2373,7 @@ def read_result_workbook_display_payload(path: Path, include_hourly_curves: bool
         path,
         lambda resolved: read_result_workbook_display_payload_uncached(resolved, include_hourly_curves=include_hourly_curves),
         variant=("display", bool(include_hourly_curves), curve_signature),
+        copy_result=not readonly,
     )
 
 
@@ -7360,7 +7366,7 @@ def gzip_response_body_if_supported(request_headers, headers: dict[str, str], bo
         return headers, body
     if not response_is_compressible(headers, body):
         return headers, body
-    compressed = zlib.compressobj(level=6, wbits=16 + zlib.MAX_WBITS)
+    compressed = zlib.compressobj(level=3, wbits=16 + zlib.MAX_WBITS)
     compressed_body = compressed.compress(body) + compressed.flush()
     if len(compressed_body) >= len(body):
         return headers, body

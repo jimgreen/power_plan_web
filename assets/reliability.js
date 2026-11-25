@@ -167,7 +167,9 @@
     document.getElementById("saveReliabilityParameters")?.addEventListener("click", () => {
       saveParameters().catch((error) => showMessage(error.message, "error"));
     });
-    document.getElementById("resetReliabilityParameters")?.addEventListener("click", () => {
+    document.getElementById("resetReliabilityParameters")?.addEventListener("click", async () => {
+      const okReset = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm("恢复默认演示参数？当前未保存的修改将被覆盖。", { confirmText: "恢复默认" }) : confirm("恢复默认演示参数？");
+      if (!okReset) return;
       state.parameters = clone(DEMO_PARAMETERS);
       state.parameterWarnings = [];
       applyParametersToForm(state.parameters);

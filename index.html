@@ -1,1467 +1,176 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="precision-dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <style>
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      overflow: hidden;
-      color: #eef7ff;
-      font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
-      background: #030b18;
-    }
-
-    a { color: inherit; text-decoration: none; }
-
-    .screen {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      min-height: 720px;
-      overflow: hidden;
-      isolation: isolate;
-    }
-
-    .screen::before {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background-image: url("assets/main-dashboard-bg.png?v=20260513-bg-refresh");
-      background-position: center;
-      background-size: contain;
-      background-repeat: no-repeat;
-      filter: saturate(1.08) brightness(0.74) contrast(1.08);
-      opacity: 1;
-      z-index: 0;
-    }
-
-    .screen::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(180deg, rgba(0, 16, 45, 0.18), rgba(0, 10, 30, 0.46) 58%, rgba(0, 7, 20, 0.72)),
-        radial-gradient(circle at 50% 43%, rgba(13, 116, 204, 0.36), transparent 44%),
-        linear-gradient(90deg, rgba(2, 10, 22, 0.76), transparent 18%, transparent 82%, rgba(2, 10, 22, 0.76));
-      z-index: 1;
-    }
-
-    .home-user-status {
-      position: absolute;
-      top: 24px;
-      right: 32px;
-      z-index: 5;
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 12px;
-      border: 0;
-      border-radius: 8px;
-      background:
-        radial-gradient(circle at 50% 0%, rgba(33, 213, 255, 0.16), transparent 64%),
-        linear-gradient(180deg, rgba(3, 35, 84, 0.46), rgba(1, 14, 42, 0.36));
-      color: #bdeaff;
-      box-shadow: inset 0 0 16px rgba(24, 175, 255, 0.12), 0 0 18px rgba(0, 166, 255, 0.14);
-      font-size: 15px;
-      font-weight: 800;
-    }
-
-    .home-user-status[hidden],
-    [data-admin-only][hidden] {
-      display: none;
-    }
-
-    .home-user-status strong {
-      color: #21d5ff;
-    }
-
-    .home-user-status a,
-    .home-user-status button {
-      padding: 6px 9px;
-      border: 1px solid rgba(21, 211, 255, 0.48);
-      border-radius: 8px;
-      background: rgba(5, 34, 70, 0.7);
-      color: #eff8ff;
-      font: inherit;
-      cursor: pointer;
-    }
-
-    .language-switch {
-      position: absolute;
-      top: 78px;
-      right: 32px;
-      z-index: 5;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 10px;
-      border: 1px solid rgba(21, 211, 255, 0.36);
-      border-radius: 8px;
-      background: rgba(5, 34, 70, 0.62);
-      color: #bdeaff;
-      box-shadow: inset 0 0 16px rgba(24, 175, 255, 0.12), 0 0 18px rgba(0, 166, 255, 0.14);
-      font-size: 14px;
-      font-weight: 800;
-      white-space: nowrap;
-    }
-
-    .language-switch select {
-      min-width: 88px;
-      border: 0;
-      background: transparent;
-      color: inherit;
-      font: inherit;
-    }
-
-    .home-theme-switch {
-      position: absolute;
-      top: 128px;
-      right: 32px;
-      z-index: 5;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 10px;
-      border: 1px solid rgba(21, 211, 255, 0.36);
-      border-radius: 8px;
-      background: rgba(5, 34, 70, 0.62);
-      color: #bdeaff;
-      box-shadow: inset 0 0 16px rgba(24, 175, 255, 0.12), 0 0 18px rgba(0, 166, 255, 0.14);
-      font-size: 14px;
-      font-weight: 800;
-      white-space: nowrap;
-    }
-
-    .home-theme-switch select {
-      min-width: 118px;
-      border: 0;
-      background: transparent;
-      color: inherit;
-      font: inherit;
-    }
-
-    .language-switch option,
-    .home-theme-switch option {
-      color: #102b2a;
-    }
-
-    .home-title {
-      position: absolute;
-      left: 50%;
-      top: clamp(42px, 7.2vh, 82px);
-      z-index: 6;
-      width: min(1180px, calc(100vw - 80px));
-      margin: 0;
-      transform: translateX(-50%);
-      color: #ffffff;
-      font-size: clamp(28px, min(3.8vw, 7vh), 58px);
-      font-weight: 900;
-      letter-spacing: 0;
-      line-height: 1.08;
-      text-align: center;
-      white-space: nowrap;
-      text-shadow: none;
-      pointer-events: none;
-    }
-
-    .feature-entry-grid {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      width: min(1040px, calc(100vw - 220px));
-      min-height: clamp(420px, 54vh, 540px);
-      display: grid;
-      grid-template-columns: repeat(8, minmax(0, 1fr));
-      gap: clamp(16px, 1.35vw, 24px);
-      padding: clamp(28px, 3.2vh, 42px) clamp(28px, 2.6vw, 46px);
-      transform: translate(-50%, -35%);
-      isolation: isolate;
-      z-index: 3;
-    }
-
-    .feature-entry-grid::before,
-    .feature-entry-grid::after {
-      content: "";
-      position: absolute;
-      pointer-events: none;
-      z-index: -1;
-    }
-
-    .feature-entry-grid::before {
-      inset: 0;
-      border: 1px solid rgba(20, 190, 255, 0.64);
-      border-radius: 10px;
-      background:
-        linear-gradient(90deg, transparent 0 5%, rgba(25, 202, 255, 0.52) 5% 7%, transparent 7% 93%, rgba(25, 202, 255, 0.52) 93% 95%, transparent 95%),
-        linear-gradient(180deg, rgba(0, 90, 180, 0.2), rgba(0, 26, 68, 0.64));
-      box-shadow:
-        inset 0 0 42px rgba(23, 170, 255, 0.23),
-        inset 0 0 90px rgba(0, 56, 130, 0.3),
-        0 0 42px rgba(0, 166, 255, 0.4),
-        0 24px 80px rgba(0, 6, 20, 0.46);
-      clip-path: polygon(4% 0, 96% 0, 100% 16%, 100% 84%, 96% 100%, 4% 100%, 0 84%, 0 16%);
-    }
-
-    .feature-entry-grid::after {
-      left: 8%;
-      right: 8%;
-      bottom: 24px;
-      height: 2px;
-      background:
-        linear-gradient(90deg, transparent, rgba(35, 211, 255, 0.9), transparent),
-        repeating-linear-gradient(90deg, transparent 0 18px, rgba(35, 211, 255, 0.62) 18px 24px);
-      box-shadow: 0 0 16px rgba(35, 211, 255, 0.82);
-    }
-
-    .feature-entry {
-      position: relative;
-      grid-column: span 2;
-      min-height: clamp(178px, 22vh, 228px);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: clamp(14px, 1.7vh, 22px);
-      padding: clamp(18px, 1.7vw, 26px);
-      border: 1px solid rgba(39, 202, 255, 0.82);
-      border-radius: 10px;
-      background:
-        radial-gradient(circle at 50% 28%, rgba(36, 210, 255, 0.16), transparent 36%),
-        linear-gradient(180deg, rgba(3, 35, 84, 0.78), rgba(1, 14, 42, 0.92));
-      box-shadow:
-        inset 0 0 0 1px rgba(69, 223, 255, 0.22),
-        inset 0 0 44px rgba(0, 143, 255, 0.24),
-        0 0 30px rgba(0, 166, 255, 0.32),
-        0 20px 54px rgba(0, 8, 28, 0.38);
-      backdrop-filter: blur(3px);
-      transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
-    }
-
-    .feature-entry:nth-child(5) {
-      grid-column: 2 / span 2;
-    }
-
-    .feature-entry::before,
-    .feature-entry::after {
-      content: "";
-      position: absolute;
-      pointer-events: none;
-    }
-
-    .feature-entry::before {
-      inset: 12px;
-      border: 1px solid rgba(39, 202, 255, 0.54);
-      border-radius: 7px;
-      box-shadow:
-        inset 0 0 22px rgba(39, 202, 255, 0.22),
-        0 0 12px rgba(39, 202, 255, 0.18);
-      clip-path: polygon(7% 0, 93% 0, 100% 12%, 100% 88%, 93% 100%, 7% 100%, 0 88%, 0 12%);
-    }
-
-    .feature-entry::after {
-      left: 13%;
-      right: 13%;
-      bottom: 44px;
-      height: 2px;
-      background:
-        linear-gradient(90deg, transparent, rgba(47, 221, 255, 0.96), transparent),
-        repeating-linear-gradient(90deg, transparent 0 28px, rgba(47, 221, 255, 0.58) 28px 36px);
-      box-shadow: 0 0 12px rgba(47, 221, 255, 0.9);
-    }
-
-    .feature-entry:hover,
-    .feature-entry:focus-visible {
-      outline: none;
-      transform: translateY(-8px);
-      border-color: rgba(108, 238, 255, 0.98);
-      background:
-        radial-gradient(circle at 50% 28%, rgba(44, 225, 255, 0.24), transparent 38%),
-        linear-gradient(180deg, rgba(3, 50, 112, 0.84), rgba(2, 21, 58, 0.94));
-      box-shadow:
-        inset 0 0 0 1px rgba(124, 241, 255, 0.26),
-        inset 0 0 44px rgba(0, 178, 255, 0.24),
-        0 0 42px rgba(0, 190, 255, 0.48),
-        0 24px 54px rgba(0, 13, 40, 0.5);
-    }
-
-    .feature-icon {
-      position: relative;
-      width: clamp(82px, 6.4vw, 118px);
-      height: clamp(82px, 6.4vw, 118px);
-      display: grid;
-      place-items: center;
-      color: #21d5ff;
-      filter:
-        drop-shadow(0 0 12px rgba(25, 205, 255, 0.92))
-        drop-shadow(0 0 26px rgba(0, 150, 255, 0.48));
-      z-index: 1;
-    }
-
-    .feature-icon svg {
-      width: 100%;
-      height: 100%;
-      stroke: currentColor;
-      stroke-width: 2.7;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-      fill: rgba(25, 205, 255, 0.12);
-    }
-
-    .feature-entry strong {
-      max-width: 100%;
-      color: #eff8ff;
-      font-size: clamp(15px, min(1.08vw, 3vh), 22px);
-      font-weight: 900;
-      letter-spacing: 0;
-      line-height: 1;
-      white-space: nowrap;
-      text-shadow: 0 0 18px rgba(44, 183, 255, 0.95), 0 3px 3px rgba(0, 8, 20, 0.86);
-      z-index: 1;
-    }
-
-    .energy-side {
-      position: absolute;
-      top: 50%;
-      min-height: clamp(320px, 41vh, 400px);
-      display: grid;
-      align-content: space-around;
-      gap: 0;
-      color: #27d6ff;
-      transform: translateY(-29%);
-      z-index: 3;
-    }
-
-    .energy-left {
-      left: max(48px, calc(50% - 760px));
-    }
-
-    .energy-right {
-      right: max(48px, calc(50% - 760px));
-    }
-
-    .energy-side span {
-      position: relative;
-      width: clamp(64px, 5.8vw, 96px);
-      height: clamp(64px, 5.8vw, 96px);
-      display: grid;
-      place-items: center;
-      opacity: 0.9;
-      filter: drop-shadow(0 0 10px rgba(25, 205, 255, 0.78));
-    }
-
-    .energy-side svg {
-      width: 100%;
-      height: 100%;
-      stroke: currentColor;
-      stroke-width: 2;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-      fill: rgba(25, 205, 255, 0.1);
-    }
-
-    .energy-side span::after {
-      content: "";
-      position: absolute;
-      top: 50%;
-      width: clamp(62px, 7vw, 112px);
-      height: 2px;
-      background: linear-gradient(90deg, transparent, rgba(39, 214, 255, 0.94));
-      box-shadow: 0 0 10px rgba(39, 214, 255, 0.9);
-    }
-
-    .energy-left span::after {
-      left: 100%;
-    }
-
-    .energy-right span::after {
-      right: 100%;
-      transform: rotate(180deg);
-    }
-
-    .energy-side span::before {
-      content: "";
-      position: absolute;
-      top: calc(50% - 4px);
-      width: 8px;
-      height: 8px;
-      border: 2px solid currentColor;
-      border-radius: 50%;
-      background: #04182f;
-      box-shadow: 0 0 12px rgba(39, 214, 255, 0.9);
-    }
-
-    .energy-left span::before {
-      left: calc(100% + clamp(58px, 6.5vw, 104px));
-    }
-
-    .energy-right span::before {
-      right: calc(100% + clamp(58px, 6.5vw, 104px));
-    }
-
-    .screen[data-home-theme="fresh"]::before {
-      filter: saturate(1.12) brightness(0.94) contrast(1.02);
-    }
-
-    .screen[data-home-theme="fresh"]::after {
-      background:
-        linear-gradient(180deg, rgba(222, 255, 246, 0.1), rgba(10, 70, 96, 0.22) 58%, rgba(3, 26, 42, 0.58)),
-        radial-gradient(circle at 48% 42%, rgba(75, 230, 196, 0.28), transparent 46%),
-        linear-gradient(90deg, rgba(0, 42, 54, 0.55), transparent 18%, transparent 82%, rgba(0, 42, 54, 0.55));
-    }
-
-    .screen[data-home-theme="fresh"] .home-title,
-    .screen[data-home-theme="fresh"] .feature-entry strong {
-      color: #f5fffb;
-      text-shadow: 0 2px 3px rgba(0, 29, 36, 0.72);
-    }
-
-    .screen[data-home-theme="fresh"] .feature-entry-grid::before,
-    .screen[data-home-theme="fresh"] .feature-entry {
-      border-color: rgba(80, 238, 201, 0.78);
-      background:
-        radial-gradient(circle at 50% 24%, rgba(99, 248, 209, 0.14), transparent 38%),
-        linear-gradient(180deg, rgba(3, 84, 99, 0.68), rgba(1, 32, 48, 0.86));
-      box-shadow:
-        inset 0 0 32px rgba(91, 240, 202, 0.16),
-        0 18px 52px rgba(0, 24, 35, 0.34);
-    }
-
-    .screen[data-home-theme="fresh"] .feature-icon,
-    .screen[data-home-theme="fresh"] .energy-side {
-      color: #55f0c8;
-      filter: drop-shadow(0 0 12px rgba(85, 240, 200, 0.72));
-    }
-
-    .screen[data-home-theme="fresh"] .home-user-status,
-    .screen[data-home-theme="fresh"] .language-switch,
-    .screen[data-home-theme="fresh"] .home-theme-switch {
-      border-color: rgba(80, 238, 201, 0.38);
-      background: rgba(4, 68, 83, 0.6);
-      color: #d8fff5;
-      box-shadow: inset 0 0 16px rgba(85, 240, 200, 0.14), 0 0 18px rgba(85, 240, 200, 0.12);
-    }
-
-    .screen[data-home-theme="bright"]::before {
-      filter: saturate(0.98) brightness(1.18) contrast(0.94);
-      opacity: 0.92;
-    }
-
-    .screen[data-home-theme="bright"]::after {
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.34), rgba(221, 241, 255, 0.24) 58%, rgba(38, 71, 98, 0.44)),
-        radial-gradient(circle at 50% 43%, rgba(104, 190, 255, 0.26), transparent 44%),
-        linear-gradient(90deg, rgba(243, 249, 255, 0.34), transparent 18%, transparent 82%, rgba(243, 249, 255, 0.34));
-    }
-
-    .screen[data-home-theme="bright"] .home-title {
-      color: #ffffff;
-      text-shadow:
-        0 -1px 0 rgba(3, 18, 32, 0.74),
-        1px 0 0 rgba(3, 18, 32, 0.68),
-        -1px 0 0 rgba(3, 18, 32, 0.68),
-        0 1px 0 rgba(3, 18, 32, 0.76),
-        0 3px 7px rgba(3, 18, 32, 0.52);
-    }
-
-    .screen[data-home-theme="bright"] .feature-entry-grid::before,
-    .screen[data-home-theme="bright"] .feature-entry {
-      border-color: rgba(112, 184, 229, 0.68);
-      background:
-        radial-gradient(circle at 50% 22%, rgba(255, 255, 255, 0.5), transparent 38%),
-        linear-gradient(180deg, rgba(226, 245, 255, 0.82), rgba(101, 151, 186, 0.64));
-      background-color: #dceefa;
-      box-shadow:
-        inset 0 0 24px rgba(255, 255, 255, 0.32),
-        0 18px 52px rgba(23, 70, 108, 0.22);
-    }
-
-    .screen[data-home-theme="bright"] .feature-entry strong {
-      color: #123a54;
-      text-shadow:
-        0 -1px 0 rgba(255, 255, 255, 0.5),
-        0 1px 0 rgba(255, 255, 255, 0.72),
-        0 2px 4px rgba(5, 24, 44, 0.18);
-    }
-
-    .screen[data-home-theme="bright"] .feature-entry {
-      color: #123a54;
-    }
-
-    .screen[data-home-theme="bright"] .feature-icon,
-    .screen[data-home-theme="bright"] .energy-side {
-      color: #1476a6;
-      filter: drop-shadow(0 0 10px rgba(44, 142, 199, 0.42));
-    }
-
-    .screen[data-home-theme="bright"] .home-user-status,
-    .screen[data-home-theme="bright"] .language-switch,
-    .screen[data-home-theme="bright"] .home-theme-switch {
-      border-color: rgba(112, 184, 229, 0.42);
-      background: rgba(235, 248, 255, 0.76);
-      color: #16384d;
-      box-shadow: 0 12px 24px rgba(23, 70, 108, 0.14);
-    }
-
-    .screen[data-home-theme="bright"] .home-user-status strong {
-      color: #0a3f5c;
-    }
-
-    .screen[data-home-theme="bright"] .home-user-status a,
-    .screen[data-home-theme="bright"] .home-user-status button {
-      border-color: rgba(20, 118, 166, 0.34);
-      background: rgba(20, 118, 166, 0.12);
-      color: #16384d;
-    }
-
-    .screen[data-home-theme="sci-fi"]::before {
-      filter: saturate(1.28) brightness(0.7) contrast(1.18);
-    }
-
-    .screen[data-home-theme="sci-fi"]::after {
-      background:
-        linear-gradient(180deg, rgba(2, 4, 28, 0.18), rgba(5, 0, 35, 0.54) 58%, rgba(2, 0, 18, 0.84)),
-        radial-gradient(circle at 50% 43%, rgba(119, 71, 255, 0.34), transparent 44%),
-        linear-gradient(90deg, rgba(0, 6, 30, 0.82), transparent 18%, transparent 82%, rgba(0, 6, 30, 0.82));
-    }
-
-    .screen[data-home-theme="sci-fi"] .home-title {
-      color: #ffffff;
-      text-shadow: 0 0 16px rgba(110, 238, 255, 0.72);
-    }
-
-    .screen[data-home-theme="sci-fi"] .feature-entry-grid::before,
-    .screen[data-home-theme="sci-fi"] .feature-entry {
-      border-color: rgba(166, 121, 255, 0.82);
-      background:
-        radial-gradient(circle at 50% 26%, rgba(91, 246, 255, 0.16), transparent 34%),
-        linear-gradient(180deg, rgba(35, 19, 96, 0.78), rgba(2, 8, 36, 0.94));
-      box-shadow:
-        inset 0 0 34px rgba(93, 239, 255, 0.18),
-        0 0 42px rgba(122, 73, 255, 0.42),
-        0 24px 70px rgba(2, 0, 22, 0.58);
-    }
-
-    .screen[data-home-theme="sci-fi"] .feature-icon,
-    .screen[data-home-theme="sci-fi"] .energy-side {
-      color: #7ef5ff;
-      filter: drop-shadow(0 0 14px rgba(126, 245, 255, 0.78)) drop-shadow(0 0 26px rgba(166, 121, 255, 0.48));
-    }
-
-    .screen[data-home-theme="sci-fi"] .home-user-status,
-    .screen[data-home-theme="sci-fi"] .language-switch,
-    .screen[data-home-theme="sci-fi"] .home-theme-switch {
-      border-color: rgba(166, 121, 255, 0.48);
-      background: rgba(18, 12, 64, 0.7);
-      color: #dfe9ff;
-      box-shadow: inset 0 0 16px rgba(126, 245, 255, 0.12), 0 0 24px rgba(122, 73, 255, 0.22);
-    }
-
-    .screen[data-home-theme="solemn"]::before {
-      filter: saturate(0.82) brightness(0.62) contrast(1.1);
-    }
-
-    .screen[data-home-theme="solemn"]::after {
-      background:
-        linear-gradient(180deg, rgba(18, 24, 32, 0.34), rgba(14, 18, 24, 0.62) 58%, rgba(4, 6, 10, 0.84)),
-        radial-gradient(circle at 50% 43%, rgba(122, 136, 154, 0.22), transparent 44%),
-        linear-gradient(90deg, rgba(6, 8, 12, 0.82), transparent 18%, transparent 82%, rgba(6, 8, 12, 0.82));
-    }
-
-    .screen[data-home-theme="solemn"] .home-title,
-    .screen[data-home-theme="solemn"] .feature-entry strong {
-      color: #f2f5f7;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.72);
-    }
-
-    .screen[data-home-theme="solemn"] .feature-entry-grid::before,
-    .screen[data-home-theme="solemn"] .feature-entry {
-      border-color: rgba(176, 188, 204, 0.48);
-      background:
-        radial-gradient(circle at 50% 24%, rgba(215, 224, 235, 0.08), transparent 38%),
-        linear-gradient(180deg, rgba(39, 49, 62, 0.74), rgba(14, 18, 24, 0.92));
-      box-shadow:
-        inset 0 0 22px rgba(220, 228, 238, 0.08),
-        0 20px 62px rgba(0, 0, 0, 0.46);
-    }
-
-    .screen[data-home-theme="solemn"] .feature-icon,
-    .screen[data-home-theme="solemn"] .energy-side {
-      color: #c7d2df;
-      filter: drop-shadow(0 0 10px rgba(199, 210, 223, 0.36));
-    }
-
-    .screen[data-home-theme="solemn"] .home-user-status,
-    .screen[data-home-theme="solemn"] .language-switch,
-    .screen[data-home-theme="solemn"] .home-theme-switch {
-      border-color: rgba(176, 188, 204, 0.28);
-      background: rgba(25, 31, 40, 0.72);
-      color: #dce5ef;
-      box-shadow: 0 14px 30px rgba(0, 0, 0, 0.24);
-    }
-
-    .screen[data-home-theme="minimal"]::before {
-      filter: saturate(0.75) brightness(0.88) contrast(0.96);
-      opacity: 0.78;
-    }
-
-    .screen[data-home-theme="minimal"]::after {
-      background: linear-gradient(180deg, rgba(8, 18, 29, 0.12), rgba(8, 18, 29, 0.5));
-    }
-
-    .screen[data-home-theme="minimal"] .feature-entry-grid::before,
-    .screen[data-home-theme="minimal"] .feature-entry {
-      border-color: rgba(203, 216, 226, 0.28);
-      border-radius: 4px;
-      background: rgba(9, 21, 34, 0.66);
-      box-shadow: none;
-    }
-
-    .screen[data-home-theme="minimal"] .feature-entry::before,
-    .screen[data-home-theme="minimal"] .feature-entry::after,
-    .screen[data-home-theme="minimal"] .feature-entry-grid::after {
-      opacity: 0;
-    }
-
-    .screen[data-home-theme="minimal"] .home-title,
-    .screen[data-home-theme="minimal"] .feature-entry strong {
-      color: #f4f7fa;
-      text-shadow: none;
-    }
-
-    .screen[data-home-theme="minimal"] .feature-icon,
-    .screen[data-home-theme="minimal"] .energy-side {
-      color: #c8d7e4;
-      filter: none;
-    }
-
-    .screen[data-home-theme="minimal"] .home-user-status,
-    .screen[data-home-theme="minimal"] .language-switch,
-    .screen[data-home-theme="minimal"] .home-theme-switch {
-      border-color: rgba(203, 216, 226, 0.22);
-      background: rgba(9, 21, 34, 0.58);
-      color: #edf4fa;
-      box-shadow: none;
-    }
-
-    .screen[data-home-theme="dark"]::before {
-      filter: saturate(0.9) brightness(0.48) contrast(1.2);
-    }
-
-    .screen[data-home-theme="dark"]::after {
-      background:
-        linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.72)),
-        linear-gradient(90deg, rgba(0, 0, 0, 0.88), transparent 28%, transparent 72%, rgba(0, 0, 0, 0.88));
-    }
-
-    .screen[data-home-theme="dark"] .feature-entry-grid::before,
-    .screen[data-home-theme="dark"] .feature-entry {
-      border-color: rgba(66, 88, 116, 0.72);
-      background: linear-gradient(180deg, rgba(15, 22, 33, 0.86), rgba(3, 6, 12, 0.96));
-      box-shadow:
-        inset 0 0 22px rgba(80, 128, 180, 0.12),
-        0 18px 58px rgba(0, 0, 0, 0.58);
-    }
-
-    .screen[data-home-theme="dark"] .home-title,
-    .screen[data-home-theme="dark"] .feature-entry strong {
-      color: #f4f7ff;
-      text-shadow: 0 2px 5px rgba(0, 0, 0, 0.82);
-    }
-
-    .screen[data-home-theme="dark"] .feature-icon,
-    .screen[data-home-theme="dark"] .energy-side {
-      color: #91b5df;
-      filter: drop-shadow(0 0 10px rgba(91, 130, 178, 0.42));
-    }
-
-    .screen[data-home-theme="dark"] .home-user-status,
-    .screen[data-home-theme="dark"] .language-switch,
-    .screen[data-home-theme="dark"] .home-theme-switch {
-      border-color: rgba(86, 114, 150, 0.48);
-      background: rgba(5, 8, 14, 0.78);
-      color: #d6e3f2;
-      box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
-    }
-
-    .screen[data-home-theme="illustration"]::before {
-      filter: saturate(1.08) brightness(1.02) contrast(0.9);
-      opacity: 0.86;
-    }
-
-    .screen[data-home-theme="illustration"]::after {
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(37, 78, 103, 0.28) 60%, rgba(8, 31, 48, 0.66)),
-        linear-gradient(90deg, rgba(31, 86, 112, 0.42), transparent 24%, transparent 76%, rgba(31, 86, 112, 0.42));
-    }
-
-    .screen[data-home-theme="illustration"] .feature-entry-grid::before,
-    .screen[data-home-theme="illustration"] .feature-entry {
-      border: 2px solid rgba(255, 255, 255, 0.78);
-      border-radius: 18px;
-      background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(70, 152, 182, 0.68));
-      background-color: #cceaf6;
-      box-shadow:
-        0 10px 0 rgba(18, 57, 77, 0.18),
-        0 22px 50px rgba(15, 46, 62, 0.26);
-    }
-
-    .screen[data-home-theme="illustration"] .feature-entry::before {
-      border-radius: 14px;
-      border-color: rgba(20, 65, 83, 0.18);
-      box-shadow: none;
-      clip-path: none;
-    }
-
-    .screen[data-home-theme="illustration"] .home-title {
-      color: #ffffff;
-      text-shadow:
-        0 -1px 0 rgba(4, 24, 34, 0.76),
-        1px 0 0 rgba(4, 24, 34, 0.7),
-        -1px 0 0 rgba(4, 24, 34, 0.7),
-        0 1px 0 rgba(4, 24, 34, 0.78),
-        0 3px 7px rgba(4, 24, 34, 0.5);
-    }
-
-    .screen[data-home-theme="illustration"] .feature-entry strong {
-      color: #143747;
-      text-shadow:
-        0 -1px 0 rgba(255, 255, 255, 0.46),
-        1px 0 0 rgba(255, 255, 255, 0.44),
-        -1px 0 0 rgba(255, 255, 255, 0.44),
-        0 2px 0 rgba(255, 255, 255, 0.62),
-        0 3px 5px rgba(8, 34, 51, 0.2);
-    }
-
-    .screen[data-home-theme="illustration"] .feature-entry {
-      color: #143747;
-    }
-
-    .screen[data-home-theme="illustration"] .feature-icon,
-    .screen[data-home-theme="illustration"] .energy-side {
-      color: #096d8f;
-      filter: drop-shadow(0 4px 0 rgba(11, 61, 78, 0.2));
-    }
-
-    .screen[data-home-theme="illustration"] .home-user-status,
-    .screen[data-home-theme="illustration"] .language-switch,
-    .screen[data-home-theme="illustration"] .home-theme-switch {
-      border-color: rgba(255, 255, 255, 0.72);
-      background: rgba(237, 249, 255, 0.78);
-      color: #143747;
-      box-shadow: 0 8px 0 rgba(18, 57, 77, 0.14);
-    }
-
-    .screen[data-home-theme="illustration"] .home-user-status strong {
-      color: #06475f;
-    }
-
-    .screen[data-home-theme="illustration"] .home-user-status a,
-    .screen[data-home-theme="illustration"] .home-user-status button {
-      border-color: rgba(9, 109, 143, 0.32);
-      background: rgba(9, 109, 143, 0.12);
-      color: #143747;
-    }
-
-    .screen[data-home-theme="flat"]::before {
-      filter: saturate(0.86) brightness(0.9) contrast(0.94);
-      opacity: 0.82;
-    }
-
-    .screen[data-home-theme="flat"]::after {
-      background:
-        linear-gradient(135deg, rgba(29, 97, 127, 0.55), rgba(22, 35, 64, 0.74)),
-        linear-gradient(90deg, rgba(13, 32, 54, 0.62), transparent 26%, transparent 74%, rgba(13, 32, 54, 0.62));
-    }
-
-    .screen[data-home-theme="flat"] .feature-entry-grid::before,
-    .screen[data-home-theme="flat"] .feature-entry {
-      border: 0;
-      border-radius: 6px;
-      background: #126782;
-      box-shadow: none;
-      clip-path: none;
-    }
-
-    .screen[data-home-theme="flat"] .feature-entry:nth-child(2) { background: #0f756b; }
-    .screen[data-home-theme="flat"] .feature-entry:nth-child(3) { background: #2d6a9f; }
-    .screen[data-home-theme="flat"] .feature-entry:nth-child(4) { background: #315f72; }
-    .screen[data-home-theme="flat"] .feature-entry:nth-child(5) { background: #42665e; }
-
-    .screen[data-home-theme="flat"] .feature-entry::before,
-    .screen[data-home-theme="flat"] .feature-entry::after,
-    .screen[data-home-theme="flat"] .feature-entry-grid::after {
-      opacity: 0;
-    }
-
-    .screen[data-home-theme="flat"] .home-title,
-    .screen[data-home-theme="flat"] .feature-entry strong {
-      color: #ffffff;
-      text-shadow: none;
-    }
-
-    .screen[data-home-theme="flat"] .feature-icon,
-    .screen[data-home-theme="flat"] .energy-side {
-      color: #ffffff;
-      filter: none;
-    }
-
-    .screen[data-home-theme="flat"] .home-user-status,
-    .screen[data-home-theme="flat"] .language-switch,
-    .screen[data-home-theme="flat"] .home-theme-switch {
-      border: 0;
-      background: #0b3142;
-      color: #ffffff;
-      box-shadow: none;
-    }
-
-    .screen[data-home-theme="neon-future"]::before {
-      filter: saturate(1.55) brightness(0.62) contrast(1.24);
-    }
-
-    .screen[data-home-theme="neon-future"]::after {
-      background:
-        linear-gradient(180deg, rgba(8, 0, 28, 0.16), rgba(8, 0, 32, 0.74)),
-        linear-gradient(90deg, rgba(255, 0, 168, 0.22), transparent 26%, transparent 74%, rgba(0, 231, 255, 0.22)),
-        repeating-linear-gradient(90deg, rgba(0, 231, 255, 0.08) 0 1px, transparent 1px 76px);
-    }
-
-    .screen[data-home-theme="neon-future"] .feature-entry-grid::before,
-    .screen[data-home-theme="neon-future"] .feature-entry {
-      border-color: rgba(0, 231, 255, 0.9);
-      background:
-        radial-gradient(circle at 50% 24%, rgba(255, 0, 168, 0.18), transparent 36%),
-        linear-gradient(180deg, rgba(14, 10, 58, 0.84), rgba(3, 4, 25, 0.96));
-      box-shadow:
-        inset 0 0 36px rgba(0, 231, 255, 0.22),
-        0 0 28px rgba(0, 231, 255, 0.36),
-        0 0 44px rgba(255, 0, 168, 0.28);
-    }
-
-    .screen[data-home-theme="neon-future"] .home-title,
-    .screen[data-home-theme="neon-future"] .feature-entry strong {
-      color: #ffffff;
-      text-shadow: 0 0 14px rgba(0, 231, 255, 0.9), 0 0 24px rgba(255, 0, 168, 0.58);
-    }
-
-    .screen[data-home-theme="neon-future"] .feature-icon,
-    .screen[data-home-theme="neon-future"] .energy-side {
-      color: #00e7ff;
-      filter: drop-shadow(0 0 14px rgba(0, 231, 255, 0.9)) drop-shadow(0 0 24px rgba(255, 0, 168, 0.56));
-    }
-
-    .screen[data-home-theme="neon-future"] .home-user-status,
-    .screen[data-home-theme="neon-future"] .language-switch,
-    .screen[data-home-theme="neon-future"] .home-theme-switch {
-      border-color: rgba(0, 231, 255, 0.64);
-      background: rgba(8, 4, 36, 0.78);
-      color: #effcff;
-      box-shadow: 0 0 24px rgba(0, 231, 255, 0.22), inset 0 0 18px rgba(255, 0, 168, 0.12);
-    }
-
-    .screen[data-home-theme="glassmorphism"]::before {
-      filter: saturate(0.82) brightness(1.08) contrast(0.88);
-      opacity: 0.72;
-    }
-
-    .screen[data-home-theme="glassmorphism"]::after {
-      background:
-        linear-gradient(180deg, rgba(241, 248, 252, 0.44), rgba(109, 139, 158, 0.28) 60%, rgba(28, 47, 61, 0.48)),
-        linear-gradient(90deg, rgba(225, 236, 244, 0.4), transparent 24%, transparent 76%, rgba(225, 236, 244, 0.4));
-    }
-
-    .screen[data-home-theme="glassmorphism"] .feature-entry-grid::before,
-    .screen[data-home-theme="glassmorphism"] .feature-entry {
-      border: 0;
-      border-radius: 18px;
-      background: rgba(239, 248, 253, 0.86);
-      box-shadow:
-        14px 18px 34px rgba(32, 54, 76, 0.22),
-        -12px -14px 32px rgba(255, 255, 255, 0.2);
-      clip-path: none;
-    }
-
-    .screen[data-home-theme="glassmorphism"] .feature-entry::before,
-    .screen[data-home-theme="glassmorphism"] .feature-entry::after,
-    .screen[data-home-theme="glassmorphism"] .feature-entry-grid::after {
-      opacity: 0;
-    }
-
-    .screen[data-home-theme="glassmorphism"] .home-title {
-      color: #ffffff;
-      text-shadow:
-        0 -1px 0 rgba(7, 24, 42, 0.78),
-        1px 0 0 rgba(7, 24, 42, 0.72),
-        -1px 0 0 rgba(7, 24, 42, 0.72),
-        0 1px 0 rgba(7, 24, 42, 0.8),
-        0 3px 7px rgba(7, 24, 42, 0.52);
-    }
-
-    .screen[data-home-theme="glassmorphism"] .feature-entry strong {
-      color: #23394c;
-      text-shadow:
-        0 -1px 0 rgba(255, 255, 255, 0.48),
-        1px 0 0 rgba(255, 255, 255, 0.4),
-        -1px 0 0 rgba(255, 255, 255, 0.4),
-        0 1px 0 rgba(255, 255, 255, 0.76),
-        0 2px 5px rgba(7, 24, 42, 0.2);
-    }
-
-    .screen[data-home-theme="glassmorphism"] .feature-entry {
-      color: #23394c;
-    }
-
-    .screen[data-home-theme="glassmorphism"] .feature-icon,
-    .screen[data-home-theme="glassmorphism"] .energy-side {
-      color: #356f93;
-      filter: none;
-    }
-
-    .screen[data-home-theme="glassmorphism"] .home-user-status,
-    .screen[data-home-theme="glassmorphism"] .language-switch,
-    .screen[data-home-theme="glassmorphism"] .home-theme-switch {
-      border: 0;
-      background: rgba(239, 248, 253, 0.9);
-      color: #23394c;
-      box-shadow:
-        8px 10px 22px rgba(32, 54, 76, 0.18),
-        -6px -6px 18px rgba(255, 255, 255, 0.16);
-    }
-
-    .screen[data-home-theme="glassmorphism"] .home-user-status strong {
-      color: #154d68;
-    }
-
-    .screen[data-home-theme="glassmorphism"] .home-user-status a,
-    .screen[data-home-theme="glassmorphism"] .home-user-status button {
-      border-color: rgba(31, 111, 148, 0.32);
-      background: rgba(31, 111, 148, 0.12);
-      color: #183247;
-    }
-
-    .screen[data-home-theme="material"]::before {
-      filter: saturate(1) brightness(0.9) contrast(0.98);
-    }
-
-    .screen[data-home-theme="material"]::after {
-      background:
-        linear-gradient(180deg, rgba(8, 40, 78, 0.12), rgba(8, 40, 78, 0.6)),
-        linear-gradient(90deg, rgba(12, 31, 58, 0.68), transparent 24%, transparent 76%, rgba(12, 31, 58, 0.68));
-    }
-
-    .screen[data-home-theme="material"] .feature-entry-grid::before,
-    .screen[data-home-theme="material"] .feature-entry {
-      border: 0;
-      border-radius: 12px;
-      background: #1565c0;
-      box-shadow:
-        0 6px 10px rgba(0, 0, 0, 0.22),
-        0 18px 38px rgba(0, 0, 0, 0.18);
-      clip-path: none;
-    }
-
-    .screen[data-home-theme="material"] .feature-entry:nth-child(2) { background: #00695c; }
-    .screen[data-home-theme="material"] .feature-entry:nth-child(3) { background: #5e35b1; }
-    .screen[data-home-theme="material"] .feature-entry:nth-child(4) { background: #3949ab; }
-    .screen[data-home-theme="material"] .feature-entry:nth-child(5) { background: #00796b; }
-
-    .screen[data-home-theme="material"] .feature-entry::before,
-    .screen[data-home-theme="material"] .feature-entry::after,
-    .screen[data-home-theme="material"] .feature-entry-grid::after {
-      opacity: 0;
-    }
-
-    .screen[data-home-theme="material"] .home-title,
-    .screen[data-home-theme="material"] .feature-entry strong {
-      color: #ffffff;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    }
-
-    .screen[data-home-theme="material"] .feature-icon,
-    .screen[data-home-theme="material"] .energy-side {
-      color: #ffffff;
-      filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.22));
-    }
-
-    .screen[data-home-theme="material"] .home-user-status,
-    .screen[data-home-theme="material"] .language-switch,
-    .screen[data-home-theme="material"] .home-theme-switch {
-      border: 0;
-      background: #0d47a1;
-      color: #ffffff;
-      box-shadow: 0 6px 14px rgba(0, 0, 0, 0.24);
-    }
-
-    .screen[data-home-theme="magazine"]::before {
-      filter: grayscale(0.18) saturate(0.78) brightness(0.78) contrast(1.12);
-    }
-
-    .screen[data-home-theme="magazine"]::after {
-      background:
-        linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(10, 13, 18, 0.76)),
-        linear-gradient(90deg, rgba(0, 0, 0, 0.74), transparent 31%, transparent 69%, rgba(0, 0, 0, 0.74));
-    }
-
-    .screen[data-home-theme="magazine"] .feature-entry-grid {
-      gap: clamp(12px, 1vw, 20px);
-    }
-
-    .screen[data-home-theme="magazine"] .feature-entry-grid::before,
-    .screen[data-home-theme="magazine"] .feature-entry {
-      border: 1px solid rgba(255, 255, 255, 0.88);
-      border-radius: 0;
-      background: rgba(247, 249, 252, 0.86);
-      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28);
-      clip-path: none;
-    }
-
-    .screen[data-home-theme="magazine"] .feature-entry::before,
-    .screen[data-home-theme="magazine"] .feature-entry::after,
-    .screen[data-home-theme="magazine"] .feature-entry-grid::after {
-      opacity: 0;
-    }
-
-    .screen[data-home-theme="magazine"] .home-title {
-      color: #ffffff;
-      font-weight: 900;
-      letter-spacing: 0.02em;
-      text-shadow: 0 3px 10px rgba(0, 0, 0, 0.72);
-    }
-
-    .screen[data-home-theme="magazine"] .feature-entry strong {
-      color: #111820;
-      font-size: clamp(14px, min(1.18vw, 3.4vh), 24px);
-      text-transform: uppercase;
-      text-shadow: none;
-    }
-
-    .screen[data-home-theme="magazine"] .feature-entry {
-      color: #111820;
-    }
-
-    .screen[data-home-theme="magazine"] .feature-icon {
-      color: #c1121f;
-      filter: none;
-    }
-
-    .screen[data-home-theme="magazine"] .energy-side {
-      color: #ffffff;
-      filter: none;
-    }
-
-    .screen[data-home-theme="magazine"] .home-user-status,
-    .screen[data-home-theme="magazine"] .language-switch,
-    .screen[data-home-theme="magazine"] .home-theme-switch {
-      border: 1px solid rgba(255, 255, 255, 0.72);
-      border-radius: 0;
-      background: rgba(17, 24, 32, 0.78);
-      color: #ffffff;
-      box-shadow: none;
-    }
-
-    .screen[data-home-theme="dynamic"]::before {
-      filter: saturate(1.16) brightness(0.78) contrast(1.08);
-    }
-
-    .screen[data-home-theme="dynamic"]::after {
-      background:
-        linear-gradient(180deg, rgba(0, 16, 45, 0.16), rgba(0, 10, 30, 0.66)),
-        repeating-linear-gradient(115deg, rgba(33, 213, 255, 0.12) 0 2px, transparent 2px 74px);
-      animation: homeDynamicSweep 8s linear infinite;
-    }
-
-    .screen[data-home-theme="dynamic"] .feature-entry-grid::before,
-    .screen[data-home-theme="dynamic"] .feature-entry {
-      border-color: rgba(33, 213, 255, 0.8);
-      background:
-        radial-gradient(circle at 50% 24%, rgba(124, 241, 255, 0.18), transparent 36%),
-        linear-gradient(180deg, rgba(3, 42, 90, 0.78), rgba(1, 12, 35, 0.94));
-      box-shadow:
-        inset 0 0 34px rgba(33, 213, 255, 0.2),
-        0 0 34px rgba(33, 213, 255, 0.28);
-      animation: homeDynamicPulse 3.6s ease-in-out infinite;
-    }
-
-    .screen[data-home-theme="dynamic"] .feature-entry:nth-child(2) { animation-delay: 0.12s; }
-    .screen[data-home-theme="dynamic"] .feature-entry:nth-child(3) { animation-delay: 0.24s; }
-    .screen[data-home-theme="dynamic"] .feature-entry:nth-child(4) { animation-delay: 0.36s; }
-    .screen[data-home-theme="dynamic"] .feature-entry:nth-child(5) { animation-delay: 0.48s; }
-
-    .screen[data-home-theme="dynamic"] .feature-entry:hover,
-    .screen[data-home-theme="dynamic"] .feature-entry:focus-visible {
-      transform: translateY(-12px) scale(1.025);
-    }
-
-    .screen[data-home-theme="dynamic"] .home-title,
-    .screen[data-home-theme="dynamic"] .feature-entry strong {
-      color: #ffffff;
-      text-shadow: 0 0 14px rgba(33, 213, 255, 0.78);
-    }
-
-    .screen[data-home-theme="dynamic"] .feature-icon,
-    .screen[data-home-theme="dynamic"] .energy-side {
-      color: #7cf1ff;
-      filter: drop-shadow(0 0 14px rgba(124, 241, 255, 0.82));
-    }
-
-    .screen[data-home-theme="dynamic"] .energy-side span {
-      animation: homeDynamicPulse 2.8s ease-in-out infinite;
-    }
-
-    .screen[data-home-theme="dynamic"] .home-user-status,
-    .screen[data-home-theme="dynamic"] .language-switch,
-    .screen[data-home-theme="dynamic"] .home-theme-switch {
-      border-color: rgba(124, 241, 255, 0.46);
-      background: rgba(4, 26, 60, 0.7);
-      color: #effcff;
-      box-shadow: inset 0 0 16px rgba(124, 241, 255, 0.14), 0 0 22px rgba(33, 213, 255, 0.2);
-    }
-
-    @keyframes homeDynamicPulse {
-      0%, 100% { filter: brightness(1); }
-      50% { filter: brightness(1.12); }
-    }
-
-    @keyframes homeDynamicSweep {
-      0% { background-position: 0 0, 0 0; }
-      100% { background-position: 0 0, 180px 0; }
-    }
-
-    @media (max-width: 980px) {
-      body { overflow: auto; }
-
-      .screen {
-        min-height: 760px;
-      }
-
-      .feature-entry-grid {
-        left: 24px;
-        right: 24px;
-        top: 50%;
-        width: auto;
-        min-height: 420px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        transform: translateY(-34%);
-      }
-
-      .feature-entry {
-        grid-column: auto;
-        min-height: 132px;
-        padding: 16px;
-      }
-
-      .feature-entry:nth-child(5) {
-        grid-column: auto;
-      }
-
-      .energy-side {
-        display: none;
-      }
-    }
-
-    @media (max-width: 640px) {
-      .screen {
-        min-height: 820px;
-      }
-
-      .screen::before {
-        background-position: center top;
-      }
-
-      .feature-entry-grid {
-        left: 18px;
-        right: 18px;
-        top: 340px;
-        width: auto;
-        grid-template-columns: 1fr;
-        transform: none;
-      }
-
-      .feature-entry {
-        min-height: 112px;
-        display: grid;
-        grid-template-columns: 74px minmax(0, 1fr);
-        grid-template-rows: auto;
-        align-items: center;
-        gap: 14px;
-      }
-
-      .feature-icon {
-        width: 78px;
-        height: 78px;
-        grid-row: 1 / 3;
-      }
-
-      .feature-entry strong {
-        font-size: clamp(22px, 7vw, 30px);
-      }
-
-      .home-title {
-        top: 104px;
-        width: calc(100vw - 28px);
-        font-size: clamp(22px, 7vw, 34px);
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="assets/planning.css?v=20261125-ui-refactor">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261125-ui-refactor">
+  <script src="assets/ui-kit.js?v=20261125-ui-refactor"></script>
 </head>
-<body>
-  <main class="screen" data-home-theme="default" aria-label="考察站风-光-氢-储-柴联合规划系统首页">
-    <h1 class="home-title">考察站风-光-氢-储-柴联合规划系统</h1>
-    <div class="home-user-status" data-auth-user hidden>
-      <span>当前用户:</span><strong data-auth-username></strong><em data-auth-role></em>
+<body class="home-page">
+  <header class="topbar">
+    <a class="brand" href="index.html">考察站风-光-氢-储-柴联合规划系统</a>
+    <nav class="main-nav" aria-label="主功能导航">
+      <a class="active" href="index.html">系统首页</a>
+      <a href="planning.html">参数维护</a>
+      <a href="optimize.html">规划求解</a>
+      <a href="evaluation.html">方案评估</a>
+      <a href="reliability.html">供电可靠性</a>
+      <a href="frequency.html">频率计算</a>
+      <a href="comparison.html">结果对比</a>
+      <a href="tasks.html">任务并发</a>
+    </nav>
+    <div class="user-status" data-auth-user hidden>
+      <strong data-auth-username></strong><em data-auth-role></em>
       <a href="users.html" data-admin-only hidden>用户管理</a>
       <button type="button" data-logout>退出</button>
     </div>
-    <label class="home-theme-switch" for="homeThemeSelect">
-      <span>显示主题</span>
-      <select id="homeThemeSelect" aria-label="首页显示主题">
-        <option value="default">默认样式</option>
-        <option value="fresh">轻快</option>
-        <option value="bright">明亮</option>
-        <option value="sci-fi">科幻</option>
-        <option value="solemn">庄重</option>
-        <option value="minimal">极简</option>
-        <option value="dark">黑暗</option>
-        <option value="illustration">插画</option>
-        <option value="flat">扁平</option>
-        <option value="neon-future">霓虹未来</option>
-        <option value="glassmorphism">玻璃拟态</option>
-        <option value="material">材料设计</option>
-        <option value="magazine">杂志排版</option>
-        <option value="dynamic">动态交互</option>
-      </select>
-    </label>
-    <div class="energy-side energy-left" aria-hidden="true">
-      <span>
-        <svg viewBox="0 0 64 64">
-          <path d="M32 30V8"></path>
-          <path d="M32 34l-21 12"></path>
-          <path d="M36 34l17 13"></path>
-          <circle cx="32" cy="32" r="5"></circle>
-          <path d="M24 56h16"></path>
-          <path d="M32 37v19"></path>
-        </svg>
-      </span>
-      <span>
-        <svg viewBox="0 0 64 64">
-          <path d="M16 30h32l5 24H11z"></path>
-          <path d="M22 30l-3 24"></path>
-          <path d="M32 30v24"></path>
-          <path d="M42 30l3 24"></path>
-          <path d="M14 42h36"></path>
-          <path d="M32 10v8"></path>
-          <path d="M18 16l6 6"></path>
-          <path d="M46 16l-6 6"></path>
-          <circle cx="32" cy="22" r="5"></circle>
-        </svg>
-      </span>
-      <span>
-        <svg viewBox="0 0 64 64">
-          <path d="M22 10h20"></path>
-          <path d="M26 10V6h12v4"></path>
-          <rect x="18" y="14" width="28" height="44" rx="5"></rect>
-          <path d="M32 24l-8 15h8l-3 12 11-18h-8z"></path>
-        </svg>
-      </span>
+  </header>
+
+  <main class="home-main" aria-label="考察站风-光-氢-储-柴联合规划系统首页">
+    <div class="home-container">
+      <section class="home-hero-bar">
+        <h1 class="home-hero-title">考察站风-光-氢-储-柴联合规划系统</h1>
+        <div class="home-hero-meta">
+          <span class="home-pill"><span class="home-pill-dot" aria-hidden="true"></span><span>运行正常</span></span>
+          <span class="home-pill">MILP · 8760h</span>
+        </div>
+      </section>
+
+      <nav class="bento-grid" aria-label="规划功能快捷入口">
+        <a class="bento-card bento-featured" href="planning.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <line x1="4" y1="6" x2="20" y2="6"></line>
+                <line x1="4" y1="12" x2="20" y2="12"></line>
+                <line x1="4" y1="18" x2="20" y2="18"></line>
+                <circle cx="9" cy="6" r="2"></circle>
+                <circle cx="15" cy="12" r="2"></circle>
+                <circle cx="11" cy="18" r="2"></circle>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">参数维护</span>
+            <span class="bento-card-tag">8760h 时序 / 设备 / 约束</span>
+          </div>
+        </a>
+
+        <a class="bento-card bento-featured" href="optimize.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <polygon points="6 4 20 12 6 20 6 4"></polygon>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">规划求解</span>
+            <span class="bento-card-tag">联合 MILP 容量与运行优化</span>
+          </div>
+        </a>
+
+        <a class="bento-card" href="evaluation.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="8" y1="13" x2="16" y2="13"></line>
+                <line x1="8" y1="17" x2="13" y2="17"></line>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">方案评估</span>
+            <span class="bento-card-tag">经济性 / 绿电 / 安全复核</span>
+          </div>
+        </a>
+
+        <a class="bento-card" href="reliability.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+                <polyline points="8.5 12 11 14.5 15.5 9.5"></polyline>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">供电可靠性</span>
+            <span class="bento-card-tag">N-1 压力与序贯蒙特卡洛</span>
+          </div>
+        </a>
+
+        <a class="bento-card" href="frequency.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <polyline points="2 12 6 12 9 4 13 20 16 12 22 12"></polyline>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">频率计算</span>
+            <span class="bento-card-tag">惯量 / 调频 / 分时动态曲线</span>
+          </div>
+        </a>
+
+        <a class="bento-card" href="comparison.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="7" height="16" rx="1"></rect>
+                <rect x="14" y="4" width="7" height="16" rx="1"></rect>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">结果对比</span>
+            <span class="bento-card-tag">多方案指标与年度柱图对比</span>
+          </div>
+        </a>
+
+        <a class="bento-card" href="tasks.html">
+          <div class="bento-card-head">
+            <span class="bento-icon-wrap" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                <line x1="7" y1="9" x2="17" y2="9"></line>
+                <line x1="7" y1="13" x2="13" y2="13"></line>
+                <line x1="7" y1="17" x2="15" y2="17"></line>
+              </svg>
+            </span>
+            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+          </div>
+          <div class="bento-card-body">
+            <span class="bento-card-title">任务并发</span>
+            <span class="bento-card-tag">并发队列与进程实时监控</span>
+          </div>
+        </a>
+      </nav>
+
+      <footer class="home-status-strip">
+        <div class="home-status-items">
+          <span class="home-status-item"><span>功能模块</span><strong>7</strong></span>
+          <span class="home-status-item"><span>支持主题</span><strong>5</strong></span>
+          <span class="home-status-item"><span>支持语言</span><strong>ZH / EN / RU</strong></span>
+        </div>
+        <span>Power Plan Web</span>
+      </footer>
     </div>
-
-    <div class="energy-side energy-right" aria-hidden="true">
-      <span>
-        <svg viewBox="0 0 64 64">
-          <circle cx="32" cy="24" r="17"></circle>
-          <circle cx="16" cy="44" r="8"></circle>
-          <circle cx="48" cy="44" r="8"></circle>
-          <path d="M24 30h16"></path>
-          <path d="M25 18v13"></path>
-          <path d="M39 18v13"></path>
-          <path d="M21 25h22"></path>
-        </svg>
-      </span>
-      <span>
-        <svg viewBox="0 0 64 64">
-          <path d="M22 8h20"></path>
-          <path d="M26 8V5h12v3"></path>
-          <rect x="17" y="12" width="30" height="46" rx="6"></rect>
-          <path d="M24 24h16"></path>
-          <path d="M24 34h16"></path>
-          <path d="M24 44h16"></path>
-        </svg>
-      </span>
-      <span>
-        <svg viewBox="0 0 64 64">
-          <rect x="12" y="20" width="34" height="26" rx="5"></rect>
-          <path d="M46 26h6v14h-6"></path>
-          <path d="M20 16h18"></path>
-          <path d="M25 16v-5h8v5"></path>
-          <path d="M29 25l-7 12h7l-2 9 10-15h-7z"></path>
-        </svg>
-      </span>
-    </div>
-
-    <nav class="feature-entry-grid" aria-label="规划功能快捷入口">
-      <a class="feature-entry" href="planning.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <path d="M12 18h28"></path>
-            <path d="M12 32h22"></path>
-            <path d="M12 46h28"></path>
-            <circle cx="40" cy="18" r="4"></circle>
-            <circle cx="28" cy="32" r="4"></circle>
-            <circle cx="34" cy="46" r="4"></circle>
-            <path d="M44 33l4-4 4 4 5-1 1 7 4 4-4 4-1 7-5-1-4 4-4-4-6 1-1-7-4-4 4-4 1-7z"></path>
-            <circle cx="48" cy="43" r="6"></circle>
-          </svg>
-        </i>
-        <strong>参数维护</strong>
-      </a>
-      <a class="feature-entry" href="optimize.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="23"></circle>
-            <path d="M27 22l18 10-18 10z"></path>
-            <circle cx="32" cy="9" r="4"></circle>
-            <circle cx="32" cy="55" r="4"></circle>
-            <circle cx="9" cy="32" r="4"></circle>
-            <circle cx="55" cy="32" r="4"></circle>
-          </svg>
-        </i>
-        <strong>规划求解</strong>
-      </a>
-      <a class="feature-entry" href="evaluation.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <path d="M17 9h25l9 9v35a4 4 0 0 1-4 4H17a4 4 0 0 1-4-4V13a4 4 0 0 1 4-4z"></path>
-            <path d="M42 9v11h10"></path>
-            <path d="M21 26h16"></path>
-            <path d="M21 35h10"></path>
-            <path d="M22 48V39"></path>
-            <path d="M31 48V32"></path>
-            <path d="M40 48V27"></path>
-            <circle cx="47" cy="47" r="12"></circle>
-            <path d="M41 47l4 4 8-9"></path>
-          </svg>
-        </i>
-        <strong>方案评估</strong>
-      </a>
-      <a class="feature-entry" href="reliability.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <path d="M32 7l20 8v14c0 13-8 23-20 28C20 52 12 42 12 29V15z"></path>
-            <path d="M19 33h7l4-11 6 21 4-10h6"></path>
-            <circle cx="46" cy="18" r="7"></circle>
-            <path d="M42 18l3 3 5-6"></path>
-          </svg>
-        </i>
-        <strong>供电可靠性</strong>
-      </a>
-      <a class="feature-entry" href="frequency.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <path d="M11 38h8l5-14 8 28 8-40 7 26h6"></path>
-            <path d="M12 52h40"></path>
-            <path d="M12 12h40"></path>
-            <path d="M48 20a8 8 0 1 1-8 8"></path>
-            <path d="M48 20v8h8"></path>
-          </svg>
-        </i>
-        <strong>频率计算</strong>
-      </a>
-      <a class="feature-entry" href="comparison.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <path d="M13 11h16v42H13z"></path>
-            <path d="M35 11h16v42H35z"></path>
-            <path d="M18 22h6"></path>
-            <path d="M18 32h6"></path>
-            <path d="M18 42h6"></path>
-            <path d="M40 22h6"></path>
-            <path d="M40 32h6"></path>
-            <path d="M40 42h6"></path>
-            <path d="M29 20l6 0"></path>
-            <path d="M29 44l6 0"></path>
-            <path d="M31 18l-3 2 3 2"></path>
-            <path d="M33 42l3 2-3 2"></path>
-          </svg>
-        </i>
-        <strong>结果对比</strong>
-      </a>
-      <a class="feature-entry" href="tasks.html">
-        <i class="feature-icon" aria-hidden="true">
-          <svg viewBox="0 0 64 64">
-            <rect x="11" y="12" width="42" height="40" rx="6"></rect>
-            <path d="M21 24h22"></path>
-            <path d="M21 34h14"></path>
-            <path d="M21 44h18"></path>
-            <circle cx="48" cy="20" r="5"></circle>
-            <path d="M48 15v-5"></path>
-            <path d="M48 30v-5"></path>
-            <path d="M43 20h-5"></path>
-            <path d="M58 20h-5"></path>
-          </svg>
-        </i>
-        <strong>任务并发</strong>
-      </a>
-    </nav>
-
   </main>
-  <script>
-    (() => {
-      const STORAGE_KEY = "powerPlanHomeTheme";
-      const THEMES = new Set([
-        "default",
-        "fresh",
-        "bright",
-        "sci-fi",
-        "solemn",
-        "minimal",
-        "dark",
-        "illustration",
-        "flat",
-        "neon-future",
-        "glassmorphism",
-        "material",
-        "magazine",
-        "dynamic",
-      ]);
-      const screen = document.querySelector(".screen");
-      const select = document.getElementById("homeThemeSelect");
 
-      function normalizeHomeTheme(value) {
-        return THEMES.has(value) ? value : "default";
-      }
-
-      function readStoredHomeTheme() {
-        try {
-          return localStorage.getItem(STORAGE_KEY) || "default";
-        } catch (error) {
-          return "default";
-        }
-      }
-
-      function applyHomeTheme(value) {
-        const theme = normalizeHomeTheme(value);
-        if (screen) screen.dataset.homeTheme = theme;
-        document.documentElement.dataset.homeTheme = theme;
-        document.body.dataset.homeTheme = theme;
-        if (select) select.value = theme;
-        try {
-          localStorage.setItem(STORAGE_KEY, theme);
-        } catch (error) {
-          // 浏览器禁用本地存储时只保持本次页面选择。
-        }
-      }
-
-      applyHomeTheme(readStoredHomeTheme());
-      select?.addEventListener("change", (event) => applyHomeTheme(event.target.value));
-    })();
-  </script>
-  <script src="assets/i18n.js?v=20260518-fit-text4"></script>
-  <script src="assets/auth.js?v=20260510-auth"></script>
+  <script src="assets/i18n.js?v=20261125-ui-refactor"></script>
+  <script src="assets/auth.js?v=20261125-ui-refactor"></script>
 </body>
 </html>

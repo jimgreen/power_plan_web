@@ -908,9 +908,9 @@ def put_mosek_linear_problem_data(
     nonzero_mask = np.asarray(coo.data, dtype=float) != 0.0
     if np.any(nonzero_mask):
         task.putaijlist(
-            coo.row[nonzero_mask].astype(np.int32).tolist(),
-            coo.col[nonzero_mask].astype(np.int32).tolist(),
-            coo.data[nonzero_mask].astype(float).tolist(),
+            np.ascontiguousarray(coo.row[nonzero_mask], dtype=np.int32),
+            np.ascontiguousarray(coo.col[nonzero_mask], dtype=np.int32),
+            np.ascontiguousarray(coo.data[nonzero_mask], dtype=np.float64),
         )
 
 

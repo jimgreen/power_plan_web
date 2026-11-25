@@ -43,6 +43,8 @@ class MilpModelBuilder:
     data: list[float] = field(default_factory=list)
     constraint_lower: list[float] = field(default_factory=list)
     constraint_upper: list[float] = field(default_factory=list)
+    _cached_csr: Any = field(default=None, init=False, repr=False)
+    _cached_csr_shape: tuple[int, int, int] = field(default=(-1, -1, -1), init=False, repr=False)
 
     def add_var(
         self,
@@ -52,10 +54,11 @@ class MilpModelBuilder:
         integer: bool = False,
         cost: float = 0.0,
     ) -> int:
-        if key in self.variables:
+        variables = self.variables
+        if key in variables:
             raise KeyError(f"duplicate MILP variable key: {key}")
         index = len(self.objective)
-        self.variables[key] = index
+        variables[key] = index
         self.lower_bounds.append(float(lower))
         self.upper_bounds.append(float(upper))
         self.integrality.append(1 if integer else 0)
@@ -67,16 +70,20 @@ class MilpModelBuilder:
 
     def add_constraint(self, terms: dict[int, float], lower: float, upper: float) -> None:
         row_index = len(self.constraint_lower)
+        rows_append = self.rows.append
+        cols_append = self.cols.append
+        data_append = self.data.append
         for column, value in terms.items():
             if value:
-                self.rows.append(row_index)
-                self.cols.append(column)
-                self.data.append(float(value))
+                rows_append(row_index)
+                cols_append(column)
+                data_append(float(value))
         self.constraint_lower.append(float(lower))
         self.constraint_upper.append(float(upper))
 
     def add_keyed_constraint(self, terms: dict[tuple[Any, ...], float], lower: float, upper: float) -> None:
-        self.add_constraint({self.var(key): value for key, value in terms.items()}, lower, upper)
+        variables = self.variables
+        self.add_constraint({variables[key]: value for key, value in terms.items()}, lower, upper)
 
     @property
     def variable_count(self) -> int:
@@ -95,10 +102,19 @@ class MilpModelBuilder:
         return len(self.data)
 
     def constraint_matrix(self) -> Any:
-        return sparse.coo_matrix(
-            (self.data, (self.rows, self.cols)),
-            shape=(self.constraint_count, self.variable_count),
+        sig = (self.constraint_count, self.variable_count, len(self.data))
+        if self._cached_csr is not None and self._cached_csr_shape == sig:
+            return self._cached_csr
+        matrix = sparse.coo_matrix(
+            (
+                np.asarray(self.data, dtype=np.float64),
+                (np.asarray(self.rows, dtype=np.int32), np.asarray(self.cols, dtype=np.int32)),
+            ),
+            shape=(sig[0], sig[1]),
         ).tocsr()
+        self._cached_csr = matrix
+        self._cached_csr_shape = sig
+        return matrix
 
     def objective_array(self) -> np.ndarray:
         return np.array(self.objective, dtype=float)

@@ -462,16 +462,28 @@ def frequency_physical_bounds(model: dict[str, Any]) -> dict[str, float]:
     }
 
 
-def build_frequency_linearization_context(model: dict[str, Any], hour: int, seek: str) -> dict[str, float | str]:
+def _unit_frequency_linearization_base(model: dict[str, Any], seek: str, sign: float) -> dict[str, float]:
+    """按扰动符号计算单位扰动(±1 MW)的二阶频率极值偏差线性化基准，供全时段精确齐次缩放复用。"""
+
     freq = model["frequency"]
-    delta_p_mw = frequency_delta_p_mw(model, hour, seek)
+    unit_cache = freq.setdefault("unit_linearization_cache", {})
+    cache_key = (seek, 1 if sign >= 0.0 else -1)
+    cached = unit_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     bounds = frequency_physical_bounds(model)
     m_lo, m_hi = _shrink_interval(bounds["M_lo"], bounds["M_hi"], freq["linearization_interval_ratio"])
     k_lo, k_hi = _shrink_interval(bounds["K_lo"], bounds["K_hi"], freq["linearization_interval_ratio"])
     d_lo, d_hi = _shrink_interval(bounds["D_lo"], bounds["D_hi"], freq["linearization_interval_ratio"])
     sample_points = max(2, int(freq["linearization_samples_per_axis"]))
+    t_d = representative_governor_time_constant(model)
+    t_end = freq["nadir_evaluation_duration_s"]
+    f0 = float(freq["nominal_frequency_hz"])
+    unit_delta_p = 1.0 if sign >= 0.0 else -1.0
+
     rows: list[list[float]] = []
-    values: list[float] = []
+    delta_values: list[float] = []
     for m_eq in _safe_linspace(m_lo, m_hi, sample_points):
         for k_eq in _safe_linspace(k_lo, k_hi, sample_points):
             for d_eq in _safe_linspace(d_lo, d_hi, sample_points):
@@ -479,31 +491,24 @@ def build_frequency_linearization_context(model: dict[str, Any], hour: int, seek
                     float(m_eq),
                     float(k_eq),
                     float(d_eq),
-                    representative_governor_time_constant(model),
-                    delta_p_mw,
-                    t_end=freq["nadir_evaluation_duration_s"],
+                    t_d,
+                    unit_delta_p,
+                    t_end=t_end,
                     seek=seek,
-                    nominal_frequency_hz=freq["nominal_frequency_hz"],
+                    nominal_frequency_hz=f0,
                 )
                 if np.isfinite(f_extreme):
                     rows.append([float(m_eq), float(k_eq), float(d_eq), 1.0])
-                    values.append(float(f_extreme))
+                    delta_values.append(float(f_extreme) - f0)
     if len(rows) < 4:
         raise ValueError("频率安全约束无法建立：可行运行区间内有效频率采样点不足，请检查柴发/构网储能容量和频率参数")
     a_matrix = np.asarray(rows, dtype=float)
-    y_vector = np.asarray(values, dtype=float)
-    coef = np.linalg.lstsq(a_matrix, y_vector, rcond=None)[0]
+    y_delta = np.asarray(delta_values, dtype=float)
+    coef = np.linalg.lstsq(a_matrix, y_delta, rcond=None)[0]
     pred = a_matrix @ coef
-    if seek == "min":
-        fit_error = float(max(0.0, np.max(pred - y_vector)))
-        freq_ss_limit_hz = float(freq["steady_state_frequency_lower_hz"])
-        steady_dk_min = float(abs(delta_p_mw) / max(freq["nominal_frequency_hz"] - freq_ss_limit_hz, FREQUENCY_EPS))
-    else:
-        fit_error = float(max(0.0, np.max(y_vector - pred)))
-        freq_ss_limit_hz = float(freq["steady_state_frequency_upper_hz"])
-        steady_dk_min = float(abs(delta_p_mw) / max(freq_ss_limit_hz - freq["nominal_frequency_hz"], FREQUENCY_EPS))
-    return {
-        "seek": seek,
+    fit_error = float(max(0.0, np.max(pred - y_delta))) if seek == "min" else float(max(0.0, np.max(y_delta - pred)))
+    fit_rmse = float(np.sqrt(np.mean((pred - y_delta) ** 2)))
+    base = {
         "M_lo": float(m_lo),
         "M_hi": float(m_hi),
         "K_lo": float(k_lo),
@@ -513,11 +518,66 @@ def build_frequency_linearization_context(model: dict[str, Any], hour: int, seek
         "a_M": float(coef[0]),
         "a_K": float(coef[1]),
         "a_D": float(coef[2]),
-        "c0": float(coef[3]),
+        "dc0": float(coef[3]),
         "fit_error": fit_error,
-        "fit_rmse": float(np.sqrt(np.mean((pred - y_vector) ** 2))),
-        "delta_p_mw": float(delta_p_mw),
-        "rocof_m_min": float(abs(delta_p_mw) / (2.0 * math.pi * max(freq["rocof_upper_hz_per_s"], FREQUENCY_EPS))),
+        "fit_rmse": fit_rmse,
+    }
+    unit_cache[cache_key] = base
+    return base
+
+
+def build_frequency_linearization_context(model: dict[str, Any], hour: int, seek: str) -> dict[str, float | str]:
+    freq = model["frequency"]
+    delta_p_mw = float(frequency_delta_p_mw(model, hour, seek))
+    f0 = float(freq["nominal_frequency_hz"])
+    scale = abs(delta_p_mw)
+    sign = 1.0 if delta_p_mw >= 0.0 else -1.0
+    base = _unit_frequency_linearization_base(model, seek, sign)
+
+    if seek == "min":
+        freq_ss_limit_hz = float(freq["steady_state_frequency_lower_hz"])
+        steady_dk_min = float(scale / max(f0 - freq_ss_limit_hz, FREQUENCY_EPS))
+    else:
+        freq_ss_limit_hz = float(freq["steady_state_frequency_upper_hz"])
+        steady_dk_min = float(scale / max(freq_ss_limit_hz - f0, FREQUENCY_EPS))
+
+    if scale <= FREQUENCY_EPS:
+        return {
+            "seek": seek,
+            "M_lo": base["M_lo"],
+            "M_hi": base["M_hi"],
+            "K_lo": base["K_lo"],
+            "K_hi": base["K_hi"],
+            "D_lo": base["D_lo"],
+            "D_hi": base["D_hi"],
+            "a_M": 0.0,
+            "a_K": 0.0,
+            "a_D": 0.0,
+            "c0": f0,
+            "fit_error": 0.0,
+            "fit_rmse": 0.0,
+            "delta_p_mw": delta_p_mw,
+            "rocof_m_min": 0.0,
+            "steady_dk_min": steady_dk_min,
+            "freq_ss_limit_hz": freq_ss_limit_hz,
+        }
+
+    return {
+        "seek": seek,
+        "M_lo": base["M_lo"],
+        "M_hi": base["M_hi"],
+        "K_lo": base["K_lo"],
+        "K_hi": base["K_hi"],
+        "D_lo": base["D_lo"],
+        "D_hi": base["D_hi"],
+        "a_M": base["a_M"] * scale,
+        "a_K": base["a_K"] * scale,
+        "a_D": base["a_D"] * scale,
+        "c0": f0 + base["dc0"] * scale,
+        "fit_error": base["fit_error"] * scale,
+        "fit_rmse": base["fit_rmse"] * scale,
+        "delta_p_mw": delta_p_mw,
+        "rocof_m_min": float(scale / (2.0 * math.pi * max(freq["rocof_upper_hz_per_s"], FREQUENCY_EPS))),
         "steady_dk_min": steady_dk_min,
         "freq_ss_limit_hz": freq_ss_limit_hz,
     }

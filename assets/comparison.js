@@ -615,7 +615,7 @@ function renderComparisonCurveChart() {
   const maxPoints = Math.max(...series.map((item) => item.points.length), 1);
   const xAt = (index, total) => margin.left + (total <= 1 ? plotWidth / 2 : (index / (total - 1)) * plotWidth);
   const yAt = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
-  const colors = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90", "#b38cff", "#5ee7df", "#ff9f43", "#ff6bcb"];
+  const colors = window.PowerPlanUI?.getChartPalette?.().series || ["#38BDF8", "#FBBF24", "#34D399", "#FB7185", "#A78BFA", "#94A3B8", "#2DD4BF", "#FB923C"];
   const yTicks = [0, 0.5, 1].map((ratio) => ({
     ratio,
     value: minY + ySpan * ratio,

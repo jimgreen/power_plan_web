@@ -2,8 +2,9 @@
   const STORAGE_KEY = "powerPlanLanguage";
   const HOME_THEME_STORAGE_KEY = "powerPlanHomeTheme";
   const LANGUAGES = [
-    { code: "zh", label: "中文" },
-    { code: "en", label: "English" },
+    { code: "zh-CN", label: "中文" },
+    { code: "en-US", label: "English" },
+    { code: "ru-RU", label: "Русский" },
   ];
   const HOME_THEMES = [
     "default",
@@ -24,14 +25,87 @@
 
   const dictionary = {
     "考察站风-光-氢-储-柴联合规划系统": "Station Wind-Solar-Hydrogen-Storage-Diesel Planning System",
+    "极地考察站能源规划平台": "Polar Station Energy Planning Platform",
     "系统首页": "Home",
     "参数维护": "Parameters",
     "规划求解": "Planning Solver",
     "方案评估": "Scenario Evaluation",
+    "供电可靠性": "Supply Reliability",
+    "供电可靠性评估": "Supply Reliability Assessment",
     "频率计算": "Frequency Calculation",
     "结果对比": "Result Comparison",
     "任务并发": "Task Concurrency",
     "用户管理": "User Management",
+    "精密暗黑": "Precision Dark",
+    "极简明亮": "Minimalist Light",
+    "科幻 · 电光青": "Sci-Fi · Cyan",
+    "科幻 · 赛博紫": "Sci-Fi · Purple",
+    "科幻 · 矩阵绿": "Sci-Fi · Matrix",
+    "筛选方案...": "Filter scenarios...",
+    "筛选方案": "Filter Scenarios",
+    "清空筛选": "Clear Filter",
+    "导入方案": "Import",
+    "导出方案": "Export",
+    "分享方案": "Share",
+    "导出报告": "Export Report",
+    "重命名": "Rename",
+    "复制": "Copy",
+    "保存": "Save",
+    "确认": "Confirm",
+    "确认操作": "Confirm Action",
+    "确认删除 / 覆盖": "Confirm Delete / Overwrite",
+    "确认执行": "Confirm",
+    "输入名称": "Enter Name",
+    "提示": "Notice",
+    "曲线生成": "Generate Curve",
+    "光照辐射": "Solar Irradiance",
+    "纵坐标配置": "Y-Axis",
+    "最小值": "Min",
+    "最大值": "Max",
+    "自动": "Auto",
+    "方案与结果": "Scenario & Result",
+    "试验设置": "Simulation Settings",
+    "评估模式": "Evaluation Mode",
+    "确定性 + 蒙特卡洛": "Deterministic + Monte Carlo",
+    "仅确定性 N-1": "Deterministic N-1 Only",
+    "仅序贯蒙特卡洛": "Sequential Monte Carlo Only",
+    "模拟年数": "Simulation Years",
+    "随机种子": "Random Seed",
+    "关键负荷比例（%）": "Critical Load Ratio (%)",
+    "备用持续时间（h）": "Reserve Duration (h)",
+    "失效期调度策略": "Outage Dispatch Policy",
+    "可靠性优先：先保关键负荷": "Reliability First",
+    "新能源优先：减少弃风弃光": "Renewable First",
+    "经济优先：减少柴油消耗": "Economic First",
+    "比例供电：按负荷比例分配": "Proportional Supply",
+    "设备 FOR / MTTR": "Device FOR / MTTR",
+    "恢复演示值": "Reset Defaults",
+    "保存参数": "Save Parameters",
+    "供电可靠率": "Supply Reliability",
+    "N-1 通过率": "N-1 Pass Rate",
+    "指标概览": "Overview",
+    "N-1 场景": "N-1 Scenarios",
+    "年度分布与收敛": "Distribution & Convergence",
+    "最差年曲线": "Worst Year Curve",
+    "设备贡献与假设": "Contribution & Assumptions",
+    "年度 EENS 分布": "Annual EENS Distribution",
+    "蒙特卡洛收敛": "Monte Carlo Convergence",
+    "最差模拟年供需与失负荷过程": "Worst-Year Supply & Load Loss",
+    "设备故障贡献": "Device Failure Contribution",
+    "假设与边界日志": "Assumptions & Boundary Log",
+    "频率计算任务": "Frequency Calculation Tasks",
+    "系统状态": "System Status",
+    "运行正常": "Operational",
+    "功能模块": "Modules",
+    "支持主题": "Themes",
+    "支持语言": "Languages",
+    "8760h 时序 / 设备 / 约束": "8760h Series / Devices / Rules",
+    "联合 MILP 容量与运行优化": "Joint MILP Capacity & Dispatch",
+    "经济性 / 绿电 / 安全复核": "Economics / Green / Security",
+    "N-1 压力与序贯蒙特卡洛": "N-1 & Sequential Monte Carlo",
+    "惯量 / 调频 / 分时动态曲线": "Inertia / RoCoF / Time Curves",
+    "多方案指标与年度柱图对比": "Multi-Scenario Metrics & Charts",
+    "并发队列与进程实时监控": "Queue & Process Monitor",
     "结果比对": "Result Comparison",
     "当前用户:": "Current user:",
     "退出": "Logout",
@@ -694,45 +768,291 @@
     "后台处理失败:": "Backend processing failed:",
   };
 
-  const translations = new Map(Object.entries(dictionary).map(([zh, en]) => [normalizeText(zh), en]));
-  const reverseTranslations = new Map(Object.entries(dictionary).map(([zh, en]) => [normalizeText(en), zh]));
+  const ruDictionary = {
+    "考察站风-光-氢-储-柴联合规划系统": "Система планирования ВЭС-СЭС-H2-СНЭ-ДЭС",
+    "极地考察站能源规划平台": "Энергетическая платформа станции",
+    "系统首页": "Главная",
+    "参数维护": "Параметры",
+    "规划求解": "Оптимизация",
+    "方案评估": "Оценка",
+    "供电可靠性": "Надёжность",
+    "供电可靠性评估": "Оценка надёжности электроснабжения",
+    "频率计算": "Частота",
+    "结果对比": "Сравнение",
+    "任务并发": "Задачи",
+    "用户管理": "Пользователи",
+    "精密暗黑": "Тёмная точность",
+    "极简明亮": "Светлый минимализм",
+    "科幻 · 电光青": "Sci-Fi · Циан",
+    "科幻 · 赛博紫": "Sci-Fi · Фиолет",
+    "科幻 · 矩阵绿": "Sci-Fi · Матрица",
+    "显示主题": "Тема",
+    "语言": "Язык",
+    "当前用户:": "Пользователь:",
+    "退出": "Выход",
+    "管理员": "Админ",
+    "普通用户": "Пользователь",
+    "用户登录": "Вход в систему",
+    "用户注册": "Регистрация",
+    "用户名": "Логин",
+    "密码": "Пароль",
+    "登录": "Войти",
+    "注册新用户": "Регистрация",
+    "注册并登录": "Зарегистрироваться",
+    "返回登录": "Назад ко входу",
+    "处理中...": "Обработка...",
+    "请求失败": "Ошибка запроса",
+    "方案列表": "Сценарии",
+    "筛选方案...": "Поиск сценария...",
+    "筛选方案": "Фильтр сценариев",
+    "清空筛选": "Очистить",
+    "新建方案": "Создать",
+    "删除方案": "Удалить",
+    "修改名称": "Переименовать",
+    "复制方案": "Копировать",
+    "分享方案": "Поделиться",
+    "导入方案": "Импорт",
+    "导出方案": "Экспорт",
+    "保存方案": "Сохранить",
+    "当前:": "Текущий:",
+    "未选择方案": "Сценарий не выбран",
+    "未选择结果": "Результат не выбран",
+    "当前: 未选择方案": "Текущий: сценарий не выбран",
+    "当前: 未选择方案/未选择结果": "Текущий: не выбран",
+    "时序数据": "Временные ряды",
+    "设备参数": "Оборудование",
+    "规划参数": "Параметры расчёта",
+    "方案概览": "Обзор",
+    "统计直方图": "Гистограммы",
+    "待选设备列表": "Список оборудования",
+    "文件导入": "Импорт файла",
+    "曲线生成": "Генерация",
+    "坐标选择": "Координаты",
+    "风速": "Ветер",
+    "太阳辐照": "Солнечная радиация",
+    "太阳辐射": "Солнечная радиация",
+    "光照辐射": "Солнечная радиация",
+    "环境温度": "Температура",
+    "负荷": "Нагрузка",
+    "全年": "Год",
+    "指定月": "Месяц",
+    "指定日": "День",
+    "月份": "Месяц",
+    "日期": "День",
+    "启动": "Запуск",
+    "排队": "В очередь",
+    "停止": "Стоп",
+    "退队": "Из очереди",
+    "状态": "Статус",
+    "待启动": "Ожидание",
+    "开始": "Начало",
+    "完成": "Конец",
+    "度电成本": "LCOE",
+    "绿电占比": "Доля ВИЭ",
+    "最低频率": "Мин. частота",
+    "最高频率": "Макс. частота",
+    "运行日志": "Журнал",
+    "评估日志": "Журнал оценки",
+    "结果概览": "Обзор результатов",
+    "经济性指标": "Экономика",
+    "安全性指标": "Безопасность",
+    "曲线展示": "Графики",
+    "频率指标": "Показатели частоты",
+    "分时曲线": "Кривые по часам",
+    "小时级曲线": "Почасовые кривые",
+    "日级统计": "Суточные данные",
+    "安全日曲线": "Суточные (безопасность)",
+    "月度统计": "Месячные данные",
+    "年度统计": "Годовые данные",
+    "纵坐标配置": "Ось Y",
+    "最小值": "Мин.",
+    "最大值": "Макс.",
+    "自动": "Авто",
+    "规划容量对比": "Сравнение мощностей",
+    "经济性指标对比": "Сравнение экономики",
+    "安全性指标对比": "Сравнение безопасности",
+    "添加对比": "Добавить",
+    "表格显示": "Таблица",
+    "柱图对比": "Диаграмма",
+    "规划计算任务": "Задачи оптимизации",
+    "方案评估任务": "Задачи оценки",
+    "频率计算任务": "Задачи частоты",
+    "方案名称": "Сценарий",
+    "全部方案": "Все сценарии",
+    "任务类型": "Тип задачи",
+    "任务状态": "Статус",
+    "未计算": "Не выполнен",
+    "排队中": "В очереди",
+    "计算中": "Выполняется",
+    "完成计算": "Завершён",
+    "计算中止": "Остановлен",
+    "计算失败": "Ошибка",
+    "计算超时": "Таймаут",
+    "进程号": "PID",
+    "计算开始时刻": "Время начала",
+    "计算结束时刻": "Время окончания",
+    "计算总用时(秒)": "Длительность (с)",
+    "最新更新日志": "Последний лог",
+    "暂无任务": "Нет задач",
+    "删除": "Удалить",
+    "复制": "Копировать",
+    "保存": "Сохранить",
+    "导出报告": "Экспорт отчёта",
+    "重命名": "Переименовать",
+    "确认": "Подтвердить",
+    "确定": "ОК",
+    "取消": "Отмена",
+    "关闭": "Закрыть",
+    "确认操作": "Подтверждение",
+    "确认删除 / 覆盖": "Подтверждение удаления",
+    "确认执行": "Подтвердить",
+    "输入名称": "Введите название",
+    "提示": "Уведомление",
+    "查询": "Поиск",
+    "月/日": "Месяц/День",
+    "时": "Час",
+    "打开文件": "Открыть файл",
+    "保存模板": "Сохранить шаблон",
+    "方案与结果": "Сценарий и результат",
+    "试验设置": "Настройки расчёта",
+    "评估模式": "Режим оценки",
+    "确定性 + 蒙特卡洛": "Детерминированный + Монте-Карло",
+    "仅确定性 N-1": "Только N-1",
+    "仅序贯蒙特卡洛": "Только Монте-Карло",
+    "模拟年数": "Лет моделирования",
+    "随机种子": "Зерно ГСЧ",
+    "关键负荷比例（%）": "Доля критической нагрузки (%)",
+    "备用持续时间（h）": "Длительность резерва (ч)",
+    "失效期调度策略": "Стратегия при аварии",
+    "可靠性优先：先保关键负荷": "Приоритет надёжности",
+    "新能源优先：减少弃风弃光": "Приоритет ВИЭ",
+    "经济优先：减少柴油消耗": "Приоритет экономии",
+    "比例供电：按负荷比例分配": "Пропорциональное питание",
+    "设备 FOR / MTTR": "FOR / MTTR оборудования",
+    "恢复演示值": "Сбросить значения",
+    "保存参数": "Сохранить параметры",
+    "供电可靠率": "Надёжность",
+    "N-1 通过率": "Прохождение N-1",
+    "指标概览": "Обзор показателей",
+    "N-1 场景": "Сценарии N-1",
+    "年度分布与收敛": "Распределение и сходимость",
+    "最差年曲线": "Худший год",
+    "设备贡献与假设": "Вклад и допущения",
+    "年度 EENS 分布": "Годовое распределение EENS",
+    "蒙特卡洛收敛": "Сходимость Монте-Карло",
+    "最差模拟年供需与失负荷过程": "Баланс и дефицит худшего года",
+    "设备故障贡献": "Вклад отказов оборудования",
+    "假设与边界日志": "Допущения и границы",
+    "用户名称": "Имя пользователя",
+    "权限": "Роль",
+    "创建时间": "Дата создания",
+    "操作": "Действия",
+    "系统状态": "Статус системы",
+    "运行正常": "Работает",
+    "功能模块": "Модули",
+    "支持主题": "Темы",
+    "支持语言": "Языки",
+    "8760h 时序 / 设备 / 约束": "8760ч ряды / Оборудование",
+    "联合 MILP 容量与运行优化": "MILP оптимизация состава",
+    "经济性 / 绿电 / 安全复核": "Экономика / ВИЭ / Надёжность",
+    "N-1 压力与序贯蒙特卡洛": "Тест N-1 и Монте-Карло",
+    "惯量 / 调频 / 分时动态曲线": "Инерция / RoCoF / Динамика",
+    "多方案指标与年度柱图对比": "Сравнение сценариев и графиков",
+    "并发队列与进程实时监控": "Очередь и мониторинг процессов",
+    "参数保存成功": "Параметры сохранены",
+    "删除成功": "Успешно удалено",
+    "方案导入成功": "Сценарий импортирован",
+    "请先选择方案": "Сначала выберите сценарий",
+    "请先选择结果文件": "Сначала выберите файл результата",
+    "未加载": "Не загружено",
+    "未选择文件": "Файл не выбран",
+    "暂无数据": "Нет данных",
+    "暂无方案": "Нет сценариев",
+    "暂无结果": "Нет результатов",
+    "暂无曲线": "Нет графиков",
+  };
+
+  const enTranslations = new Map(Object.entries(dictionary).map(([zh, en]) => [normalizeText(zh), en]));
+  const ruTranslations = new Map(Object.entries(ruDictionary).map(([zh, ru]) => [normalizeText(zh), ru]));
+  const enPartialList = buildPartialList(enTranslations);
+  const ruPartialList = buildPartialList(ruTranslations);
+
+  // 使用 WeakMap 保存原始中文文本，确保三语之间任意切换不丢字、不串词
+  const textNodeOrigins = new WeakMap();
+  const attrOrigins = new WeakMap();
+
   const ignoredTags = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "SVG", "CANVAS"]);
-  const fitTextSelector = [
-    ".brand",
-    ".home-title",
-    ".main-nav a",
-    ".main-nav button",
-    "button",
-    ".tab",
-    ".summary-tab",
-    ".result-tab",
-    ".log-view-tab",
-    ".curve-button",
-    ".curve-group-tab",
-    ".month-tab",
-    ".annual-view-toggle",
-    ".comparison-add-tab",
-    ".device-filter",
-    ".device-jump a",
-    ".task-status-pill",
-    ".language-switch span",
-    ".user-status span",
-  ].join(",");
-  const fitTextMinFontSize = 5;
+  const tooltipOverflowSelector = ".main-nav a, button, .tab, .result-tab, .summary-tab, .task-type-tab, .scheme-item, .scheme-result-item, th";
   let observer = null;
   let translating = false;
   let dialogsPatched = false;
+  let activeLanguage = "zh-CN";
+  let pendingNodes = new Set();
+  let pendingFlushRaf = 0;
+
+  function buildPartialList(map) {
+    return Array.from(map.entries())
+      .filter(([key]) => key.length > 1)
+      .sort((left, right) => right[0].length - left[0].length);
+  }
+
+  function normalizeLanguage(code) {
+    const raw = String(code || "").trim().toLowerCase();
+    if (raw === "en" || raw === "en-us") return "en-US";
+    if (raw === "ru" || raw === "ru-ru") return "ru-RU";
+    return "zh-CN";
+  }
 
   function currentLanguage() {
-    return localStorage.getItem(STORAGE_KEY) === "en" ? "en" : "zh";
+    try {
+      return normalizeLanguage(localStorage.getItem(STORAGE_KEY));
+    } catch (_) {
+      return "zh-CN";
+    }
   }
 
   function setLanguage(language) {
-    const next = language === "en" ? "en" : "zh";
-    localStorage.setItem(STORAGE_KEY, next);
-    document.documentElement.lang = next === "en" ? "en" : "zh-CN";
+    const next = normalizeLanguage(language);
+    const prev = activeLanguage;
+    activeLanguage = next;
+    try {
+      localStorage.setItem(STORAGE_KEY, next);
+    } catch (_) {
+      // 忽略存储限制
+    }
+    document.documentElement.lang = next;
     updateLanguageControl(next);
-    translateDocument(next);
+    // 初始加载且本身为中文时无需全量遍历 DOM
+    if (next !== "zh-CN" || prev !== "zh-CN") {
+      translateDocument(next);
+    }
+    window.dispatchEvent(new CustomEvent("powerplan:langchange", { detail: { language: next } }));
+  }
+
+  function flushPendingMutations() {
+    pendingFlushRaf = 0;
+    if (translating || !pendingNodes.size) {
+      pendingNodes.clear();
+      return;
+    }
+    const lang = activeLanguage;
+    const batch = Array.from(pendingNodes);
+    pendingNodes.clear();
+    if (lang === "zh-CN") return;
+    translating = true;
+    try {
+      for (const node of batch) {
+        if (!node || !node.isConnected) continue;
+        if (node.nodeType === Node.TEXT_NODE) {
+          translateSingleTextNode(node, lang);
+        } else if (node.nodeType === Node.ELEMENT_NODE && !isIgnored(node)) {
+          translateTextNodes(node, lang);
+          translateAttributes(node, lang);
+        }
+      }
+    } finally {
+      translating = false;
+    }
   }
 
   function boot() {
@@ -740,9 +1060,18 @@
     insertLanguageControl();
     patchDialogs();
     setLanguage(currentLanguage());
-    observer = new MutationObserver(() => {
-      if (translating) return;
-      translateDocument(currentLanguage());
+    observer = new MutationObserver((mutations) => {
+      if (translating || activeLanguage === "zh-CN") return;
+      for (const mutation of mutations) {
+        if (mutation.type === "characterData" && mutation.target) {
+          pendingNodes.add(mutation.target);
+        } else if (mutation.type === "childList" && mutation.addedNodes.length) {
+          mutation.addedNodes.forEach((node) => pendingNodes.add(node));
+        }
+      }
+      if (pendingNodes.size && !pendingFlushRaf) {
+        pendingFlushRaf = window.requestAnimationFrame(flushPendingMutations);
+      }
     });
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
   }
@@ -751,12 +1080,27 @@
     if (document.getElementById("languageSelect")) return;
     const wrap = document.createElement("label");
     wrap.className = "language-switch";
-    wrap.innerHTML = `<span>语言</span><select id="languageSelect" aria-label="语言 / Language">${LANGUAGES.map((item) => `<option value="${item.code}">${item.label}</option>`).join("")}</select>`;
-    const target = document.querySelector(".topbar .user-status") || document.querySelector(".home-user-status") || document.querySelector(".auth-card");
-    if (target?.classList.contains("auth-card")) {
-      target.parentNode.insertBefore(wrap, target);
-    } else if (target) {
-      target.parentNode.insertBefore(wrap, target);
+    wrap.setAttribute("title", "语言 / Language / Язык");
+    wrap.innerHTML =
+      `<svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"></path></svg>` +
+      `<select id="languageSelect" class="topbar-select" aria-label="Language">${LANGUAGES.map(
+        (item) => `<option value="${item.code}">${item.label}</option>`,
+      ).join("")}</select>`;
+
+    const utilities = document.querySelector(".topbar .topbar-utilities");
+    const userStatus = document.querySelector(".topbar .user-status");
+    const authCard = document.querySelector(".auth-card");
+
+    if (utilities) {
+      if (userStatus && userStatus.parentElement === utilities) {
+        utilities.insertBefore(wrap, userStatus);
+      } else {
+        utilities.appendChild(wrap);
+      }
+    } else if (userStatus) {
+      userStatus.parentNode.insertBefore(wrap, userStatus);
+    } else if (authCard) {
+      authCard.parentNode.insertBefore(wrap, authCard);
     } else {
       document.body.insertBefore(wrap, document.body.firstChild);
     }
@@ -765,87 +1109,58 @@
 
   function updateLanguageControl(language) {
     const select = document.getElementById("languageSelect");
-    if (select) select.value = language;
+    if (select) select.value = normalizeLanguage(language);
   }
 
   function translateDocument(language) {
     translating = true;
     try {
-      if (language === "en") captureFitTextBaselines(document.body);
-      else resetFittedText(document.body);
       translateTextNodes(document.body, language);
       translateAttributes(document.body, language);
-      if (language === "en") fitTranslatedText(document.body);
-      else resetFittedText(document.body);
+      refreshOverflowTitles(document.body);
     } finally {
       translating = false;
     }
   }
 
-  function captureFitTextBaselines(root) {
-    fitTextElements(root).forEach((element) => {
-      if (element.dataset.i18nFitBaseWidth && element.dataset.i18nFitBaseFont) return;
-      const rect = element.getBoundingClientRect();
-      if (rect.width < 16 || rect.height < 8) return;
-      const computed = getComputedStyle(element);
-      element.dataset.i18nFitBaseWidth = String(Math.ceil(rect.width));
-      element.dataset.i18nFitBaseFont = String(parseFloat(computed.fontSize) || 14);
-    });
-  }
-
-  function fitTranslatedText(root) {
-    const elements = fitTextElements(root);
-    elements.forEach(applyFitToElement);
-    requestAnimationFrame(() => elements.forEach(applyFitToElement));
-  }
-
-  function fitTextElements(root) {
+  /** 为易发生省略的控件自动补充悬浮 title，避免长英文/俄文截断看不清 */
+  function refreshOverflowTitles(root) {
     const scope = root || document.body;
-    const elements = [];
-    if (scope.matches?.(fitTextSelector) && isFitTextCandidate(scope)) elements.push(scope);
-    scope.querySelectorAll?.(fitTextSelector).forEach((element) => {
-      if (isFitTextCandidate(element)) elements.push(element);
+    scope.querySelectorAll(tooltipOverflowSelector).forEach((el) => {
+      if (isIgnored(el) || el.querySelector("input, select")) return;
+      const text = normalizeText(el.textContent || "");
+      if (!text) return;
+      if (el.scrollWidth > el.clientWidth + 1) {
+        el.setAttribute("title", text);
+        el.dataset.i18nAutoTitle = "1";
+      } else if (el.dataset.i18nAutoTitle === "1") {
+        el.removeAttribute("title");
+        delete el.dataset.i18nAutoTitle;
+      }
     });
-    return Array.from(new Set(elements));
   }
 
-  function isFitTextCandidate(element) {
-    if (!element || isIgnored(element)) return false;
-    const text = normalizeText(element.textContent || "");
-    if (text.length <= 1) return false;
-    const tagName = element.tagName;
-    if (tagName === "SELECT" || tagName === "INPUT" || tagName === "TEXTAREA") return false;
-    return true;
-  }
-
-  function applyFitToElement(element) {
-    const baseWidth = Number(element.dataset.i18nFitBaseWidth);
-    const baseFont = Number(element.dataset.i18nFitBaseFont);
-    if (!Number.isFinite(baseWidth) || baseWidth <= 0 || !Number.isFinite(baseFont) || baseFont <= 0) return;
-    element.classList.add("i18n-fit-text");
-    element.style.maxWidth = `${Math.ceil(baseWidth)}px`;
-    element.style.fontSize = `${baseFont}px`;
-    shrinkElementFontToFit(element, baseFont);
-  }
-
-  function shrinkElementFontToFit(element, baseFont) {
-    let currentFont = baseFont;
-    for (let index = 0; index < 8; index += 1) {
-      const width = Math.max(element.clientWidth, 1);
-      if (element.scrollWidth <= width + 1) return;
-      const ratio = Math.min(1, Math.max(0.45, (width - 2) / Math.max(element.scrollWidth, 1)));
-      currentFont = Math.max(fitTextMinFontSize, Math.floor(currentFont * ratio * 100) / 100);
-      element.style.fontSize = `${currentFont}px`;
-      if (currentFont <= fitTextMinFontSize && element.scrollWidth > width + 1) return;
+  function translateSingleTextNode(node, language) {
+    if (!node || !node.nodeValue || !node.nodeValue.trim()) return;
+    if (isIgnored(node.parentElement)) return;
+    if (node.parentElement?.closest("#languageSelect")) return;
+    let origin = textNodeOrigins.get(node);
+    if (origin === undefined) {
+      origin = node.nodeValue;
+      textNodeOrigins.set(node, origin);
+    } else if (language === "zh-CN") {
+      const currentVal = node.nodeValue;
+      if (
+        currentVal !== translateText(origin, "en-US") &&
+        currentVal !== translateText(origin, "ru-RU") &&
+        currentVal !== origin
+      ) {
+        origin = currentVal;
+        textNodeOrigins.set(node, origin);
+      }
     }
-  }
-
-  function resetFittedText(root) {
-    fitTextElements(root).forEach((element) => {
-      element.classList.remove("i18n-fit-text");
-      element.style.maxWidth = "";
-      element.style.fontSize = "";
-    });
+    const translated = translateText(origin, language);
+    if (translated !== node.nodeValue) node.nodeValue = translated;
   }
 
   function translateTextNodes(root, language) {
@@ -853,56 +1168,63 @@
       acceptNode(node) {
         if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
         if (isIgnored(node.parentElement)) return NodeFilter.FILTER_REJECT;
+        if (node.parentElement?.closest("#languageSelect")) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
-    nodes.forEach((node) => {
-      const translated = translateText(node.nodeValue, language);
-      if (translated !== node.nodeValue) node.nodeValue = translated;
-    });
+    nodes.forEach((node) => translateSingleTextNode(node, language));
   }
 
   function translateAttributes(root, language) {
     root.querySelectorAll("[aria-label], [placeholder], [title]").forEach((element) => {
+      if (isIgnored(element) || element.id === "languageSelect") return;
+      let stored = attrOrigins.get(element);
+      if (!stored) {
+        stored = {};
+        attrOrigins.set(element, stored);
+      }
       ["aria-label", "placeholder", "title"].forEach((name) => {
         if (!element.hasAttribute(name)) return;
-        const translated = translateText(element.getAttribute(name), language);
-        if (translated !== element.getAttribute(name)) element.setAttribute(name, translated);
+        if (name === "title" && element.dataset.i18nAutoTitle === "1") return;
+        const currentAttr = element.getAttribute(name);
+        if (stored[name] === undefined) {
+          stored[name] = currentAttr;
+        }
+        const translated = translateText(stored[name], language);
+        if (translated !== currentAttr) element.setAttribute(name, translated);
       });
     });
   }
 
   function translateText(text, language) {
+    const lang = normalizeLanguage(language || currentLanguage());
     const raw = String(text ?? "");
+    if (lang === "zh-CN") return raw;
     const trimmed = raw.trim();
     if (!trimmed) return raw;
     const leading = raw.match(/^\s*/)?.[0] || "";
     const trailing = raw.match(/\s*$/)?.[0] || "";
     const normalized = normalizeText(trimmed);
-    const translated = language === "en" ? translateToEnglish(normalized) : translateToChinese(normalized);
+    const translated = lang === "ru-RU" ? translateToRussian(normalized) : translateToEnglish(normalized);
     return translated === normalized ? raw : `${leading}${translated}${trailing}`;
   }
 
   function translateToEnglish(text) {
-    if (translations.has(text)) return translations.get(text);
-    for (const [zh, en] of partialTranslations(translations)) {
+    if (enTranslations.has(text)) return enTranslations.get(text);
+    for (const [zh, en] of enPartialList) {
       if (text.includes(zh)) return text.replaceAll(zh, en);
     }
     return text;
   }
 
-  function translateToChinese(text) {
-    if (reverseTranslations.has(text)) return reverseTranslations.get(text);
-    for (const [en, zh] of partialTranslations(reverseTranslations)) {
-      if (text.includes(en)) return text.replaceAll(en, zh);
+  function translateToRussian(text) {
+    if (ruTranslations.has(text)) return ruTranslations.get(text);
+    for (const [zh, ru] of ruPartialList) {
+      if (text.includes(zh)) return text.replaceAll(zh, ru);
     }
-    return text;
-  }
-
-  function partialTranslations(map) {
-    return Array.from(map.entries()).filter(([key]) => key.length > 1).sort((left, right) => right[0].length - left[0].length);
+    return translateToEnglish(text);
   }
 
   function patchDialogs() {
@@ -911,7 +1233,13 @@
     const nativeAlert = window.alert.bind(window);
     const nativeConfirm = window.confirm.bind(window);
     const nativePrompt = window.prompt.bind(window);
-    window.alert = (message) => nativeAlert(translateText(message, currentLanguage()));
+    window.alert = (message) => {
+      if (window.PowerPlanUI && typeof window.PowerPlanUI.toast === "function") {
+        window.PowerPlanUI.toast(translateText(message, currentLanguage()));
+        return;
+      }
+      nativeAlert(translateText(message, currentLanguage()));
+    };
     window.confirm = (message) => nativeConfirm(translateText(message, currentLanguage()));
     window.prompt = (message, defaultValue) => nativePrompt(translateText(message, currentLanguage()), defaultValue);
   }
@@ -924,19 +1252,18 @@
   function currentHomeTheme() {
     try {
       return normalizeHomeTheme(localStorage.getItem(HOME_THEME_STORAGE_KEY));
-    } catch (error) {
+    } catch (_) {
       return "default";
     }
   }
 
   function applyStoredHomeTheme() {
+    if (window.PowerPlanUI && typeof window.PowerPlanUI.setTheme === "function") {
+      return window.PowerPlanUI.setTheme(window.PowerPlanUI.getTheme(), { silent: true });
+    }
     const theme = currentHomeTheme();
     document.documentElement.dataset.homeTheme = theme;
     if (document.body) document.body.dataset.homeTheme = theme;
-    const screen = document.querySelector(".screen");
-    if (screen) screen.dataset.homeTheme = theme;
-    const select = document.getElementById("homeThemeSelect");
-    if (select) select.value = theme;
     return theme;
   }
 
@@ -948,7 +1275,14 @@
     return !element || ignoredTags.has(element.tagName) || element.closest("[data-i18n-ignore]");
   }
 
-  window.PowerPlanI18n = { setLanguage, currentLanguage, translate: translateText, applyStoredHomeTheme, currentHomeTheme };
+  window.PowerPlanI18n = {
+    LANGUAGES,
+    setLanguage,
+    currentLanguage,
+    translate: translateText,
+    applyStoredHomeTheme,
+    currentHomeTheme,
+  };
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);

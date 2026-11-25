@@ -1,5 +1,6 @@
 (function () {
-  const CHART_COLORS = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90", "#b38cff", "#5ee7df", "#ff9f43", "#ff6bcb"];
+  const FALLBACK_CHART_COLORS = ["#38BDF8", "#FBBF24", "#34D399", "#FB7185", "#A78BFA", "#94A3B8", "#2DD4BF", "#FB923C"];
+  const getChartColors = () => window.PowerPlanUI?.getChartPalette?.().series || FALLBACK_CHART_COLORS;
   const LINE_PATTERNS = ["", "7 4", "2 4", "10 4 2 4"];
   const GROUP_DEFINITIONS = [
     { key: "hourly", title: "小时级曲线" },
@@ -9,8 +10,8 @@
     { key: "annual", title: "年度统计" },
   ];
   const ANNUAL_META_HEADERS = new Set(["指标", "单位", "数值", "说明"]);
-  const ANNUAL_BAR_COLORS = ["#21d5ff", "#82e7b5", "#ffc857", "#ff7a90"];
-  const ANNUAL_LINE_COLOR = "#ff6bcb";
+  const getAnnualBarColors = () => window.PowerPlanUI?.getChartPalette?.().annualBars || ["#38BDF8", "#34D399", "#FBBF24", "#FB7185"];
+  const getAnnualLineColor = () => window.PowerPlanUI?.getChartPalette?.().annualLine || "#A78BFA";
   const ANNUAL_GRID_SPLIT_MIN = 3;
   const ANNUAL_COMPARISON_DEFINITIONS = [
     {
@@ -97,6 +98,9 @@
     };
 
     restoreResultCurveViewerState();
+    window.addEventListener("powerplan:themechange", () => {
+      try { render(); } catch (_) {}
+    });
 
     function setData(payload) {
       state.groups = normalizeGroups(payload);
@@ -599,7 +603,7 @@
                   const x = xCenter(caseIndex) - groupedWidth / 2 + metricIndex * (barWidth + gap);
                   const y = Math.min(clampY(yLeft(safeValue)), leftBaseY);
                   const h = Math.max(leftBaseY - y, 0);
-                  return `<rect class="annual-bar" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${ANNUAL_BAR_COLORS[metricIndex % ANNUAL_BAR_COLORS.length]}" data-annual-chart-hit="bar" data-annual-chart-title="${escapeHtml(definition.title)}" data-annual-chart-case="${escapeHtml(caseHeaders[caseIndex])}" data-annual-chart-metric="${escapeHtml(metric.label)}" data-annual-chart-value="${escapeHtml(formatAnnualMetricValue(safeValue, metric))}" data-annual-chart-unit="${escapeHtml(metric.unit || "")}"></rect>`;
+                  return `<rect class="annual-bar" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${h.toFixed(2)}" fill="${getAnnualBarColors()[metricIndex % getAnnualBarColors().length]}" data-annual-chart-hit="bar" data-annual-chart-title="${escapeHtml(definition.title)}" data-annual-chart-case="${escapeHtml(caseHeaders[caseIndex])}" data-annual-chart-metric="${escapeHtml(metric.label)}" data-annual-chart-value="${escapeHtml(formatAnnualMetricValue(safeValue, metric))}" data-annual-chart-unit="${escapeHtml(metric.unit || "")}"></rect>`;
                 })
                 .join(""),
             ).join("")}
@@ -718,9 +722,9 @@
 
     function renderAnnualComparisonLegend(barMetrics, lineMetric) {
       const barLegends = barMetrics
-        .map((metric, index) => renderAnnualLegendButton(metric, ANNUAL_BAR_COLORS[index % ANNUAL_BAR_COLORS.length]))
+        .map((metric, index) => renderAnnualLegendButton(metric, getAnnualBarColors()[index % getAnnualBarColors().length]))
         .join("");
-      const lineLegend = lineMetric ? renderAnnualLegendButton(lineMetric, ANNUAL_LINE_COLOR, "line") : "";
+      const lineLegend = lineMetric ? renderAnnualLegendButton(lineMetric, getAnnualLineColor(), "line") : "";
       return `<div class="annual-comparison-legend">${barLegends}${lineLegend}</div>`;
     }
 
@@ -1162,8 +1166,9 @@
 
     function seriesLineStyle(item) {
       const index = Number.isFinite(Number(item?.seriesIndex)) ? Number(item.seriesIndex) : 0;
-      const color = CHART_COLORS[index % CHART_COLORS.length];
-      const dash = LINE_PATTERNS[Math.floor(index / CHART_COLORS.length) % LINE_PATTERNS.length] || "";
+      const palette = getChartColors();
+      const color = palette[index % palette.length];
+      const dash = LINE_PATTERNS[Math.floor(index / palette.length) % LINE_PATTERNS.length] || "";
       return { color, dash };
     }
 
@@ -1180,15 +1185,32 @@
       const capture = chart.target.querySelector(".comparison-chart-hover-capture");
       const tooltip = chart.target.querySelector("[data-result-curve-tooltip]");
       if (!capture || !tooltip) return;
+      const maxPoints = Math.max(...chart.series.map((item) => item.points.length), 1);
+      let hoverRaf = 0;
+      let latestEvent = null;
+      let lastRenderedIndex = -1;
       capture.addEventListener("mousemove", (event) => {
-        const rect = capture.getBoundingClientRect();
-        const ratio = Math.min(Math.max((event.clientX - rect.left) / Math.max(rect.width, 1), 0), 1);
-        const maxPoints = Math.max(...chart.series.map((item) => item.points.length), 1);
-        const index = Math.round(ratio * (maxPoints - 1));
-        state.hoverIndex = index;
-        renderChartHover(chart, event, index);
+        latestEvent = event;
+        if (hoverRaf) return;
+        hoverRaf = window.requestAnimationFrame(() => {
+          hoverRaf = 0;
+          const ev = latestEvent;
+          if (!ev) return;
+          const rect = capture.getBoundingClientRect();
+          const ratio = Math.min(Math.max((ev.clientX - rect.left) / Math.max(rect.width, 1), 0), 1);
+          const index = Math.round(ratio * (maxPoints - 1));
+          state.hoverIndex = index;
+          if (index !== lastRenderedIndex || tooltip.hidden) {
+            lastRenderedIndex = index;
+            renderChartHover(chart, ev, index);
+          } else {
+            positionChartTooltip(chart, tooltip, ev);
+          }
+        });
       });
       capture.addEventListener("mouseleave", () => {
+        latestEvent = null;
+        lastRenderedIndex = -1;
         state.hoverIndex = null;
         chart.target.querySelector(".comparison-chart-hover-group")?.setAttribute("hidden", "");
         tooltip.hidden = true;
@@ -1219,6 +1241,10 @@
           )
           .join("")}`;
       tooltip.hidden = false;
+      positionChartTooltip(chart, tooltip, event);
+    }
+
+    function positionChartTooltip(chart, tooltip, event) {
       const bounds = chart.target.getBoundingClientRect();
       const tooltipX = Math.min(Math.max(event.clientX - bounds.left + 14, 8), Math.max(bounds.width - tooltip.offsetWidth - 8, 8));
       const tooltipY = Math.min(Math.max(event.clientY - bounds.top + 14, 8), Math.max(bounds.height - tooltip.offsetHeight - 8, 8));

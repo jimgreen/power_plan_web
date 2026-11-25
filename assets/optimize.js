@@ -868,7 +868,7 @@ function renderOverviewCompositionBars(disks) {
   return `<section class="overview-composition-stack">${disks.map(renderOverviewCompositionBar).join("")}</section>`;
 }
 
-const overviewCompositionColors = ["#0d5c59", "#d8b35d", "#3d7fc2", "#7b61a8", "#c76f45", "#2e9f78"];
+const getOverviewCompositionColors = () => window.PowerPlanUI?.getChartPalette?.().series || ["#38BDF8", "#FBBF24", "#34D399", "#FB7185", "#A78BFA", "#94A3B8"];
 
 function renderOverviewCompositionBar(disk) {
   const displayDisk = normalizeOverviewCompositionDisplay(disk);
@@ -967,7 +967,7 @@ function normalizeOverviewCompositionSegments(disk = {}) {
       label: segment.label ?? segment.name ?? "",
       value: Number(segment.value) || 0,
       unit: segment.unit ?? disk.unit ?? "",
-      color: overviewCompositionColors[index % overviewCompositionColors.length],
+      color: getOverviewCompositionColors()[index % getOverviewCompositionColors().length],
       className: `segment-${index + 1}`,
       dotClass: `segment-dot-${index + 1}`,
     }));
@@ -977,7 +977,7 @@ function normalizeOverviewCompositionSegments(disk = {}) {
       label: disk.left_label || "",
       value: Number(disk.left_value) || 0,
       unit: disk.unit || "",
-      color: overviewCompositionColors[0],
+      color: getOverviewCompositionColors()[0],
       className: "primary",
       dotClass: "primary-dot",
     },
@@ -985,7 +985,7 @@ function normalizeOverviewCompositionSegments(disk = {}) {
       label: disk.right_label || "",
       value: Number(disk.right_value) || 0,
       unit: disk.unit || "",
-      color: overviewCompositionColors[1],
+      color: getOverviewCompositionColors()[1],
       className: "secondary",
       dotClass: "secondary-dot",
     },

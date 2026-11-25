@@ -41,6 +41,7 @@ REL_XML_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationship
 PACKAGE_REL_XML_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 PARAMETER_WORKBOOK_CACHE = file_cache.FileCache("parameter_workbook", max_entries=96)
 SHEET_ROW_COUNT_CACHE = file_cache.FileCache("sheet_row_count", max_entries=96)
+TIME_SERIES_SQLITE_CACHE = file_cache.FileCache("time_series_sqlite", max_entries=64, copy_values=False)
 
 # Sheet order and column order are part of the on-disk contract. The browser,
 # workbook reader, and workbook writer all depend on this exact schema.
@@ -1100,31 +1101,39 @@ def read_time_series_sqlite_payload(parameter_path: Path, scheme: str) -> dict[s
     if not db_path.exists() or not source_path.exists():
         return None
     expected_signature = sqlite_source_signature(source_path)
+
+    def _load_rows(resolved_db: Path) -> list[dict[str, Any]] | None:
+        try:
+            with closing(sqlite3.connect(resolved_db)) as connection:
+                meta = read_sqlite_meta(connection)
+                if meta.get("schema_version") != TIME_SERIES_SQLITE_SCHEMA_VERSION:
+                    return None
+                if meta.get("source_signature") != expected_signature:
+                    return None
+                rows = [
+                    {
+                        "hour_index": hour_index,
+                        "datetime": datetime_value,
+                        "wind_speed": sqlite_display_value(wind_speed),
+                        "solar_irradiance": sqlite_display_value(solar_irradiance),
+                        "load": sqlite_display_value(load),
+                        "temperature": sqlite_display_value(temperature),
+                    }
+                    for hour_index, datetime_value, wind_speed, solar_irradiance, load, temperature in connection.execute(
+                        """
+                        SELECT hour_index, datetime, wind_speed, solar_irradiance, load, temperature
+                        FROM time_series
+                        ORDER BY hour_index
+                        """
+                    )
+                ]
+        except (OSError, sqlite3.Error):
+            return None
+        return rows if rows else None
+
     try:
-        with closing(sqlite3.connect(db_path)) as connection:
-            meta = read_sqlite_meta(connection)
-            if meta.get("schema_version") != TIME_SERIES_SQLITE_SCHEMA_VERSION:
-                return None
-            if meta.get("source_signature") != expected_signature:
-                return None
-            rows = [
-                {
-                    "hour_index": hour_index,
-                    "datetime": datetime_value,
-                    "wind_speed": sqlite_display_value(wind_speed),
-                    "solar_irradiance": sqlite_display_value(solar_irradiance),
-                    "load": sqlite_display_value(load),
-                    "temperature": sqlite_display_value(temperature),
-                }
-                for hour_index, datetime_value, wind_speed, solar_irradiance, load, temperature in connection.execute(
-                    """
-                    SELECT hour_index, datetime, wind_speed, solar_irradiance, load, temperature
-                    FROM time_series
-                    ORDER BY hour_index
-                    """
-                )
-            ]
-    except (OSError, sqlite3.Error):
+        rows = TIME_SERIES_SQLITE_CACHE.get_readonly(db_path, _load_rows, variant=("ts_sqlite", expected_signature))
+    except OSError:
         return None
     if not rows:
         return None

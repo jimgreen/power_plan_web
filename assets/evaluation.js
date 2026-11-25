@@ -761,7 +761,7 @@ async function copyEvaluationResult() {
     alert("请先选择结果文件");
     return;
   }
-  const targetName = prompt("请输入新结果名称", `${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`);
+  const targetName = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入新结果名称", `${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`, { title: "复制结果" }) : prompt("请输入新结果名称", `${resultDisplayName(state.selectedResultFile) || "当前结果"}_副本`);
   if (targetName === null) return;
   await manageEvaluationResult("copy", { target_name: targetName.trim() });
 }
@@ -775,7 +775,7 @@ async function renameEvaluationResult() {
     alert("默认结果文件不允许重命名");
     return;
   }
-  const targetName = prompt("请输入新的结果名称", resultDisplayName(state.selectedResultFile) || "");
+  const targetName = window.PowerPlanUI ? await window.PowerPlanUI.prompt("请输入新的结果名称", resultDisplayName(state.selectedResultFile) || "", { title: "重命名" }) : prompt("请输入新的结果名称", resultDisplayName(state.selectedResultFile) || "");
   if (targetName === null) return;
   await manageEvaluationResult("rename", { target_name: targetName.trim() });
 }
@@ -788,6 +788,11 @@ async function exportEvaluationReport() {
   if (!state.selectedResultFile) {
     alert("请先选择结果文件");
     return;
+  }
+  if (action === "delete") {
+    const targetLabel = resultDisplayName(state.selectedResultFile) || state.selectedResultFile;
+    const okDelete = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm(`删除结果「${targetLabel}」？`, { confirmText: "删除" }) : confirm(`确认删除结果「${targetLabel}」？`);
+    if (!okDelete) return;
   }
   try {
     const response = await fetch(
@@ -1255,7 +1260,7 @@ function renderOverviewCompositionBars(disks) {
   return `<section class="overview-composition-stack">${disks.map(renderOverviewCompositionBar).join("")}</section>`;
 }
 
-const overviewCompositionColors = ["#0d5c59", "#d8b35d", "#3d7fc2", "#7b61a8", "#c76f45", "#2e9f78"];
+const getOverviewCompositionColors = () => window.PowerPlanUI?.getChartPalette?.().series || ["#38BDF8", "#FBBF24", "#34D399", "#FB7185", "#A78BFA", "#94A3B8"];
 
 function renderOverviewCompositionBar(disk) {
   const displayDisk = normalizeOverviewCompositionDisplay(disk);
@@ -1354,7 +1359,7 @@ function normalizeOverviewCompositionSegments(disk = {}) {
       label: segment.label ?? segment.name ?? "",
       value: Number(segment.value) || 0,
       unit: segment.unit ?? disk.unit ?? "",
-      color: overviewCompositionColors[index % overviewCompositionColors.length],
+      color: getOverviewCompositionColors()[index % getOverviewCompositionColors().length],
       className: `segment-${index + 1}`,
       dotClass: `segment-dot-${index + 1}`,
     }));
@@ -1364,7 +1369,7 @@ function normalizeOverviewCompositionSegments(disk = {}) {
       label: disk.left_label || "",
       value: Number(disk.left_value) || 0,
       unit: disk.unit || "",
-      color: overviewCompositionColors[0],
+      color: getOverviewCompositionColors()[0],
       className: "primary",
       dotClass: "primary-dot",
     },
@@ -1372,7 +1377,7 @@ function normalizeOverviewCompositionSegments(disk = {}) {
       label: disk.right_label || "",
       value: Number(disk.right_value) || 0,
       unit: disk.unit || "",
-      color: overviewCompositionColors[1],
+      color: getOverviewCompositionColors()[1],
       className: "secondary",
       dotClass: "secondary-dot",
     },

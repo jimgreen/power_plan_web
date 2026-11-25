@@ -55,11 +55,15 @@
   }
 
   async function deleteUser(id) {
-    if (!confirm("确定删除该用户？")) return;
+    const row = tableHost?.querySelector(`tr[data-user-id="${id}"]`);
+    const username = row?.querySelector("td")?.textContent?.trim() || `#${id}`;
+    const okDelete = window.PowerPlanUI ? await window.PowerPlanUI.dangerConfirm(`删除用户「${username}」？`, { confirmText: "删除" }) : confirm("确定删除该用户？");
+    if (!okDelete) return;
     if (status) status.textContent = "正在删除...";
     try {
       await requestJson(`/api/users/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (status) status.textContent = "已删除";
+      window.PowerPlanUI?.toast("已删除", { level: "success" });
       await loadUsers();
     } catch (error) {
       if (status) status.textContent = error.message;

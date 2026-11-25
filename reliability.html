@@ -1,11 +1,13 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="precision-dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>供电可靠性 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="assets/planning.css?v=20260530-scheme-rail-divider-visible">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261125-ui-refactor">
+  <script src="assets/ui-kit.js?v=20261125-ui-refactor"></script>
   <style>
     .reliability-page .topbar {
       gap: 14px;
@@ -494,7 +496,7 @@
         <a href="tasks.html">任务并发</a>
       </nav>
       <div class="user-status" data-auth-user hidden>
-        <span>当前用户:</span><strong data-auth-username></strong><em data-auth-role></em>
+        <strong data-auth-username></strong><em data-auth-role></em>
         <button type="button" data-logout>退出</button>
       </div>
     </header>
@@ -504,7 +506,6 @@
         <div class="reliability-panel-head">
           <div>
             <h1>供电可靠性评估</h1>
-            <p>N-1 压力测试与序贯蒙特卡洛联合校核</p>
           </div>
         </div>
 
@@ -514,7 +515,6 @@
           <div class="reliability-section-head">
             <div>
               <h2 id="selectionTitle">方案与结果</h2>
-              <p>可靠性评估不改变原规划结果，仅对所选配置做独立风险校核。</p>
             </div>
           </div>
           <div class="reliability-field-grid">
@@ -535,7 +535,6 @@
           <div class="reliability-section-head">
             <div>
               <h2 id="simulationTitle">试验设置</h2>
-              <p>确定性模式用于 N-1 边界，蒙特卡洛模式用于年度概率指标。</p>
             </div>
           </div>
           <div class="reliability-field-grid">
@@ -560,24 +559,21 @@
             </label>
             <label class="field-wide">失效期调度策略
               <select id="reliabilityDispatchPolicy">
-                <option value="reliability_first">可靠性优先：先保关键负荷</option>
-                <option value="renewable_first">新能源优先：减少弃风弃光</option>
-                <option value="economic">经济优先：减少柴油消耗</option>
-                <option value="proportional">比例供电：按负荷比例分配</option>
+                <option value="reliability_first">可靠性优先</option>
+                <option value="renewable_first">新能源优先</option>
+                <option value="economic">经济优先</option>
+                <option value="proportional">比例供电</option>
               </select>
             </label>
           </div>
         </section>
 
-        <div id="reliabilityAssumptionWarning" class="reliability-assumption-warning">
-          <strong>演示场景假设：</strong>当前 FOR、MTTR、极寒系数与成本参数为系统演示默认值，均不是厂商承诺值、采购报价或现场统计。正式决策前应替换为极地运行实测与供应商数据。
-        </div>
+        <div id="reliabilityAssumptionWarning" class="reliability-assumption-warning" title="当前 FOR、MTTR、极寒系数与成本参数为系统默认值，正式决策前请替换为现场实测数据。"><strong>默认假设参数</strong> · 正式决策前请校核实测值</div>
 
         <section class="reliability-parameter-section" aria-labelledby="deviceReliabilityTitle">
           <div class="reliability-section-head">
             <div>
               <h2 id="deviceReliabilityTitle">设备 FOR / MTTR</h2>
-              <p>按独立可故障单元填写；N-1 需要明确台数与单机容量。</p>
             </div>
           </div>
           <div class="reliability-device-wrap">
@@ -600,8 +596,7 @@
               <tbody id="reliabilityDeviceRows"></tbody>
             </table>
           </div>
-          <p class="reliability-table-note">FOR 为强迫停运率，MTTR 为平均修复时间；储能行的台数和“单机功率”按 PCS 口径显示，PCS 与电池组可分别设置 FOR / MTTR，电池组台数、容量与 SOC 约束由规划结果独立读取。启动失败率和变动运维仅适用于柴发。表内成本均为场景假设、非采购报价。</p>
-        </section>
+          </section>
 
         <div class="reliability-parameter-actions">
           <button id="resetReliabilityParameters" class="secondary" type="button">恢复演示值</button>
@@ -641,9 +636,6 @@
           </div>
 
           <div id="reliabilityOverviewPanel" class="result-panel active reliability-result-panel" data-reliability-panel="overview" role="tabpanel">
-            <div class="reliability-definition-strip">
-              EENS 为年期望未供电量，LOLE 为年期望失负荷小时数，LOLP 为任一时刻发生失负荷的概率；供电可靠率按已供电量占需求电量计算。概率指标必须结合模拟年数与置信区间解释。
-            </div>
             <div id="reliabilityOverview" class="reliability-overview-grid"></div>
           </div>
 
@@ -657,7 +649,6 @@
                 <div class="reliability-chart-head">
                   <div>
                     <h3>年度 EENS 分布</h3>
-                    <p>观察平均值之外的长尾风险与 P95 年景。</p>
                   </div>
                 </div>
                 <div id="reliabilityAnnualChart" class="reliability-chart"></div>
@@ -666,7 +657,6 @@
                 <div class="reliability-chart-head">
                   <div>
                     <h3>蒙特卡洛收敛</h3>
-                    <p>累计均值与置信区间随模拟年数的变化。</p>
                   </div>
                 </div>
                 <div id="reliabilityConvergenceChart" class="reliability-chart"></div>
@@ -679,7 +669,6 @@
               <div class="reliability-chart-head">
                 <div>
                   <h3>最差模拟年供需与失负荷过程</h3>
-                  <p>共同低资源、设备停运与储能耗尽的时间关系比年度平均值更关键。</p>
                 </div>
               </div>
               <div id="reliabilityWorstYearChart" class="reliability-chart"></div>
@@ -706,7 +695,7 @@
       </section>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20260518-fit-text4"></script>
+  <script src="assets/i18n.js?v=20261125-ui-refactor"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
   <script src="assets/page_state.js?v=20260530-page-state2"></script>
   <script src="assets/reliability.js?v=20260712-reliability-1"></script>
