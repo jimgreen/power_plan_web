@@ -4085,6 +4085,60 @@ body .is-sidebar-collapsed > #frequencySchemeListResizeHandle {
   max-width: 0 !important;
 }
 
+/* 频率计算页与安全曲线画布全主题适配（消除暗色模式纯白底块） */
+html[data-theme] .frequency-8760-curve-board,
+html[data-theme] .frequency-time-curve-chart {
+  background: var(--bg-surface) !important;
+  border: var(--border) !important;
+  border-radius: calc(var(--radius-card) - 2px) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme] .frequency-8760-grid,
+html[data-theme] .frequency-8760-x-grid {
+  stroke: var(--chart-grid) !important;
+}
+
+html[data-theme] .frequency-8760-series-label {
+  fill: var(--text-primary) !important;
+}
+
+html[data-theme] .frequency-8760-value-label,
+html[data-theme] .frequency-8760-x-label {
+  fill: var(--chart-text) !important;
+}
+
+html[data-theme] .frequency-time-controls label {
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme] .frequency-time-controls input {
+  background: var(--bg-input) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: var(--radius-input) !important;
+  height: 30px !important;
+}
+
+html[data-theme] .frequency-time-controls button {
+  height: 30px !important;
+}
+
+html[data-theme] .chart-hover-line {
+  stroke: var(--chart-crosshair) !important;
+}
+
+html[data-theme] .evaluation-main-resize-handle.has-sidebar-toggle {
+  cursor: col-resize !important;
+  touch-action: none;
+}
+
+html[data-theme] .evaluation-main-resize-handle.is-dragging::before {
+  background: var(--accent) !important;
+  width: 3px !important;
+}
+
 @media print {
   body, html {
     background: #FFFFFF !important;

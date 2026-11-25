@@ -2215,6 +2215,12 @@ function currentEvaluationResultRailWidth() {
 }
 
 function clampEvaluationMainWidth() {
+  const workspace = document.querySelector(".evaluation-workspace");
+  if (workspace?.classList.contains("is-sidebar-collapsed")) return;
+  const cssVal = parseFloat(document.documentElement.style.getPropertyValue("--evaluation-result-rail-width"));
+  if (Number.isFinite(cssVal) && cssVal > 0) {
+    state.evaluationResultRailWidth = Math.round(cssVal);
+  }
   if (!state.evaluationResultRailWidth) return;
   setEvaluationResultRailWidth(state.evaluationResultRailWidth);
 }

@@ -890,26 +890,29 @@
       return btn;
     };
 
-    // 模式 A：evaluation.html / frequency.html 已有原生纵向分割条，直接叠加一键隐藏/展开与折叠恢复能力
+    // 模式 A：evaluation.html / frequency.html 已有原生纵向分割条，统一接管拖拽调宽 + 拖至吸附隐藏 + 一键收起/展开
     const existingHandle = document.querySelector("#evaluationMainResizeHandle, #frequencyMainResizeHandle");
     const evalWorkspace = existingHandle?.closest(".evaluation-workspace");
     if (existingHandle && evalWorkspace && !existingHandle.querySelector(".sidebar-splitter-toggle")) {
       const saved = readLayout();
+      const defaultEvalWidth = 340;
+      const minEvalWidth = 180;
+      const maxEvalWidth = 600;
       let collapsed = Boolean(saved.collapsed);
-      let lastWidth = Number(saved.width) || 340;
+      let lastWidth = Number.isFinite(Number(saved.width))
+        ? Math.min(maxEvalWidth, Math.max(minEvalWidth, Number(saved.width)))
+        : defaultEvalWidth;
       const toggleBtn = createToggleButton(collapsed);
 
-      const applyEvalCollapsed = (nextCollapsed, persist = true) => {
-        if (nextCollapsed && !collapsed) {
-          const curVar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--evaluation-result-rail-width"));
-          if (Number.isFinite(curVar) && curVar >= 160) lastWidth = Math.round(curVar);
-        }
+      const applyEvalState = (nextWidth, nextCollapsed, persist = true) => {
+        lastWidth = Math.min(maxEvalWidth, Math.max(minEvalWidth, Math.round(nextWidth)));
         collapsed = Boolean(nextCollapsed);
         evalWorkspace.classList.toggle("is-sidebar-collapsed", collapsed);
         toggleBtn._syncCollapsed(collapsed);
-        if (!collapsed && lastWidth >= 160) {
+        if (!collapsed) {
           document.documentElement.style.setProperty("--evaluation-result-rail-width", `${lastWidth}px`);
         }
+        existingHandle.setAttribute("aria-valuenow", String(collapsed ? 0 : lastWidth));
         if (persist) writeLayout({ collapsed, width: lastWidth });
         triggerResize();
       };
@@ -920,13 +923,61 @@
       toggleBtn.addEventListener("mousedown", (e) => e.stopPropagation());
       toggleBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        applyEvalCollapsed(!collapsed);
+        applyEvalState(lastWidth, !collapsed, true);
       });
       existingHandle.addEventListener("dblclick", (e) => {
         if (e.target.closest(".sidebar-splitter-toggle")) return;
-        applyEvalCollapsed(!collapsed);
+        if (collapsed) applyEvalState(lastWidth, false, true);
+        else applyEvalState(defaultEvalWidth, false, true);
       });
-      if (collapsed) applyEvalCollapsed(true, false);
+      existingHandle.addEventListener(
+        "pointerdown",
+        (event) => {
+          if (event.button !== 0 || event.target.closest(".sidebar-splitter-toggle")) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          const wsRect = evalWorkspace.getBoundingClientRect();
+          const wsPadLeft = parseFloat(getComputedStyle(evalWorkspace).paddingLeft) || 8;
+          existingHandle.classList.add("is-dragging");
+          document.body.classList.add("is-sidebar-resizing");
+          try {
+            existingHandle.setPointerCapture(event.pointerId);
+          } catch (_) {}
+
+          let liveWidth = lastWidth;
+          let liveCollapsed = collapsed;
+
+          const onMove = (moveEvent) => {
+            const raw = moveEvent.clientX - wsRect.left - wsPadLeft;
+            if (raw < 108) {
+              liveCollapsed = true;
+              evalWorkspace.classList.add("is-sidebar-collapsed");
+              toggleBtn._syncCollapsed(true);
+            } else {
+              liveCollapsed = false;
+              liveWidth = Math.min(maxEvalWidth, Math.max(minEvalWidth, Math.round(raw)));
+              evalWorkspace.classList.remove("is-sidebar-collapsed");
+              document.documentElement.style.setProperty("--evaluation-result-rail-width", `${liveWidth}px`);
+              toggleBtn._syncCollapsed(false);
+            }
+          };
+
+          const onUp = () => {
+            existingHandle.classList.remove("is-dragging");
+            document.body.classList.remove("is-sidebar-resizing");
+            existingHandle.removeEventListener("pointermove", onMove);
+            existingHandle.removeEventListener("pointerup", onUp);
+            existingHandle.removeEventListener("pointercancel", onUp);
+            applyEvalState(liveWidth, liveCollapsed, true);
+          };
+
+          existingHandle.addEventListener("pointermove", onMove);
+          existingHandle.addEventListener("pointerup", onUp);
+          existingHandle.addEventListener("pointercancel", onUp);
+        },
+        true,
+      );
+      if (saved.width || collapsed) applyEvalState(lastWidth, collapsed, false);
       return;
     }
 
