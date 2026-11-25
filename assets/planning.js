@@ -564,6 +564,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindWeatherPreviewResizeHandle();
   bindSchemeListResizeHandle();
   bindActions();
+  bindPlanningEnhancements();
   bindDeviceContextMenu();
   bindAdaptiveLayout();
   syncAdaptiveLayout();
@@ -790,8 +791,20 @@ function onTimeCellPointerDown(event) {
 function enterTimeCellEdit(cell) {
   if (!cell || activeTimeEditingCell === cell) return;
   exitTimeCellEdit();
-  const input = cell.querySelector(".time-cell-input");
-  if (!input) return;
+  const timeIndex = cell.dataset.timeIndex ?? cell.querySelector(".time-cell-display")?.dataset.timeDisplayIndex;
+  const key = cell.dataset.key ?? cell.querySelector(".time-cell-display")?.dataset.timeDisplayKey;
+  if (timeIndex === undefined || !key) return;
+  let input = cell.querySelector(".time-cell-input");
+  if (!input) {
+    const row = state.payload?.time_series?.[Number(timeIndex)];
+    const currentValue = row ? formatTimeSeriesCellValue(key, row[key]) : cell.querySelector(".time-cell-display")?.textContent || "";
+    input = document.createElement("input");
+    input.className = "time-cell-input";
+    input.dataset.timeIndex = String(timeIndex);
+    input.dataset.key = String(key);
+    input.value = String(currentValue ?? "");
+    cell.appendChild(input);
+  }
   cell.classList.add("editing");
   input.readOnly = false;
   input.removeAttribute("readonly");
@@ -808,9 +821,7 @@ function exitTimeCellEdit(cell = activeTimeEditingCell) {
   const input = cell.querySelector(".time-cell-input");
   cell.classList.remove("editing");
   if (input) {
-    input.readOnly = true;
-    input.setAttribute("readonly", "readonly");
-    input.tabIndex = -1;
+    input.remove();
   }
   if (activeTimeEditingCell === cell) activeTimeEditingCell = null;
 }
@@ -1388,11 +1399,86 @@ function bindSchemeListItem(item, onSelect) {
   });
 }
 
+function setSchemeDirty(dirty) {
+  state.hasUnsavedChanges = Boolean(dirty);
+  const saveBtn = document.getElementById("saveScheme");
+  if (saveBtn) {
+    saveBtn.classList.toggle("is-dirty", state.hasUnsavedChanges);
+  }
+}
+
+function bindPlanningEnhancements() {
+  document.getElementById("precheckScheme")?.addEventListener("click", () => {
+    runSchemePrecheck().catch(showError);
+  });
+  const markDirtyFromEdit = (event) => {
+    if (!state.payload || state.isSwitchingScheme) return;
+    if (event.target?.matches?.("input, select, textarea")) {
+      setSchemeDirty(true);
+    }
+  };
+  document.getElementById("deviceTables")?.addEventListener("input", markDirtyFromEdit);
+  document.getElementById("deviceTables")?.addEventListener("change", markDirtyFromEdit);
+  document.getElementById("planningTab")?.addEventListener("input", markDirtyFromEdit);
+  document.getElementById("planningTab")?.addEventListener("change", markDirtyFromEdit);
+  window.addEventListener("beforeunload", (event) => {
+    if (!state.hasUnsavedChanges) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
+}
+
+async function runSchemePrecheck() {
+  if (!state.currentScheme || !state.payload) {
+    window.PowerPlanUI?.toast?.("请先选择方案", { level: "warn" });
+    return;
+  }
+  syncPlanningParameterInputs();
+  const localWarnings = collectSaveWarnings();
+  const localErrors = localWarnings.filter((w) => w.level === "error").map((w) => w.message);
+  const localAdvisories = localWarnings.filter((w) => w.level !== "error").map((w) => w.message);
+  if (localErrors.length) {
+    renderSummary();
+    await window.PowerPlanUI?.confirm?.(`本地参数校验未通过：\n${localErrors.map((m) => `• ${m}`).join("\n")}`, {
+      title: "求解预检未通过",
+      warn: true,
+      confirmText: "知道了",
+    });
+    return;
+  }
+  const btn = document.getElementById("precheckScheme");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api(`/api/planning/schemes/${encodeURIComponent(state.currentScheme)}/precheck`);
+    const errors = [...(res.errors || [])];
+    const warnings = [...localAdvisories, ...(res.warnings || [])];
+    const unsavedHint = state.hasUnsavedChanges ? "（提示：当前有未保存修改，后端预检基于最近一次已保存参数）\n" : "";
+    if (errors.length) {
+      await window.PowerPlanUI?.confirm?.(`${unsavedHint}发现 ${errors.length} 项阻塞问题：\n${errors.map((m) => `• ${m}`).join("\n")}`, {
+        title: "求解预检未通过",
+        danger: true,
+        confirmText: "去修改",
+      });
+    } else if (warnings.length) {
+      await window.PowerPlanUI?.confirm?.(`${unsavedHint}预检通过，但有 ${warnings.length} 项提醒：\n${warnings.slice(0, 8).map((m) => `• ${m}`).join("\n")}`, {
+        title: "求解预检通过（含提醒）",
+        warn: true,
+        confirmText: "知道了",
+      });
+    } else {
+      window.PowerPlanUI?.toast?.(`${unsavedHint ? "已保存版本" : ""}求解预检通过，可启动规划求解`, { level: "success" });
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function selectScheme(name, options = {}) {
   const previousScheme = state.currentScheme;
   state.currentScheme = name;
   state.timeSeriesLoading = null;
   state.timeSeriesDirty = false;
+  setSchemeDirty(false);
   state.payload = normalizePayload(await api(`/api/planning/schemes/${encodeURIComponent(name)}/overview`));
   state.isSwitchingScheme = false;
   if (options.preserveMonth !== true && previousScheme !== name) state.month = 0;
@@ -1402,6 +1488,16 @@ async function selectScheme(name, options = {}) {
 }
 
 async function selectSchemeWithSwitchFeedback(name) {
+  if (state.hasUnsavedChanges && state.currentScheme && name && name !== state.currentScheme) {
+    const proceed = window.PowerPlanUI
+      ? await window.PowerPlanUI.confirm(`方案「${state.currentScheme}」存在未保存修改，切换到「${name}」将丢失这些改动，是否继续？`, {
+          title: "未保存修改确认",
+          warn: true,
+          confirmText: "放弃修改并切换",
+        })
+      : confirm("当前方案存在未保存修改，是否放弃并切换？");
+    if (!proceed) return;
+  }
   clearPlanningDisplayForSchemeSwitch(name);
   await selectScheme(name);
 }
@@ -1613,6 +1709,7 @@ async function saveScheme() {
       setTimeSeriesLoaded(true);
     }
     state.timeSeriesDirty = false;
+    setSchemeDirty(false);
     if (!state.payload) {
       alert("保存参数失败：后台返回数据为空");
       return;
@@ -4009,7 +4106,7 @@ function renderTimeTable() {
 
 function timeCellHtml(index, key, value) {
   const safeValue = escapeHtml(formatTimeSeriesCellValue(key, value));
-  return `<td class="time-cell" data-time-cell="true"><span class="time-cell-display" data-time-display-index="${index}" data-time-display-key="${escapeHtml(key)}">${safeValue}</span><input class="time-cell-input" data-time-index="${index}" data-key="${escapeHtml(key)}" value="${safeValue}" readonly="readonly" tabindex="-1"></td>`;
+  return `<td class="time-cell" data-time-cell="true" data-time-index="${index}" data-key="${escapeHtml(key)}"><span class="time-cell-display" data-time-display-index="${index}" data-time-display-key="${escapeHtml(key)}">${safeValue}</span></td>`;
 }
 
 function onTimeInput(event) {
@@ -5021,6 +5118,7 @@ function setTimeSeriesLoaded(value) {
 function markTimeSeriesDirty() {
   setTimeSeriesLoaded(true);
   state.timeSeriesDirty = true;
+  setSchemeDirty(true);
 }
 
 function escapeHtml(value) {

@@ -13,9 +13,12 @@ const state = {
   tabs: [{ id: "tab-1", scheme: "", result: "", results: [] }],
   activeTabId: "tab-1",
   draggingTabId: "",
-  comparison: { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} },
+  comparison: { items: [], tables: { capacity: [], energy: [], safety: [], reliability: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} },
   comparisonCurveViewer: null,
   selectedCurves: [],
+  baselineLabel: "",
+  showDelta: false,
+  showReliabilityTable: false,
   tableHeight: null,
   tableColumnWidths: [1, 1, 1],
   hoverIndex: null,
@@ -92,7 +95,9 @@ document.addEventListener("DOMContentLoaded", () => {
     : null;
   restoreComparisonPageState();
   restoreComparisonTabs();
+  applyComparisonUrlAddParam();
   bindAddTab();
+  bindComparisonDecisionControls();
   bindComparisonTableColumnResizeHandles();
   bindComparisonTableCurveResizeHandle();
   bindComparisonAxisRangeControls();
@@ -506,22 +511,196 @@ function mergeComparisonCurvePayload(data) {
   };
 }
 
+function applyComparisonUrlAddParam() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    const raw = String(params.get("add") || "").trim();
+    if (!raw) return;
+    const [scheme, filename] = raw.split("|").map((s) => String(s || "").trim());
+    if (!scheme || !filename) return;
+    const exists = state.tabs.some((tab) => tab.scheme === scheme && tab.result === filename);
+    if (!exists) {
+      const emptyTab = state.tabs.find((tab) => !tab.scheme && !tab.result);
+      if (emptyTab) {
+        emptyTab.scheme = scheme;
+        emptyTab.result = filename;
+        state.activeTabId = emptyTab.id;
+      } else if (state.tabs.length < MAX_TABS) {
+        const nextId = `tab-${Date.now()}`;
+        state.tabs.push({ id: nextId, scheme, result: filename, results: [] });
+        state.activeTabId = nextId;
+      }
+      rememberComparisonTabs();
+    }
+  } catch (_) {
+    // 忽略 URL 解析异常
+  }
+}
+
+function bindComparisonDecisionControls() {
+  const baselineSelect = document.getElementById("comparisonBaselineSelect");
+  const deltaBtn = document.getElementById("comparisonDeltaToggle");
+  const relBtn = document.getElementById("comparisonReliabilityToggle");
+  const exportBtn = document.getElementById("exportComparisonCsv");
+
+  baselineSelect?.addEventListener("change", () => {
+    state.baselineLabel = baselineSelect.value || "";
+    if (state.baselineLabel && !state.showDelta) {
+      state.showDelta = true;
+    }
+    syncComparisonDecisionControls();
+    renderComparisonTables();
+  });
+
+  deltaBtn?.addEventListener("click", () => {
+    state.showDelta = !state.showDelta;
+    if (state.showDelta && !state.baselineLabel && state.comparison.items?.length) {
+      state.baselineLabel = state.comparison.items[0].label || "";
+    }
+    syncComparisonDecisionControls();
+    renderComparisonTables();
+  });
+
+  relBtn?.addEventListener("click", () => {
+    state.showReliabilityTable = !state.showReliabilityTable;
+    syncComparisonDecisionControls();
+  });
+
+  exportBtn?.addEventListener("click", exportComparisonTablesCsv);
+  syncComparisonDecisionControls();
+}
+
+function syncComparisonDecisionControls() {
+  const baselineSelect = document.getElementById("comparisonBaselineSelect");
+  const deltaBtn = document.getElementById("comparisonDeltaToggle");
+  const relBtn = document.getElementById("comparisonReliabilityToggle");
+  const relSection = document.getElementById("reliabilityComparisonSection");
+  const items = Array.isArray(state.comparison.items) ? state.comparison.items : [];
+  const labels = items.map((item) => String(item.label || "")).filter(Boolean);
+
+  if (state.baselineLabel && !labels.includes(state.baselineLabel)) {
+    state.baselineLabel = "";
+  }
+  if (baselineSelect) {
+    baselineSelect.innerHTML = [
+      `<option value="">无基准</option>`,
+      ...labels.map((label) => `<option value="${escapeHtml(label)}"${label === state.baselineLabel ? " selected" : ""}>${escapeHtml(label)}</option>`),
+    ].join("");
+    baselineSelect.value = state.baselineLabel;
+  }
+  if (deltaBtn) {
+    deltaBtn.classList.toggle("active", Boolean(state.showDelta));
+    deltaBtn.setAttribute("aria-pressed", String(Boolean(state.showDelta)));
+  }
+  const hasRelRows = Array.isArray(state.comparison.tables?.reliability) && state.comparison.tables.reliability.length > 0;
+  if (relBtn) {
+    relBtn.classList.toggle("active", Boolean(state.showReliabilityTable));
+    relBtn.setAttribute("aria-pressed", String(Boolean(state.showReliabilityTable)));
+    relBtn.dataset.hasData = String(hasRelRows);
+  }
+  if (relSection) {
+    relSection.hidden = !state.showReliabilityTable;
+  }
+}
+
+function parseNumericCellValue(raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  const cleaned = String(raw).trim().replace(/,/g, "").replace(/%$/, "");
+  if (!cleaned || !/^[-+]?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(cleaned)) return null;
+  const num = Number(cleaned);
+  return Number.isFinite(num) ? num : null;
+}
+
+function formatComparisonDeltaHtml(row, header) {
+  if (!state.showDelta || !state.baselineLabel) return "";
+  if (header === state.baselineLabel || header === "指标" || header === "设备类型" || header === "单位") return "";
+  const baseVal = parseNumericCellValue(row[state.baselineLabel]);
+  const curVal = parseNumericCellValue(row[header]);
+  if (baseVal === null || curVal === null) return "";
+  const diff = curVal - baseVal;
+  if (Math.abs(diff) < 1e-9) return ` <span class="cmp-delta is-flat">0</span>`;
+  const sign = diff > 0 ? "+" : "";
+  const pct = Math.abs(baseVal) > 1e-9 ? `${sign}${((diff / Math.abs(baseVal)) * 100).toFixed(1)}%` : `${sign}${diff.toFixed(2)}`;
+  const cls = diff > 0 ? "is-up" : "is-down";
+  return ` <span class="cmp-delta ${cls}" title="Δ ${sign}${diff.toFixed(4)}">(${pct})</span>`;
+}
+
+function exportComparisonTablesCsv() {
+  const sections = [
+    ["规划容量对比", state.comparison.tables?.capacity || []],
+    ["经济性指标对比", state.comparison.tables?.energy || []],
+    ["安全性指标对比", state.comparison.tables?.safety || []],
+    ["供电可靠性指标对比", state.comparison.tables?.reliability || []],
+  ];
+  const lines = [];
+  const csvEscape = (val) => {
+    const s = String(val ?? "");
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  sections.forEach(([title, rows]) => {
+    if (!rows.length) return;
+    lines.push(csvEscape(title));
+    const headers = Object.keys(rows[0]);
+    lines.push(headers.map(csvEscape).join(","));
+    rows.forEach((row) => {
+      lines.push(headers.map((h) => csvEscape(formatDisplayValue(row[h] ?? "", row, h))).join(","));
+    });
+    lines.push("");
+  });
+  if (!lines.length) {
+    window.PowerPlanUI?.toast?.("暂无可导出的对比数据", { level: "warn" });
+    return;
+  }
+  const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `power_plan_comparison_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  window.PowerPlanUI?.toast?.("对比表格 CSV 已导出", { level: "success" });
+}
+
 function renderComparisonTables() {
+  const relRows = state.comparison.tables?.reliability || [];
+  if (relRows.length && !state.showReliabilityTable && state.comparison.items?.length) {
+    state.showReliabilityTable = true;
+  }
+  syncComparisonDecisionControls();
   renderTable("capacityComparisonTable", state.comparison.tables?.capacity || [], "暂无规划容量对比");
   renderTable("energyComparisonTable", state.comparison.tables?.energy || [], "暂无经济性指标对比");
   renderTable("safetyComparisonTable", state.comparison.tables?.safety || [], "暂无安全性指标对比");
+  renderTable("reliabilityComparisonTable", relRows, "所选方案尚未生成供电可靠性结果");
 }
 
 function renderTable(id, rows, emptyText) {
   const target = document.getElementById(id);
+  if (!target) return;
   if (!rows.length) {
     target.innerHTML = `<div class="empty-summary">${escapeHtml(emptyText)}</div>`;
     return;
   }
   const headers = Object.keys(rows[0]);
-  target.innerHTML = `<table><thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead><tbody>${rows
-    .map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatDisplayValue(row[header] ?? "", row, header))}</td>`).join("")}</tr>`)
+  target.innerHTML = `<table><thead><tr>${headers
+    .map((header) => `<th${header === state.baselineLabel ? ' class="is-baseline-col"' : ""}>${escapeHtml(header)}${header === state.baselineLabel ? ' <em class="cmp-base-tag">基准</em>' : ""}</th>`)
+    .join("")}</tr></thead><tbody>${rows
+    .map(
+      (row) =>
+        `<tr>${headers
+          .map((header) => {
+            const rawVal = row[header] ?? "";
+            const display = rawVal === "" ? "—" : formatDisplayValue(rawVal, row, header);
+            return `<td${header === state.baselineLabel ? ' class="is-baseline-col"' : ""}>${escapeHtml(display)}${formatComparisonDeltaHtml(row, header)}</td>`;
+          })
+          .join("")}</tr>`,
+    )
     .join("")}</tbody></table>`;
+  if (window.PowerPlanI18n) {
+    window.PowerPlanI18n.translate(target, window.PowerPlanI18n.currentLanguage());
+  }
 }
 
 function renderCurveNameList() {

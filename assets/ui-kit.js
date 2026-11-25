@@ -496,6 +496,282 @@
     applyFilter();
   }
 
+  /** 构造任务详情跳转链接 */
+  function taskDetailHref(task) {
+    const pageMap = {
+      optimization: "optimize.html",
+      evaluation: "evaluation.html",
+      frequency: "frequency.html",
+      reliability: "reliability.html",
+    };
+    const page = pageMap[task?.task_type_key] || "optimize.html";
+    const params = new URLSearchParams();
+    if (task?.scheme) params.set("scheme", task.scheme);
+    if (task?.result && task?.task_type_key !== "optimization") params.set("file", task.result);
+    const qs = params.toString();
+    return qs ? `${page}?${qs}` : page;
+  }
+
+  /** 在顶栏工具区挂载全局任务状态胶囊与右侧滑出任务抽屉 */
+  function mountGlobalTaskDrawer() {
+    const topbar = document.querySelector(".topbar");
+    const utilities = topbar?.querySelector(".topbar-utilities");
+    if (!topbar || !utilities) return;
+    if (document.getElementById("globalTaskPill")) return;
+
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.id = "globalTaskPill";
+    pill.className = "global-task-pill";
+    pill.setAttribute("aria-expanded", "false");
+    pill.setAttribute("aria-controls", "globalTaskDrawer");
+    pill.innerHTML = `<span class="global-task-dot" aria-hidden="true"></span><span class="global-task-label">任务</span><span id="globalTaskBadge" class="global-task-badge">0</span>`;
+    utilities.insertBefore(pill, utilities.firstChild);
+
+    const backdrop = document.createElement("div");
+    backdrop.id = "globalTaskDrawerBackdrop";
+    backdrop.className = "global-task-drawer-backdrop";
+    backdrop.hidden = true;
+
+    const drawer = document.createElement("aside");
+    drawer.id = "globalTaskDrawer";
+    drawer.className = "global-task-drawer";
+    drawer.setAttribute("role", "dialog");
+    drawer.setAttribute("aria-label", tr("全局任务监控"));
+    drawer.hidden = true;
+    drawer.innerHTML = `
+      <div class="global-task-drawer-head">
+        <h3>全局任务监控</h3>
+        <div class="global-task-drawer-head-actions">
+          <button type="button" id="globalTaskRefreshBtn">刷新</button>
+          <a href="tasks.html" class="global-task-all-link">全部任务</a>
+          <button type="button" id="globalTaskCloseBtn" aria-label="关闭">×</button>
+        </div>
+      </div>
+      <div id="globalTaskDrawerBody" class="global-task-drawer-body">
+        <div class="global-task-empty">加载中...</div>
+      </div>
+    `;
+    document.body.append(backdrop, drawer);
+
+    let lastStatusMap = new Map();
+    let initialized = false;
+    let pollTimer = 0;
+    let fetching = false;
+    let latestTasks = [];
+
+    const escapeHtml = (value) =>
+      String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    const openDrawer = () => {
+      backdrop.hidden = false;
+      drawer.hidden = false;
+      pill.setAttribute("aria-expanded", "true");
+      refreshTasks({ forceRender: true });
+      schedulePoll(3000);
+    };
+
+    const closeDrawer = () => {
+      backdrop.hidden = true;
+      drawer.hidden = true;
+      pill.setAttribute("aria-expanded", "false");
+      schedulePoll(6000);
+    };
+
+    const renderDrawer = () => {
+      const running = latestTasks.filter((t) => t.status === "计算中");
+      const queued = latestTasks.filter((t) => t.queued || t.status === "排队中");
+      const finished = latestTasks.filter((t) => ["完成计算", "计算失败", "计算超时", "计算中止"].includes(t.status)).slice(0, 12);
+      const activeCount = running.length + queued.length;
+
+      pill.classList.toggle("is-running", running.length > 0);
+      pill.classList.toggle("is-queued", running.length === 0 && queued.length > 0);
+      const badge = document.getElementById("globalTaskBadge");
+      if (badge) {
+        badge.textContent = running.length > 0 ? `${running.length} 运行${queued.length ? ` · ${queued.length} 排` : ""}` : queued.length > 0 ? `${queued.length} 排队` : "空闲";
+      }
+      if (drawer.hidden) return;
+
+      const body = document.getElementById("globalTaskDrawerBody");
+      if (!body) return;
+      const renderItem = (task) => {
+        const stopAction = task.queued ? "cancel_queue" : "stop";
+        const stopLabel = task.queued ? "离队" : "停止";
+        const canTerminate = Boolean(task.queued || task.can_stop);
+        const href = taskDetailHref(task);
+        return `
+          <div class="global-task-item" data-status="${escapeHtml(task.status || "")}">
+            <div class="global-task-item-top">
+              <span class="global-task-type">${escapeHtml(task.task_type || "")}</span>
+              <strong class="global-task-scheme" title="${escapeHtml(task.scheme || "")}">${escapeHtml(task.scheme || "-")}</strong>
+              <span class="global-task-status">${escapeHtml(task.status || "未计算")}${task.queue_position ? ` #${task.queue_position}` : ""}</span>
+            </div>
+            <div class="global-task-item-meta">
+              <span title="${escapeHtml(task.result || "")}">${escapeHtml(task.result || "-")}</span>
+              <span>${escapeHtml(task.elapsed_seconds ? `${task.elapsed_seconds}s` : "")}</span>
+            </div>
+            ${task.latest_log ? `<div class="global-task-item-log" title="${escapeHtml(task.latest_log)}">${escapeHtml(task.latest_log)}</div>` : ""}
+            <div class="global-task-item-actions">
+              <a class="global-task-action-link" href="${escapeHtml(href)}">查看</a>
+              ${
+                canTerminate
+                  ? `<button type="button" class="danger" data-drawer-action="${stopAction}" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}">${stopLabel}</button>`
+                  : ""
+              }
+            </div>
+          </div>
+        `;
+      };
+
+      const sections = [];
+      if (activeCount > 0) {
+        sections.push(`<div class="global-task-section-title">进行中 / 排队中 (${activeCount})</div>${[...running, ...queued].map(renderItem).join("")}`);
+      }
+      if (finished.length > 0) {
+        sections.push(`<div class="global-task-section-title">近期完成 / 异常 (${finished.length})</div>${finished.map(renderItem).join("")}`);
+      }
+      if (!sections.length) {
+        sections.push(`<div class="global-task-empty">当前无运行中或近期任务</div>`);
+      }
+      body.innerHTML = sections.join("");
+      if (window.PowerPlanI18n) {
+        window.PowerPlanI18n.translate(drawer, window.PowerPlanI18n.currentLanguage());
+      }
+    };
+
+    const refreshTasks = async () => {
+      if (fetching || document.hidden) return;
+      fetching = true;
+      try {
+        const resp = await fetch("/api/tasks");
+        if (!resp.ok) return;
+        const data = await resp.json().catch(() => ({}));
+        const nextTasks = Array.isArray(data.tasks) ? data.tasks : [];
+        if (initialized) {
+          nextTasks.forEach((task) => {
+            const prevStatus = lastStatusMap.get(task.id);
+            if ((prevStatus === "计算中" || prevStatus === "排队中") && task.status === "完成计算") {
+              toast(`${task.task_type}已完成：${task.scheme}`, { level: "success" });
+            } else if ((prevStatus === "计算中" || prevStatus === "排队中") && (task.status === "计算失败" || task.status === "计算超时")) {
+              toast(`${task.task_type}${task.status}：${task.scheme}`, { level: "error" });
+            }
+          });
+        }
+        lastStatusMap = new Map(nextTasks.map((t) => [t.id, t.status]));
+        initialized = true;
+        latestTasks = nextTasks;
+        renderDrawer();
+      } catch (_) {
+        // 静默忽略后台轮询偶发失败
+      } finally {
+        fetching = false;
+      }
+    };
+
+    const schedulePoll = (delayMs) => {
+      if (pollTimer) window.clearInterval(pollTimer);
+      pollTimer = window.setInterval(refreshTasks, delayMs);
+    };
+
+    pill.addEventListener("click", () => (drawer.hidden ? openDrawer() : closeDrawer()));
+    backdrop.addEventListener("click", closeDrawer);
+    drawer.querySelector("#globalTaskCloseBtn")?.addEventListener("click", closeDrawer);
+    drawer.querySelector("#globalTaskRefreshBtn")?.addEventListener("click", () => refreshTasks());
+    drawer.addEventListener("click", async (event) => {
+      const btn = event.target?.closest?.("[data-drawer-action]");
+      if (!btn || btn.disabled) return;
+      btn.disabled = true;
+      try {
+        const resp = await fetch("/api/tasks/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: btn.dataset.drawerAction,
+            task_type: btn.dataset.taskType,
+            scheme: btn.dataset.scheme,
+            result: btn.dataset.result,
+          }),
+        });
+        if (resp.ok) {
+          const payload = await resp.json().catch(() => ({}));
+          if (Array.isArray(payload.tasks)) {
+            latestTasks = payload.tasks;
+            renderDrawer();
+          } else {
+            await refreshTasks();
+          }
+        }
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !drawer.hidden) closeDrawer();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) refreshTasks();
+    });
+
+    window.setTimeout(refreshTasks, 400);
+    schedulePoll(6000);
+  }
+
+  /** 在规划/评估/可靠性/频率页面命令卡底部挂载跨页工作流直达动作条 */
+  function mountWorkflowNextStrip() {
+    const file = (window.location.pathname.split("/").pop() || "index.html").toLowerCase();
+    const targetPages = new Set(["optimize.html", "evaluation.html", "reliability.html", "frequency.html"]);
+    if (!targetPages.has(file)) return;
+    const hostCard = document.querySelector(".optimization-command-card, .reliability-main > .optimization-command-card");
+    if (!hostCard || hostCard.querySelector(".workflow-next-strip")) return;
+
+    const strip = document.createElement("div");
+    strip.className = "workflow-next-strip";
+    strip.setAttribute("aria-label", tr("工作流直达"));
+    hostCard.appendChild(strip);
+
+    const linksDef = [
+      { page: "planning.html", label: "参数维护", needFile: false },
+      { page: "optimize.html", label: "规划求解", needFile: false },
+      { page: "evaluation.html", label: "方案评估", needFile: true },
+      { page: "reliability.html", label: "供电可靠性", needFile: true },
+      { page: "frequency.html", label: "频率计算", needFile: true },
+      { page: "comparison.html", label: "加入对比", isCompare: true },
+      { page: "sensitivity.html", label: "批量扫参", needFile: false },
+      { page: "report.html", label: "综合简报", needFile: true },
+    ];
+
+    const renderStrip = () => {
+      const ctx = window.PowerPlanPageState?.getActiveContext?.() || { scheme: "", filename: "" };
+      const scheme = ctx.scheme || "";
+      const filename = ctx.filename || (file === "optimize.html" ? "opt_results.xlsx" : "");
+      const items = linksDef
+        .filter((item) => item.page !== file)
+        .map((item) => {
+          let href = item.page;
+          if (item.isCompare && scheme && filename) {
+            href = `comparison.html?add=${encodeURIComponent(`${scheme}|${filename}`)}`;
+          } else if (scheme) {
+            const p = new URLSearchParams();
+            p.set("scheme", scheme);
+            if (item.needFile && filename) p.set("file", filename);
+            href = `${item.page}?${p.toString()}`;
+          }
+          return `<a class="workflow-next-link" href="${href}">${item.label}</a>`;
+        });
+      strip.innerHTML = `<span class="workflow-next-label">快捷流转</span><div class="workflow-next-links">${items.join("")}</div>`;
+      if (window.PowerPlanI18n) {
+        window.PowerPlanI18n.translate(strip, window.PowerPlanI18n.currentLanguage());
+      }
+    };
+
+    renderStrip();
+    window.addEventListener("powerplan:contextchange", renderStrip);
+  }
+
   /** 注册全局快捷键：Ctrl+S 快捷保存、Esc 关闭右键菜单与原生弹窗 */
   function bindGlobalShortcuts() {
     document.addEventListener("keydown", (event) => {
@@ -523,6 +799,8 @@
   function boot() {
     setTheme(getTheme(), { silent: true });
     mountTopbarUtilities();
+    mountGlobalTaskDrawer();
+    mountWorkflowNextStrip();
     enhanceSchemeRail();
     bindGlobalShortcuts();
   }

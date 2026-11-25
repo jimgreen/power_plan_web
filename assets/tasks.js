@@ -6,6 +6,7 @@ const taskState = {
   activeTaskType: "optimization",
   evaluationSchemeFilter: "",
   frequencySchemeFilter: "",
+  reliabilitySchemeFilter: "",
   lastRenderedTaskSignature: "",
 };
 const TASKS_PAGE_STATE_KEY = "tasks";
@@ -28,22 +29,25 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("optimizationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("evaluationTaskTable")?.addEventListener("click", handleTaskAction);
   document.getElementById("frequencyTaskTable")?.addEventListener("click", handleTaskAction);
+  document.getElementById("reliabilityTaskTable")?.addEventListener("click", handleTaskAction);
   document.querySelectorAll("[data-task-page]").forEach((button) => {
     button.addEventListener("click", () => switchTaskPage(button.dataset.taskPage || "optimization"));
   });
   document.getElementById("evaluationSchemeFilter")?.addEventListener("change", handleEvaluationSchemeFilterChange);
   document.getElementById("frequencySchemeFilter")?.addEventListener("change", handleFrequencySchemeFilterChange);
+  document.getElementById("reliabilitySchemeFilter")?.addEventListener("change", handleReliabilitySchemeFilterChange);
   loadTasks().catch(showTaskError);
   taskState.pollTimer = window.setInterval(() => loadTasks({ silent: true }).catch(showTaskError), 4000);
 });
 
 function restoreTasksPageState() {
   const saved = window.PowerPlanPageState?.read?.(TASKS_PAGE_STATE_KEY, {}) || {};
-  if (["optimization", "evaluation", "frequency"].includes(saved.activeTaskType)) {
+  if (["optimization", "evaluation", "frequency", "reliability"].includes(saved.activeTaskType)) {
     taskState.activeTaskType = saved.activeTaskType;
   }
   if (typeof saved.evaluationSchemeFilter === "string") taskState.evaluationSchemeFilter = saved.evaluationSchemeFilter;
   if (typeof saved.frequencySchemeFilter === "string") taskState.frequencySchemeFilter = saved.frequencySchemeFilter;
+  if (typeof saved.reliabilitySchemeFilter === "string") taskState.reliabilitySchemeFilter = saved.reliabilitySchemeFilter;
   updateTaskPageVisibility();
 }
 
@@ -52,6 +56,7 @@ function tasksPageStateSnapshot() {
     activeTaskType: taskState.activeTaskType,
     evaluationSchemeFilter: taskState.evaluationSchemeFilter || "",
     frequencySchemeFilter: taskState.frequencySchemeFilter || "",
+    reliabilitySchemeFilter: taskState.reliabilitySchemeFilter || "",
   };
 }
 
@@ -99,9 +104,11 @@ function applyTasksPayload(payload, options = {}) {
 function renderTasks() {
   renderSchemeFilter("evaluation", "evaluationSchemeFilter", "evaluationSchemeFilter");
   renderSchemeFilter("frequency", "frequencySchemeFilter", "frequencySchemeFilter");
+  renderSchemeFilter("reliability", "reliabilitySchemeFilter", "reliabilitySchemeFilter");
   renderTaskSection("optimization", "optimizationTaskTable", "暂无规划计算任务");
   renderTaskSection("evaluation", "evaluationTaskTable", "暂无方案评估任务");
   renderTaskSection("frequency", "frequencyTaskTable", "暂无频率计算任务");
+  renderTaskSection("reliability", "reliabilityTaskTable", "暂无供电可靠性任务");
   updateTaskPageVisibility();
 }
 
@@ -146,6 +153,9 @@ function filteredTasksForSection(taskTypeKey) {
   if (taskTypeKey === "frequency" && taskState.frequencySchemeFilter) {
     return tasks.filter((task) => String(task.scheme || "") === taskState.frequencySchemeFilter);
   }
+  if (taskTypeKey === "reliability" && taskState.reliabilitySchemeFilter) {
+    return tasks.filter((task) => String(task.scheme || "") === taskState.reliabilitySchemeFilter);
+  }
   return tasks;
 }
 
@@ -175,8 +185,14 @@ function handleFrequencySchemeFilterChange(event) {
   renderTaskSection("frequency", "frequencyTaskTable", "暂无频率计算任务");
 }
 
+function handleReliabilitySchemeFilterChange(event) {
+  taskState.reliabilitySchemeFilter = String(event.target?.value || "");
+  rememberTasksPageState({ reliabilitySchemeFilter: taskState.reliabilitySchemeFilter });
+  renderTaskSection("reliability", "reliabilityTaskTable", "暂无供电可靠性任务");
+}
+
 function switchTaskPage(taskTypeKey) {
-  if (!["optimization", "evaluation", "frequency"].includes(taskTypeKey)) return;
+  if (!["optimization", "evaluation", "frequency", "reliability"].includes(taskTypeKey)) return;
   taskState.activeTaskType = taskTypeKey;
   rememberTasksPageState({ activeTaskType: taskState.activeTaskType });
   updateTaskPageVisibility();
@@ -195,10 +211,26 @@ function updateTaskPageVisibility() {
   });
 }
 
+function taskTargetHref(task) {
+  const pageMap = {
+    optimization: "optimize.html",
+    evaluation: "evaluation.html",
+    frequency: "frequency.html",
+    reliability: "reliability.html",
+  };
+  const page = pageMap[task.task_type_key] || "optimize.html";
+  const params = new URLSearchParams();
+  if (task.scheme) params.set("scheme", task.scheme);
+  if (task.result && task.task_type_key !== "optimization") params.set("file", task.result);
+  const qs = params.toString();
+  return qs ? `${page}?${qs}` : page;
+}
+
 function renderTaskRow(task) {
   const statusClass = taskStatusClass(task.status);
   const queueText = task.queue_position ? `#${task.queue_position}` : "";
   const terminalAction = taskTerminalAction(task);
+  const viewHref = taskTargetHref(task);
   return `
     <tr>
       <td>${escapeHtml(task.scheme || "-")}</td>
@@ -208,6 +240,7 @@ function renderTaskRow(task) {
           <button class="primary" type="button" data-task-action="start" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_start ? "" : "disabled"}>启动</button>
           <button type="button" data-task-action="queue" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${task.can_queue ? "" : "disabled"}>排队</button>
           <button class="danger" type="button" data-task-action="${escapeHtml(terminalAction.action)}" data-task-type="${escapeHtml(task.task_type_key || "")}" data-scheme="${escapeHtml(task.scheme || "")}" data-result="${escapeHtml(task.result || "")}" ${terminalAction.enabled ? "" : "disabled"}>${escapeHtml(terminalAction.label)}</button>
+          <a class="task-view-link" href="${escapeHtml(viewHref)}">查看</a>
         </div>
       </td>
       <td><span class="task-status-pill ${statusClass}">${escapeHtml(task.status || "未计算")}${queueText ? ` <em>${escapeHtml(queueText)}</em>` : ""}</span></td>

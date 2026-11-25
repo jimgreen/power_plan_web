@@ -2840,3 +2840,718 @@ html[data-theme] button:disabled {
   filter: grayscale(0.35);
 }
 
+/* ==========================================================================
+   全局任务胶囊、右侧任务抽屉、工作流直达条与行内查看链接
+   ========================================================================== */
+
+.global-task-pill {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 9px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: none !important;
+}
+
+.global-task-pill:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.global-task-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.global-task-pill.is-running .global-task-dot {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 24%, transparent);
+}
+
+.global-task-pill.is-queued .global-task-dot {
+  background: var(--warn);
+}
+
+.global-task-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.global-task-pill.is-running .global-task-badge {
+  color: var(--ok);
+}
+
+.global-task-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.45);
+  z-index: 1250;
+}
+
+.global-task-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 94vw);
+  background: var(--bg-surface);
+  border-left: var(--border);
+  box-shadow: -12px 0 36px rgba(0, 0, 0, 0.35);
+  z-index: 1260;
+  display: flex;
+  flex-direction: column;
+}
+
+.global-task-drawer[hidden],
+.global-task-drawer-backdrop[hidden] {
+  display: none !important;
+}
+
+.global-task-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: var(--border);
+  gap: 8px;
+}
+
+.global-task-drawer-head h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.global-task-drawer-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.global-task-drawer-head-actions button,
+.global-task-all-link,
+.task-view-link,
+.global-task-action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-height: 24px !important;
+  padding: 0 8px !important;
+  border-radius: 5px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-elevated) !important;
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  text-decoration: none !important;
+  cursor: pointer;
+}
+
+.global-task-all-link:hover,
+.task-view-link:hover,
+.global-task-action-link:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.global-task-drawer-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.global-task-section-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+
+.global-task-item {
+  border: var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.global-task-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.global-task-type {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.global-task-scheme {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.global-task-status {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+
+.global-task-item[data-status="计算中"] .global-task-status { color: var(--ok); }
+.global-task-item[data-status="排队中"] .global-task-status { color: var(--warn); }
+.global-task-item[data-status="计算失败"] .global-task-status,
+.global-task-item[data-status="计算超时"] .global-task-status { color: var(--danger); }
+
+.global-task-item-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.global-task-item-meta > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.global-task-item-log {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.global-task-item-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.global-task-empty {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+/* 业务页顶部工作流直达动作条 */
+.workflow-next-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+
+.workflow-next-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.workflow-next-links {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.workflow-next-link {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-secondary) !important;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.workflow-next-link:hover {
+  border-color: var(--accent);
+  color: var(--accent) !important;
+  background: var(--accent-soft);
+}
+
+/* 结果对比页决策工具栏、差值徽标与可靠性对比卡片 */
+.comparison-tab-bar {
+  display: flex !important;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.comparison-decision-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.comparison-baseline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.comparison-baseline-field select {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 8px !important;
+  max-width: 190px;
+  font-size: 12px !important;
+}
+
+.comparison-decision-bar button {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 9px !important;
+  font-size: 12px !important;
+  border-radius: 5px !important;
+}
+
+.comparison-decision-bar button.active {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.comparison-reliability-card {
+  background: var(--bg-elevated);
+  border: var(--border);
+  border-radius: calc(var(--radius-card) - 2px);
+  padding: 8px;
+}
+
+.comparison-reliability-card h2 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.cmp-base-tag {
+  font-style: normal;
+  font-size: 10px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-left: 4px;
+}
+
+.is-baseline-col {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.cmp-delta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 3px;
+}
+
+.cmp-delta.is-up { color: var(--warn); }
+.cmp-delta.is-down { color: var(--ok); }
+.cmp-delta.is-flat { color: var(--text-muted); }
+
+/* 参数页未保存脏状态轻提示 */
+#saveScheme.is-dirty {
+  position: relative;
+}
+
+#saveScheme.is-dirty::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+/* ==========================================================================
+   批量扫参 / 敏感性分析工作台（sensitivity.html）
+   ========================================================================== */
+
+body .workspace.sensitivity-workspace {
+  grid-template-columns: 296px minmax(0, 1fr) !important;
+  align-items: start;
+}
+
+.sensitivity-config-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sens-form {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.sens-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sens-field input,
+.sens-field select {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+}
+
+.sens-preset-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sens-preset-chip {
+  height: 22px !important;
+  min-height: 22px !important;
+  padding: 0 7px !important;
+  font-size: 11px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-elevated) !important;
+  color: var(--text-secondary) !important;
+  cursor: pointer;
+}
+
+.sens-preset-chip:hover {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.sens-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.sens-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.sens-existing-block {
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sens-scheme-picker {
+  max-height: 210px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px;
+  border: var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+}
+
+.sens-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.sens-pick-item:hover {
+  background: var(--table-hover);
+}
+
+.sens-pick-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sens-chart-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sens-chart-controls button.active {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.sens-chart-card,
+.sens-table-card {
+  background: var(--bg-elevated);
+  border: var(--border);
+  border-radius: calc(var(--radius-card) - 2px);
+  padding: 8px;
+}
+
+.sens-chart-svg {
+  width: 100%;
+  height: 270px;
+  display: block;
+}
+
+/* ==========================================================================
+   方案综合评审简报页（report.html）与打印排版
+   ========================================================================== */
+
+.report-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin: 8px 8px 0;
+  background: var(--bg-surface);
+  border: var(--border);
+  border-radius: var(--radius-card);
+}
+
+.report-selectors,
+.report-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.report-selectors label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.report-selectors select {
+  height: 28px !important;
+  min-height: 28px !important;
+  min-width: 150px;
+  font-size: 12px !important;
+}
+
+.report-canvas {
+  max-width: 1320px;
+  width: calc(100% - 16px);
+  margin: 8px auto 20px;
+  padding: 14px 16px;
+  background: var(--bg-surface);
+  border: var(--border);
+  border-radius: var(--radius-card);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.report-doc-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.report-doc-head h1 {
+  margin: 0 0 3px;
+  font-size: 20px !important;
+}
+
+.report-doc-meta,
+.report-doc-time {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.report-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.report-kpi-item {
+  background: var(--bg-elevated);
+  border: var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.report-kpi-item span {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.report-kpi-item strong {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.report-kpi-item em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 3px;
+}
+
+.report-grid-two {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 10px;
+}
+
+.report-grid-three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-card {
+  background: var(--bg-elevated);
+  border: var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.report-card .data-table,
+.sens-table-card .data-table {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.report-card .data-table table {
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+.report-card .data-table th,
+.report-card .data-table td {
+  white-space: normal;
+  word-break: break-word;
+  padding: 4px 6px !important;
+  font-size: 12px !important;
+}
+
+.report-card h2 {
+  margin: 0 0 8px;
+  font-size: 13.5px !important;
+}
+
+.report-monthly-chart {
+  width: 100%;
+  height: 240px;
+  display: block;
+}
+
+@media (max-width: 1080px) {
+  .report-kpi-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .report-grid-two, .report-grid-three { grid-template-columns: 1fr; }
+}
+
+@media print {
+  body, html {
+    background: #FFFFFF !important;
+    color: #0F172A !important;
+  }
+  .no-print,
+  .global-task-drawer,
+  .global-task-drawer-backdrop,
+  .ui-toast-stack {
+    display: none !important;
+  }
+  .report-canvas {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: #FFFFFF !important;
+    box-shadow: none !important;
+  }
+  .report-card,
+  .report-kpi-item {
+    background: #FFFFFF !important;
+    border: 1px solid #CBD5E1 !important;
+    break-inside: avoid;
+  }
+  .report-canvas * {
+    color: #0F172A !important;
+    text-shadow: none !important;
+  }
+}
+

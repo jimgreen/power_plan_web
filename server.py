@@ -1888,11 +1888,59 @@ def parse_comparison_curve_names(text: str) -> list[str]:
     return names
 
 
+def read_comparison_reliability_rows(scheme: str, filename: str) -> list[dict]:
+    """读取对应结果的供电可靠性汇总行，供结果对比页四维展示。"""
+    try:
+        rel_path = reliability_result_json_path(scheme, filename)
+    except Exception:
+        return []
+    if not rel_path or not rel_path.exists():
+        return []
+    stored = read_reliability_result_json(rel_path)
+    if not isinstance(stored, dict):
+        return []
+    mc_summary = (
+        stored.get("monte_carlo", {}).get("summary", {})
+        if isinstance(stored.get("monte_carlo"), dict)
+        else {}
+    )
+    n1 = stored.get("n_minus_1") if isinstance(stored.get("n_minus_1"), dict) else {}
+    n1_scenarios = n1.get("scenarios") if isinstance(n1.get("scenarios"), list) else []
+    n1_max_ens = 0.0
+    n1_max_deficit = 0.0
+    for sc in n1_scenarios:
+        if not isinstance(sc, dict):
+            continue
+        sc_sum = sc.get("summary") if isinstance(sc.get("summary"), dict) else sc
+        n1_max_ens = max(n1_max_ens, float(sc_sum.get("ens_kwh") or 0.0))
+        n1_max_deficit = max(n1_max_deficit, float(sc_sum.get("max_deficit_kw") or 0.0))
+    rows: list[dict] = []
+    if isinstance(mc_summary, dict) and mc_summary:
+        esr = mc_summary.get("energy_supply_reliability")
+        tsa = mc_summary.get("time_supply_availability")
+        if esr is not None:
+            rows.append({"指标": "供电可靠率", "数值": round(float(esr) * 100.0, 4), "单位": "%"})
+        if tsa is not None:
+            rows.append({"指标": "时间可用率", "数值": round(float(tsa) * 100.0, 4), "单位": "%"})
+        if mc_summary.get("eens_kwh_per_year") is not None:
+            rows.append({"指标": "期望缺电量(EENS)", "数值": round(float(mc_summary["eens_kwh_per_year"]), 3), "单位": "kWh/年"})
+        if mc_summary.get("lole_hours_per_year") is not None:
+            rows.append({"指标": "缺电小时(LOLE)", "数值": round(float(mc_summary["lole_hours_per_year"]), 3), "单位": "h/年"})
+        if mc_summary.get("lolf_events_per_year") is not None:
+            rows.append({"指标": "缺电频次(LOLF)", "数值": round(float(mc_summary["lolf_events_per_year"]), 3), "单位": "次/年"})
+    if n1:
+        rows.append({"指标": "N-1 校核通过", "数值": "通过" if n1.get("all_passed") else "存在缺电", "单位": ""})
+        rows.append({"指标": "N-1 最严峻缺电量", "数值": round(n1_max_ens, 3), "单位": "kWh"})
+        rows.append({"指标": "N-1 最大缺口功率", "数值": round(n1_max_deficit, 3), "单位": "kW"})
+    return rows
+
+
 def build_comparison_payload(items: list[dict], include_hourly_curves: bool = True) -> dict:
     selected_items: list[dict] = []
     capacity_tables: list[list[dict]] = []
     energy_tables: list[list[dict]] = []
     safety_tables: list[list[dict]] = []
+    reliability_tables: list[list[dict]] = []
     annual_tables: list[list[dict]] = []
     curve_groups = empty_comparison_curve_groups()
 
@@ -1921,6 +1969,7 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
         capacity_tables.append(workbook_data["capacity"])
         energy_tables.append(workbook_data["energy"])
         safety_tables.append(workbook_data["safety"])
+        reliability_tables.append(read_comparison_reliability_rows(scheme, filename))
         annual_tables.append(workbook_data["annual"])
         append_comparison_curve_groups(curve_groups, workbook_data["curve_groups"], label, scheme, filename)
 
@@ -1932,6 +1981,7 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
             "capacity": merge_comparison_rows(capacity_tables, selected_items, "设备类型"),
             "energy": merge_comparison_rows(energy_tables, selected_items, "指标"),
             "safety": merge_comparison_rows(safety_tables, selected_items, "指标"),
+            "reliability": merge_comparison_rows(reliability_tables, selected_items, "指标"),
         },
         "curve_groups": curve_groups,
         "annual_table": merge_comparison_rows(annual_tables, selected_items, "指标"),
@@ -6652,6 +6702,21 @@ def build_task_list(schedule: bool = True, current_user: dict | None = None) -> 
                     queue_position=TASK_SCHEDULER.queue_position("frequency", scheme, result_name),
                 )
                 tasks[freq_task["id"]] = freq_task
+                rel_runtime = RELIABILITY_RUNTIME.runtimes().get(key)
+                rel_state = (
+                    rel_runtime.snapshot(light=True)
+                    if rel_runtime
+                    else default_task_runtime_state(scheme, result_filename=result_name)
+                )
+                rel_task = task_from_runtime_state(
+                    "reliability",
+                    rel_state,
+                    scheme=scheme,
+                    result=result_name,
+                    queued=False,
+                    queue_position=0,
+                )
+                tasks[rel_task["id"]] = rel_task
 
     for scheme, runtime in OPTIMIZATION_RUNTIME.runtimes().items():
         if not user_can_manage_planning_scheme(scheme, current_user):
@@ -6701,6 +6766,21 @@ def build_task_list(schedule: bool = True, current_user: dict | None = None) -> 
         )
         tasks[task["id"]] = task
 
+    for key, runtime in RELIABILITY_RUNTIME.runtimes().items():
+        scheme, result = split_evaluation_runtime_key(key)
+        if not scheme or not user_can_manage_planning_scheme(scheme, current_user):
+            continue
+        state = runtime.snapshot(light=True)
+        task = task_from_runtime_state(
+            "reliability",
+            state,
+            scheme=scheme,
+            result=result or OPTIMIZATION_RESULT_WORKBOOK_NAME,
+            queued=False,
+            queue_position=0,
+        )
+        tasks[task["id"]] = task
+
     return sorted((task for task in tasks.values() if task_list_item_is_visible(task)), key=task_sort_key)
 
 
@@ -6720,7 +6800,7 @@ def task_list_item_is_visible(task: dict) -> bool:
 
 
 def task_sort_key(item: dict) -> tuple[int, str, str]:
-    type_ranks = {"optimization": 0, "evaluation": 1, "frequency": 2}
+    type_ranks = {"optimization": 0, "evaluation": 1, "frequency": 2, "reliability": 3}
     type_rank = type_ranks.get(item.get("task_type_key"), 9)
     return type_rank, str(item.get("scheme") or ""), str(item.get("result") or "")
 
@@ -6767,14 +6847,27 @@ def task_from_runtime_state(
     queued: bool = False,
     queue_position: int = 0,
 ) -> dict:
-    runtime_status = str(state.get("status") or "待启动")
+    raw_status = str(state.get("status") or "待启动")
+    reliability_status_map = {
+        "idle": "待启动",
+        "running": "运行中",
+        "completed": "已完成",
+        "failed": "失败",
+        "stopped": "计算中止",
+    }
+    runtime_status = reliability_status_map.get(raw_status.lower(), raw_status)
     normalized_result = result or str(state.get("result_filename") or "") or OPTIMIZATION_RESULT_WORKBOOK_NAME
     latest_log = latest_log_message(state.get("logs"))
     display_status = task_display_status(runtime_status, queued)
     process_id = state.get("process_id") or ""
     if isinstance(process_id, str) and process_id.isdigit():
         process_id = int(process_id)
-    task_type_labels = {"optimization": "规划计算", "evaluation": "方案评估", "frequency": "频率计算"}
+    task_type_labels = {
+        "optimization": "规划计算",
+        "evaluation": "方案评估",
+        "frequency": "频率计算",
+        "reliability": "供电可靠性",
+    }
     task_type = task_type_labels.get(task_type_key, "未知任务")
     task_id = f"{task_type_key}::{scheme}::{normalized_result}"
     return {
@@ -6794,7 +6887,7 @@ def task_from_runtime_state(
         "elapsed_seconds": int(state.get("elapsed_seconds") or elapsed_seconds_from_times(state.get("start_time", ""), state.get("end_time", ""))),
         "latest_log": latest_log,
         "can_start": runtime_status != "运行中",
-        "can_queue": runtime_status != "运行中" and not queued,
+        "can_queue": task_type_key != "reliability" and runtime_status != "运行中" and not queued,
         "can_stop": runtime_status == "运行中",
     }
 
@@ -6885,6 +6978,18 @@ def build_task_control_response(
             state,
             scheme=state.get("scheme") or scheme,
             result=state.get("result_filename") or result,
+        )
+        tasks = build_task_list(current_user=current_user)
+        return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
+    if task_type_key == "reliability":
+        ensure_planning_scheme_manage_access(scheme, current_user)
+        selected = normalize_reliability_source_filename(scheme, result, require_exists=bool(result))
+        state = RELIABILITY_RUNTIME.apply(normalized_action, scheme=scheme, filename=selected)
+        task = task_from_runtime_state(
+            "reliability",
+            state,
+            scheme=state.get("scheme") or scheme,
+            result=state.get("result_filename") or selected,
         )
         tasks = build_task_list(current_user=current_user)
         return {"ok": True, "task": task_from_list_or_default(tasks, task), "tasks": tasks}
@@ -6995,6 +7100,8 @@ def normalize_task_type_key(value: str) -> str:
         return "evaluation"
     if text in {"frequency", "freq", "频率计算"}:
         return "frequency"
+    if text in {"reliability", "rel", "供电可靠性", "可靠性评估"}:
+        return "reliability"
     return ""
 
 
@@ -9525,6 +9632,27 @@ def handle_planning_api_path(
                 f"{name}.zip",
                 "application/zip",
             )
+        if path.startswith(f"{prefix}/") and path.endswith("/precheck") and method == "GET":
+            name = unquote(path[len(prefix) + 1 : -len("/precheck")])
+            name = ensure_planning_scheme_access(name, current_user)
+            scheme_payload = PLANNING_STORE.read_scheme(name)
+            errors: list[str] = []
+            warnings: list[str] = []
+            for item in scheme_payload.get("validation") or []:
+                if not isinstance(item, dict):
+                    continue
+                msg = str(item.get("message") or "").strip()
+                if not msg:
+                    continue
+                if item.get("level") == "error":
+                    errors.append(msg)
+                else:
+                    warnings.append(msg)
+            try:
+                calculation_precheck.validate_optimization_fast_feasibility(scheme_payload)
+            except ValueError as exc:
+                errors.append(str(exc))
+            return _json_response({"ok": len(errors) == 0, "scheme": name, "errors": errors, "warnings": warnings})
         if path.startswith(f"{prefix}/") and path.endswith("/overview") and method == "GET":
             name = unquote(path[len(prefix) + 1 : -len("/overview")])
             ensure_planning_scheme_access(name, current_user)
@@ -9564,6 +9692,348 @@ def handle_planning_api_path(
     except (ValueError, FileExistsError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
     return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
+
+
+SENSITIVITY_PARAMETERS: dict[str, dict[str, str]] = {
+    "load_scale": {"label": "负荷缩放系数", "short": "load", "unit": "倍"},
+    "wind_scale": {"label": "风速缩放系数", "short": "wind", "unit": "倍"},
+    "solar_scale": {"label": "辐照缩放系数", "short": "solar", "unit": "倍"},
+    "diesel_price": {"label": "柴油单价", "short": "diesel", "unit": "元/kg"},
+    "green_power_ratio_lower": {"label": "绿电占比下限", "short": "green", "unit": ""},
+    "storage_cost_scale": {"label": "储能造价系数", "short": "besscost", "unit": "倍"},
+}
+
+
+def _sensitivity_value_tag(value: float) -> str:
+    text = f"{value:.4f}".rstrip("0").rstrip(".")
+    return text.replace("-", "m").replace(".", "p")
+
+
+def _apply_sensitivity_value(payload: dict, parameter_key: str, value: float) -> dict:
+    updated = deepcopy(payload)
+    if parameter_key in {"load_scale", "wind_scale", "solar_scale"}:
+        field_map = {"load_scale": "load", "wind_scale": "wind_speed", "solar_scale": "solar_irradiance"}
+        field = field_map[parameter_key]
+        scale = max(0.0, float(value))
+        for row in updated.get("time_series") or []:
+            if isinstance(row, dict) and row.get(field) not in ("", None):
+                try:
+                    row[field] = round(max(0.0, float(row[field]) * scale), 4)
+                except (TypeError, ValueError):
+                    pass
+    elif parameter_key == "diesel_price":
+        pp_list = updated.get("planning_parameters")
+        if isinstance(pp_list, list) and pp_list and isinstance(pp_list[0], dict):
+            pp_list[0]["diesel_price"] = max(0.0, float(value))
+        elif isinstance(pp_list, dict):
+            pp_list["diesel_price"] = max(0.0, float(value))
+    elif parameter_key == "green_power_ratio_lower":
+        ratio = float(value) / 100.0 if float(value) > 1.0 else float(value)
+        ratio = min(1.0, max(0.0, ratio))
+        pp_list = updated.get("planning_parameters")
+        if isinstance(pp_list, list) and pp_list and isinstance(pp_list[0], dict):
+            pp_list[0]["green_power_ratio_lower"] = round(ratio, 4)
+        elif isinstance(pp_list, dict):
+            pp_list["green_power_ratio_lower"] = round(ratio, 4)
+    elif parameter_key == "storage_cost_scale":
+        scale = max(0.0, float(value))
+        for key in ("storage_pcs", "storage_battery_packs"):
+            for row in updated.get(key) or []:
+                if isinstance(row, dict) and row.get("cost") not in ("", None):
+                    try:
+                        row["cost"] = round(max(0.0, float(row["cost"]) * scale), 4)
+                    except (TypeError, ValueError):
+                        pass
+    return updated
+
+
+def _extract_table_metric_map(rows: list[dict]) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("指标") or row.get("label") or "").strip()
+        if label:
+            result[label] = row
+    return result
+
+
+def handle_sensitivity_generate(body: bytes, current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    try:
+        req = json.loads(body.decode("utf-8") or "{}")
+        base_scheme = str(req.get("base_scheme") or "").strip()
+        parameter_key = str(req.get("parameter_key") or "").strip()
+        raw_values = req.get("values")
+        prefix = str(req.get("prefix") or "").strip()
+        auto_queue = bool(req.get("auto_queue", True))
+        if not base_scheme:
+            raise ValueError("请选择基准方案")
+        if parameter_key not in SENSITIVITY_PARAMETERS:
+            raise ValueError("不支持的敏感性扫描参数")
+        if not isinstance(raw_values, list) or not raw_values:
+            raise ValueError("请至少提供一个扫描参数值")
+        values: list[float] = []
+        for item in raw_values[:12]:
+            num = float(item)
+            if not math.isfinite(num):
+                raise ValueError("扫描参数值必须为有效数字")
+            if num not in values:
+                values.append(num)
+        if not values:
+            raise ValueError("扫描参数值不能为空")
+        base_scheme = ensure_planning_scheme_access(base_scheme, current_user)
+        base_payload = PLANNING_STORE.read_scheme(base_scheme)
+        param_meta = SENSITIVITY_PARAMETERS[parameter_key]
+        clean_prefix = re.sub(r"[^\w\u4e00-\u9fff-]+", "_", prefix or f"{base_scheme}_sweep")
+        owner = str((current_user or {}).get("username") or "").strip()
+        created_items: list[dict] = []
+        for val in values:
+            target_name = f"{clean_prefix}_{param_meta['short']}_{_sensitivity_value_tag(val)}"
+            target_name = planning_store.validate_scheme_name(target_name)
+            if target_name == base_scheme:
+                target_name = f"{target_name}_case"
+            mutated = _apply_sensitivity_value(base_payload, parameter_key, val)
+            mutated["scheme"] = target_name
+            PLANNING_STORE.write_scheme(target_name, mutated)
+            if owner and hasattr(USER_STORE, "set_scheme_owner"):
+                try:
+                    USER_STORE.set_scheme_owner(target_name, owner)
+                except Exception:
+                    pass
+            queued = False
+            if auto_queue:
+                TASK_SCHEDULER.enqueue("optimization", target_name, OPTIMIZATION_RESULT_WORKBOOK_NAME)
+                queued = True
+            created_items.append(
+                {
+                    "scheme": target_name,
+                    "parameter_key": parameter_key,
+                    "parameter_label": param_meta["label"],
+                    "parameter_value": val,
+                    "queued": queued,
+                }
+            )
+        if auto_queue:
+            TASK_SCHEDULER.schedule_next_if_idle()
+        return _json_response(
+            {
+                "ok": True,
+                "base_scheme": base_scheme,
+                "parameter_key": parameter_key,
+                "parameter_label": param_meta["label"],
+                "items": created_items,
+                "message": f"已生成 {len(created_items)} 个情景方案" + ("并加入求解队列" if auto_queue else ""),
+            }
+        )
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+
+def handle_sensitivity_cleanup(body: bytes, current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    try:
+        req = json.loads(body.decode("utf-8") or "{}")
+        schemes = req.get("schemes")
+        if not isinstance(schemes, list) or not schemes:
+            raise ValueError("请提供要清理的情景方案列表")
+        deleted: list[str] = []
+        skipped: list[dict] = []
+        for raw in schemes[:24]:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            try:
+                name = ensure_planning_scheme_manage_access(name, current_user)
+                rt = OPTIMIZATION_RUNTIME.runtimes().get(name)
+                if rt and rt.status == "运行中":
+                    skipped.append({"scheme": name, "reason": "运行中"})
+                    continue
+                TASK_SCHEDULER.remove("optimization", name, OPTIMIZATION_RESULT_WORKBOOK_NAME)
+                PLANNING_STORE.delete_scheme(name)
+                deleted.append(name)
+            except Exception as exc:
+                skipped.append({"scheme": name, "reason": str(exc)})
+        return _json_response({"ok": True, "deleted": deleted, "skipped": skipped})
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+
+def _extract_planning_and_annual_rows(results: dict) -> tuple[list[dict], list[dict]]:
+    planning_rows: list[dict] = []
+    annual_rows: list[dict] = []
+    for tbl in results.get("overview_tables") or []:
+        if not isinstance(tbl, dict):
+            continue
+        title = str(tbl.get("title") or "")
+        rows = tbl.get("rows") if isinstance(tbl.get("rows"), list) else []
+        if "规划结果" in title and not planning_rows:
+            planning_rows = rows
+        elif rows and not annual_rows:
+            annual_rows = rows
+    return planning_rows, annual_rows
+
+
+def handle_sensitivity_summary(query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    params = parse_qs(query)
+    raw_schemes = params.get("schemes", [""])[0]
+    scheme_names = [s.strip() for s in raw_schemes.split(",") if s.strip()][:24]
+    rows: list[dict] = []
+    for name in scheme_names:
+        try:
+            clean = ensure_planning_scheme_access(name, current_user)
+        except Exception:
+            continue
+        rt = OPTIMIZATION_RUNTIME.runtimes().get(clean)
+        runtime_status = rt.status if rt else "待启动"
+        queued = TASK_SCHEDULER.is_queued("optimization", clean, OPTIMIZATION_RESULT_WORKBOOK_NAME)
+        display_status = task_display_status(runtime_status, queued)
+        res_path = optimization_result_workbook_path(clean)
+        row: dict[str, object] = {
+            "scheme": clean,
+            "status": display_status,
+            "has_result": res_path.exists(),
+            "lcoe": None,
+            "annual_cost": None,
+            "green_ratio": None,
+            "curtail_rate": None,
+            "diesel_fuel": None,
+            "freq_min": None,
+            "freq_max": None,
+            "reliability_pct": None,
+            "capacity_summary": "",
+        }
+        if res_path.exists():
+            try:
+                disp = read_result_workbook_display_payload(res_path, include_hourly_curves=False)
+                results = disp.get("results") if isinstance(disp.get("results"), dict) else {}
+                plan_rows, annual_rows = _extract_planning_and_annual_rows(results)
+                merged_econ = [*annual_rows, *(results.get("green_table") or [])]
+                green_map = _extract_table_metric_map(merged_econ)
+                safety_map = _extract_table_metric_map(results.get("safety_table") or [])
+                if display_status == "未计算":
+                    row["status"] = "完成计算"
+                for k_out, candidates in (
+                    ("lcoe", ("综合度电成本", "度电成本")),
+                    ("annual_cost", ("年均总成本", "年化总成本", "总年化成本", "年总成本")),
+                    ("green_ratio", ("绿电占比", "绿色电量占比", "新能源供电占比", "新能源占比")),
+                    ("curtail_rate", ("新能源弃电率", "弃电率")),
+                    ("diesel_fuel", ("柴发年耗油量", "柴油年消耗量", "年耗油量", "柴油消耗")),
+                ):
+                    for cand in candidates:
+                        for mk, mv in green_map.items():
+                            if cand in mk:
+                                try:
+                                    val_num = float(str(mv.get("数值", "")).replace("%", "").strip())
+                                    if k_out in ("green_ratio", "curtail_rate") and 0.0 < val_num <= 1.0 and "%" not in str(mv.get("单位", "")):
+                                        val_num *= 100.0
+                                    row[k_out] = round(val_num, 4)
+                                except (TypeError, ValueError):
+                                    pass
+                                break
+                        if row[k_out] is not None:
+                            break
+                for k_out, cand in (("freq_min", "最低频率"), ("freq_max", "最高频率")):
+                    for mk, mv in safety_map.items():
+                        if cand in mk:
+                            try:
+                                row[k_out] = float(str(mv.get("数值", "")).strip())
+                            except (TypeError, ValueError):
+                                pass
+                            break
+                cap_parts = []
+                for pr in plan_rows:
+                    if not isinstance(pr, dict):
+                        continue
+                    dtype = str(pr.get("设备类型") or "").strip()
+                    total = pr.get("总容量")
+                    unit = str(pr.get("单位") or "").strip()
+                    if dtype and total not in ("", None, 0, "0", 0.0):
+                        cap_parts.append(f"{dtype}:{total}{unit}")
+                row["capacity_summary"] = " / ".join(cap_parts[:5])
+            except Exception:
+                pass
+            rel_rows = read_comparison_reliability_rows(clean, OPTIMIZATION_RESULT_WORKBOOK_NAME)
+            for rr in rel_rows:
+                if rr.get("指标") == "供电可靠率":
+                    row["reliability_pct"] = rr.get("数值")
+                    break
+        rows.append(row)
+    return _json_response({"ok": True, "rows": rows})
+
+
+def handle_report_summary(query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    params = parse_qs(query)
+    scheme = str(params.get("scheme", [""])[0] or "").strip()
+    filename = str(params.get("filename", [""])[0] or "").strip()
+    if not scheme:
+        return _json_response({"error": "bad_request", "message": "请指定方案名称"}, HTTPStatus.BAD_REQUEST)
+    try:
+        clean = ensure_planning_scheme_access(scheme, current_user)
+        result_files = list_evaluation_result_files(clean)
+        selected_file = selected_evaluation_result_filename(clean, filename) if result_files else ""
+        scheme_payload = PLANNING_STORE.read_scheme(clean)
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except ValueError as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    ts_rows = scheme_payload.get("time_series") or []
+    loads = [float(r.get("load") or 0.0) for r in ts_rows if isinstance(r, dict)]
+    winds = [float(r.get("wind_speed") or 0.0) for r in ts_rows if isinstance(r, dict)]
+    solars = [float(r.get("solar_irradiance") or 0.0) for r in ts_rows if isinstance(r, dict)]
+    site_summary = {
+        "scheme": clean,
+        "hours": len(ts_rows),
+        "peak_load_kw": round(max(loads), 2) if loads else 0.0,
+        "avg_load_kw": round(sum(loads) / len(loads), 2) if loads else 0.0,
+        "annual_load_mwh": round(sum(loads) / 1000.0, 2) if loads else 0.0,
+        "avg_wind_ms": round(sum(winds) / len(winds), 2) if winds else 0.0,
+        "avg_solar_wm2": round(sum(solars) / len(solars), 2) if solars else 0.0,
+    }
+
+    planning_table: list[dict] = []
+    green_table: list[dict] = []
+    safety_table: list[dict] = []
+    monthly_curve: list[dict] = []
+    reliability_rows: list[dict] = []
+    has_result = False
+    if selected_file:
+        res_path = evaluation_result_path(clean, selected_file)
+        if res_path.exists():
+            has_result = True
+            disp = read_result_workbook_display_payload(res_path, include_hourly_curves=False)
+            results = disp.get("results") if isinstance(disp.get("results"), dict) else {}
+            planning_table, annual_rows = _extract_planning_and_annual_rows(results)
+            seen_labels: set[str] = set()
+            for r in [*annual_rows, *(results.get("green_table") or [])]:
+                if not isinstance(r, dict):
+                    continue
+                lb = str(r.get("指标") or "").strip()
+                if lb and lb not in seen_labels:
+                    seen_labels.add(lb)
+                    green_table.append(r)
+            safety_table = results.get("safety_table") or []
+            curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
+            monthly_curve = curves.get("green_monthly") or []
+            reliability_rows = read_comparison_reliability_rows(clean, selected_file)
+
+    return _json_response(
+        {
+            "ok": True,
+            "scheme": clean,
+            "filename": selected_file,
+            "result_files": [{"name": item["name"], "readable": item.get("readable", True)} for item in result_files],
+            "has_result": has_result,
+            "generated_at": _now_text(),
+            "site_summary": site_summary,
+            "planning_table": planning_table,
+            "green_table": green_table,
+            "safety_table": safety_table,
+            "monthly_curve": monthly_curve,
+            "reliability_rows": reliability_rows,
+        }
+    )
 
 
 def handle_api_path(path: str, query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
@@ -9641,6 +10111,10 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves)
         cache_key = _runtime_status_wire_cache_key("optimization_status", scheme, "", include_hourly_curves, payload)
         return _cached_json_response(cache_key, lambda: payload)
+    if path == "/api/sensitivity/summary":
+        return handle_sensitivity_summary(query, current_user=current_user)
+    if path == "/api/report/summary":
+        return handle_report_summary(query, current_user=current_user)
     snapshot = build_snapshot()
     routes = {
         "/api/health": {"ok": True, "timestamp": snapshot["timestamp"]},
@@ -9741,6 +10215,10 @@ def handle_control_path(
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
         return _json_response({"ok": True, "state": state})
+    if path == "/api/sensitivity/generate":
+        return handle_sensitivity_generate(body, current_user=current_user)
+    if path == "/api/sensitivity/cleanup":
+        return handle_sensitivity_cleanup(body, current_user=current_user)
     if path == "/api/tasks/control":
         try:
             payload = json.loads(body.decode("utf-8") or "{}")
@@ -9781,6 +10259,25 @@ def safe_api_call(handler) -> tuple[int, dict[str, str], bytes]:
             {"error": "internal_error", "message": f"后台处理失败: {exc}"},
             HTTPStatus.INTERNAL_SERVER_ERROR,
         )
+
+
+ALLOWED_ROOT_HTML_PAGES = frozenset(
+    {
+        "index.html",
+        "planning.html",
+        "optimize.html",
+        "evaluation.html",
+        "reliability.html",
+        "frequency.html",
+        "comparison.html",
+        "tasks.html",
+        "users.html",
+        "login.html",
+        "register.html",
+        "sensitivity.html",
+        "report.html",
+    }
+)
 
 
 def resolve_static_path(request_path: str) -> Path:
@@ -9837,6 +10334,9 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             return
 
         if path.suffix == ".html":
+            if path.parent == WEB_ROOT and path.name not in ALLOWED_ROOT_HTML_PAGES:
+                self._send_text(HTTPStatus.NOT_FOUND, "Not Found")
+                return
             current_user = self._current_user()
             public_pages = {"login.html", "register.html"}
             if path.name not in public_pages and not current_user:
