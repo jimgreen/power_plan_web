@@ -5,23 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20261125-ui-refactor">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261125-ui-refactor">
-  <script src="assets/ui-kit.js?v=20261125-ui-refactor"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261125-home-v6">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261125-home-v6">
+  <script src="assets/ui-kit.js?v=20261125-home-v6"></script>
 </head>
 <body class="home-page">
-  <header class="topbar">
-    <a class="brand" href="index.html">考察站风-光-氢-储-柴联合规划系统</a>
-    <nav class="main-nav" aria-label="主功能导航">
-      <a class="active" href="index.html">系统首页</a>
-      <a href="planning.html">参数维护</a>
-      <a href="optimize.html">规划求解</a>
-      <a href="evaluation.html">方案评估</a>
-      <a href="reliability.html">供电可靠性</a>
-      <a href="frequency.html">频率计算</a>
-      <a href="comparison.html">结果对比</a>
-      <a href="tasks.html">任务并发</a>
-    </nav>
+  <div class="home-backdrop" aria-hidden="true">
+    <img class="home-backdrop-img" src="assets/qinling-hero.jpg?v=20261125-home-v6" alt="" draggable="false">
+    <div class="home-backdrop-vignette"></div>
+  </div>
+  <header class="topbar home-topbar">
+    <a class="brand home-brand" href="index.html">考察站风-光-氢-储-柴联合规划系统</a>
     <div class="user-status" data-auth-user hidden>
       <strong data-auth-username></strong><em data-auth-role></em>
       <a href="users.html" data-admin-only hidden>用户管理</a>
@@ -29,148 +23,209 @@
     </div>
   </header>
 
-  <main class="home-main" aria-label="考察站风-光-氢-储-柴联合规划系统首页">
-    <div class="home-container">
-      <section class="home-hero-bar">
-        <h1 class="home-hero-title">考察站风-光-氢-储-柴联合规划系统</h1>
-        <div class="home-hero-meta">
-          <span class="home-pill"><span class="home-pill-dot" aria-hidden="true"></span><span>运行正常</span></span>
-          <span class="home-pill">MILP · 8760h</span>
+  <main class="home-portal" aria-label="考察站风-光-氢-储-柴联合规划系统首页">
+    <div class="home-portal-inner">
+      <!-- 顶部场景氛围 Hero 横幅：与下方 4 列网格严格左右齐平 -->
+      <section class="home-hero-banner">
+        <div class="home-hero-content">
+          <div class="home-energy-pills" aria-label="多能互补源荷">
+            <span class="energy-chip"><i class="dot-wind"></i>风电</span>
+            <span class="energy-chip"><i class="dot-solar"></i>光伏</span>
+            <span class="energy-chip"><i class="dot-h2"></i>氢能</span>
+            <span class="energy-chip"><i class="dot-bess"></i>储能</span>
+            <span class="energy-chip"><i class="dot-diesel"></i>柴发</span>
+          </div>
+          <h1 class="home-portal-title">考察站风-光-氢-储-柴联合规划系统</h1>
+          <div class="home-portal-stats" aria-label="系统实时统计">
+            <span class="home-stat"><strong id="homeSchemeCount">—</strong><span>方案</span></span>
+            <span class="home-stat-sep" aria-hidden="true">·</span>
+            <span class="home-stat"><strong id="homeResultCount">—</strong><span>结果</span></span>
+            <span class="home-stat-sep" aria-hidden="true">·</span>
+            <span class="home-stat"><strong id="homeRunningCount">0</strong><span>运行中</span></span>
+            <span class="home-stat-sep" aria-hidden="true">·</span>
+            <span class="home-stat"><strong>8760h</strong><span>全时序联合 MILP</span></span>
+          </div>
+        </div>
+        <div class="home-hero-actions">
+          <a href="planning.html" class="secondary home-secondary-cta">参数维护</a>
+          <a href="optimize.html" class="primary home-portal-cta">
+            <span>进入规划求解</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+          </a>
         </div>
       </section>
 
-      <nav class="bento-grid" aria-label="规划功能快捷入口">
-        <a class="bento-card bento-featured" href="planning.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <line x1="4" y1="6" x2="20" y2="6"></line>
-                <line x1="4" y1="12" x2="20" y2="12"></line>
-                <line x1="4" y1="18" x2="20" y2="18"></line>
-                <circle cx="9" cy="6" r="2"></circle>
-                <circle cx="15" cy="12" r="2"></circle>
-                <circle cx="11" cy="18" r="2"></circle>
-              </svg>
+      <!-- 严格 4 列对齐网格：上排 2+1+1，下排 1+1+1+1，横平竖直、色彩丰富有层次 -->
+      <nav class="home-portal-grid" aria-label="主功能导航">
+        <!-- 唯一主焦卡片（跨 2 列 + 精致多能互补波形装饰） -->
+        <a class="portal-card portal-card-primary" href="optimize.html" data-tone="blue">
+          <svg class="portal-sparkline" viewBox="0 0 360 120" preserveAspectRatio="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="homeWaveFill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="currentColor" stop-opacity="0.22"></stop>
+                <stop offset="100%" stop-color="currentColor" stop-opacity="0.0"></stop>
+              </linearGradient>
+            </defs>
+            <path d="M0 86 Q 45 48, 90 62 T 180 42 T 270 54 T 360 24 L 360 120 L 0 120 Z" fill="url(#homeWaveFill)"></path>
+            <path d="M0 86 Q 45 48, 90 62 T 180 42 T 270 54 T 360 24" fill="none" stroke="currentColor" stroke-width="2" stroke-opacity="0.65"></path>
+            <path d="M0 98 Q 60 76, 120 82 T 240 66 T 360 58" fill="none" stroke="var(--ok)" stroke-width="1.4" stroke-dasharray="4 4" stroke-opacity="0.55"></path>
+          </svg>
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-badge">核心引擎 · MILP</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">参数维护</span>
-            <span class="bento-card-tag">8760h 时序 / 设备 / 约束</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">规划求解</div>
+            <div class="portal-card-desc">联合 MILP 容量配置与 8760h 运行优化</div>
           </div>
         </a>
 
-        <a class="bento-card bento-featured" href="optimize.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <polygon points="6 4 20 12 6 20 6 4"></polygon>
-              </svg>
+        <a class="portal-card" href="planning.html" data-tone="teal">
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="18" x2="20" y2="18"></line><circle cx="9" cy="6" r="2"></circle><circle cx="15" cy="12" r="2"></circle><circle cx="11" cy="18" r="2"></circle></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-metric-pill" id="cardSchemePill">—</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">规划求解</span>
-            <span class="bento-card-tag">联合 MILP 容量与运行优化</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">参数维护</div>
+            <div class="portal-card-desc">时序数据 / 设备 / 约束</div>
           </div>
         </a>
 
-        <a class="bento-card" href="evaluation.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="8" y1="13" x2="16" y2="13"></line>
-                <line x1="8" y1="17" x2="13" y2="17"></line>
-              </svg>
+        <a class="portal-card" href="evaluation.html" data-tone="amber">
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="13" y2="17"></line></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-metric-pill" id="cardResultPill">—</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">方案评估</span>
-            <span class="bento-card-tag">经济性 / 绿电 / 安全复核</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">方案评估</div>
+            <div class="portal-card-desc">经济性 / 绿电 / 安全复核</div>
           </div>
         </a>
 
-        <a class="bento-card" href="reliability.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-                <polyline points="8.5 12 11 14.5 15.5 9.5"></polyline>
-              </svg>
+        <!-- 第 2 行：4 列等宽，与第 1 行竖向边界完全对齐 -->
+        <a class="portal-card portal-card-secondary" href="reliability.html" data-tone="emerald">
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="8.5 12 11 14.5 15.5 9.5"></polyline></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-tag">N-1 / MC</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">供电可靠性</span>
-            <span class="bento-card-tag">N-1 压力与序贯蒙特卡洛</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">供电可靠性</div>
+            <div class="portal-card-desc">N-1 与蒙特卡洛校核</div>
           </div>
         </a>
 
-        <a class="bento-card" href="frequency.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <polyline points="2 12 6 12 9 4 13 20 16 12 22 12"></polyline>
-              </svg>
+        <a class="portal-card portal-card-secondary" href="frequency.html" data-tone="violet">
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><polyline points="2 12 6 12 9 4 13 20 16 12 22 12"></polyline></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-tag">50Hz</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">频率计算</span>
-            <span class="bento-card-tag">惯量 / 调频 / 分时动态曲线</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">频率计算</div>
+            <div class="portal-card-desc">惯量 / RoCoF / 分时曲线</div>
           </div>
         </a>
 
-        <a class="bento-card" href="comparison.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <rect x="3" y="4" width="7" height="16" rx="1"></rect>
-                <rect x="14" y="4" width="7" height="16" rx="1"></rect>
-              </svg>
+        <a class="portal-card portal-card-secondary" href="comparison.html" data-tone="cyan">
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="7" height="16" rx="1"></rect><rect x="14" y="4" width="7" height="16" rx="1"></rect></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-tag">MULTI</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">结果对比</span>
-            <span class="bento-card-tag">多方案指标与年度柱图对比</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">结果对比</div>
+            <div class="portal-card-desc">多方案指标与柱图对比</div>
           </div>
         </a>
 
-        <a class="bento-card" href="tasks.html">
-          <div class="bento-card-head">
-            <span class="bento-icon-wrap" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-                <line x1="7" y1="9" x2="17" y2="9"></line>
-                <line x1="7" y1="13" x2="13" y2="13"></line>
-                <line x1="7" y1="17" x2="15" y2="17"></line>
-              </svg>
+        <a class="portal-card portal-card-secondary" href="tasks.html" data-tone="orange">
+          <div class="portal-card-top">
+            <span class="portal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="7" y1="9" x2="17" y2="9"></line><line x1="7" y1="13" x2="13" y2="13"></line><line x1="7" y1="17" x2="15" y2="17"></line></svg>
             </span>
-            <svg class="bento-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg>
+            <span class="portal-metric-pill" id="cardTaskPill">0 运行</span>
           </div>
-          <div class="bento-card-body">
-            <span class="bento-card-title">任务并发</span>
-            <span class="bento-card-tag">并发队列与进程实时监控</span>
+          <div class="portal-card-bottom">
+            <div class="portal-card-title">任务并发</div>
+            <div class="portal-card-desc">计算队列与进程监控</div>
           </div>
         </a>
       </nav>
 
-      <footer class="home-status-strip">
-        <div class="home-status-items">
-          <span class="home-status-item"><span>功能模块</span><strong>7</strong></span>
-          <span class="home-status-item"><span>支持主题</span><strong>5</strong></span>
-          <span class="home-status-item"><span>支持语言</span><strong>ZH / EN / RU</strong></span>
+      <!-- 底部单行最近方案胶囊条：与上方 4 列网格严格同宽对齐 -->
+      <section class="home-recent-bar" aria-label="最近方案">
+        <span class="home-recent-label">最近方案</span>
+        <div id="homeRecentSchemes" class="home-recent-chips">
+          <span class="home-recent-empty">—</span>
         </div>
-        <span>Power Plan Web</span>
-      </footer>
+        <a href="planning.html" class="home-recent-all">全部方案 →</a>
+      </section>
     </div>
   </main>
 
-  <script src="assets/i18n.js?v=20261125-ui-refactor"></script>
-  <script src="assets/auth.js?v=20261125-ui-refactor"></script>
+  <script src="assets/i18n.js?v=20261125-home-v6"></script>
+  <script src="assets/auth.js?v=20261125-home-v6"></script>
+  <script src="assets/page_state.js?v=20260530-page-state2"></script>
+  <script>
+    (() => {
+      const escapeHtml = (value) =>
+        String(value ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch]);
+
+      async function loadSummary() {
+        const [schemesRes, tasksRes] = await Promise.all([
+          fetch("/api/planning/schemes", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+          fetch("/api/tasks", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+        ]);
+        const schemes = Array.isArray(schemesRes.schemes)
+          ? schemesRes.schemes.filter((s) => s && s.has_workbook !== false).sort((a, b) => Number(b.modified_at || 0) - Number(a.modified_at || 0))
+          : [];
+        const tasks = Array.isArray(tasksRes.tasks) ? tasksRes.tasks : [];
+        const resultCount = tasks.filter((t) => t.task_type_key === "evaluation").length;
+        const runningCount = tasks.filter((t) => /计算中|运行/.test(String(t.status || ""))).length;
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
+
+        set("homeSchemeCount", schemes.length);
+        set("homeResultCount", resultCount);
+        set("homeRunningCount", runningCount);
+        set("cardSchemePill", `${schemes.length} 方案`);
+        set("cardResultPill", `${resultCount} 结果`);
+        set("cardTaskPill", `${runningCount} 运行`);
+
+        const chipsHost = document.getElementById("homeRecentSchemes");
+        if (chipsHost) {
+          if (!schemes.length) {
+            chipsHost.innerHTML = '<span class="home-recent-empty">—</span>';
+          } else {
+            chipsHost.innerHTML = schemes
+              .slice(0, 5)
+              .map((item) => `<button type="button" class="recent-scheme-chip" data-scheme="${escapeHtml(item.name)}" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</button>`)
+              .join("");
+          }
+        }
+      }
+
+      document.getElementById("homeRecentSchemes")?.addEventListener("click", (event) => {
+        const btn = event.target.closest("button[data-scheme]");
+        if (!btn) return;
+        try {
+          window.PowerPlanPageState?.patch?.("planning", { scheme: btn.dataset.scheme });
+        } catch (_) {}
+        window.location.href = "planning.html";
+      });
+
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", loadSummary);
+      else loadSummary();
+    })();
+  </script>
 </body>
 </html>
