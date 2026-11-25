@@ -981,6 +981,92 @@
       return;
     }
 
+    if (pageKey === "comparison.html") {
+      const board = document.querySelector(".comparison-curve-board");
+      if (!board || board.querySelector(".sidebar-splitter")) return;
+      const defaultW = 220;
+      const minW = 150;
+      const maxW = 380;
+      const savedBoard = readLayout();
+      let curW = Number.isFinite(Number(savedBoard.width)) ? Math.min(maxW, Math.max(minW, Number(savedBoard.width))) : defaultW;
+      let isCollapsed = Boolean(savedBoard.collapsed);
+
+      const boardSplitter = document.createElement("div");
+      boardSplitter.className = "sidebar-splitter";
+      boardSplitter.setAttribute("role", "separator");
+      boardSplitter.setAttribute("tabindex", "0");
+      boardSplitter.setAttribute("aria-orientation", "vertical");
+      boardSplitter.setAttribute("aria-label", tr("调整曲线列表宽度，双击重置"));
+
+      const boardToggle = createToggleButton(isCollapsed);
+      boardSplitter.appendChild(boardToggle);
+      board.classList.add("has-curve-sidebar-splitter");
+      board.appendChild(boardSplitter);
+
+      const applyBoard = (nextW, nextCollapsed, persist = true) => {
+        curW = Math.min(maxW, Math.max(minW, Math.round(nextW)));
+        isCollapsed = Boolean(nextCollapsed);
+        board.style.setProperty("--curve-sidebar-width", `${curW}px`);
+        board.classList.toggle("is-sidebar-collapsed", isCollapsed);
+        boardSplitter.setAttribute("aria-valuenow", String(isCollapsed ? 0 : curW));
+        boardToggle._syncCollapsed(isCollapsed);
+        if (persist) writeLayout({ width: curW, collapsed: isCollapsed });
+        triggerResize();
+      };
+
+      applyBoard(curW, isCollapsed, false);
+
+      boardToggle.addEventListener("pointerdown", (e) => e.stopPropagation());
+      boardToggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        applyBoard(curW, !isCollapsed, true);
+      });
+      boardSplitter.addEventListener("dblclick", (e) => {
+        if (e.target.closest(".sidebar-splitter-toggle")) return;
+        applyBoard(isCollapsed ? curW : defaultW, false, true);
+      });
+      boardSplitter.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || event.target.closest(".sidebar-splitter-toggle")) return;
+        event.preventDefault();
+        const bRect = board.getBoundingClientRect();
+        const bPad = parseFloat(getComputedStyle(board).paddingLeft) || 12;
+        boardSplitter.classList.add("is-dragging");
+        document.body.classList.add("is-sidebar-resizing");
+        try {
+          boardSplitter.setPointerCapture(event.pointerId);
+        } catch (_) {}
+
+        let liveW = curW;
+        let liveC = isCollapsed;
+        const onMove = (moveEvent) => {
+          const raw = moveEvent.clientX - bRect.left - bPad;
+          if (raw < 96) {
+            liveC = true;
+            board.classList.add("is-sidebar-collapsed");
+            boardToggle._syncCollapsed(true);
+          } else {
+            liveC = false;
+            liveW = Math.min(maxW, Math.max(minW, Math.round(raw)));
+            board.classList.remove("is-sidebar-collapsed");
+            board.style.setProperty("--curve-sidebar-width", `${liveW}px`);
+            boardToggle._syncCollapsed(false);
+          }
+        };
+        const onUp = () => {
+          boardSplitter.classList.remove("is-dragging");
+          document.body.classList.remove("is-sidebar-resizing");
+          boardSplitter.removeEventListener("pointermove", onMove);
+          boardSplitter.removeEventListener("pointerup", onUp);
+          boardSplitter.removeEventListener("pointercancel", onUp);
+          applyBoard(liveW, liveC, true);
+        };
+        boardSplitter.addEventListener("pointermove", onMove);
+        boardSplitter.addEventListener("pointerup", onUp);
+        boardSplitter.addEventListener("pointercancel", onUp);
+      });
+      return;
+    }
+
     // 模式 B：planning / optimize / reliability / sensitivity 统一注入可拖拽 + 可收起纵向分割条
     let workspace = null;
     let defaultWidth = 236;

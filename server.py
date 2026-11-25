@@ -7494,6 +7494,17 @@ class _WireResponseCache:
                 self._by_key.move_to_end(key)
         return stored
 
+    def size(self) -> int:
+        with self._lock:
+            return len(self._by_key)
+
+    def clear(self) -> int:
+        with self._lock:
+            count = len(self._by_key)
+            self._by_key.clear()
+            self._by_raw_id.clear()
+            return count
+
 
 WIRE_JSON_RESPONSE_CACHE = _WireResponseCache(max_entries=24)
 
@@ -10036,6 +10047,97 @@ def handle_report_summary(query: str = "", current_user: dict | None = None) -> 
     )
 
 
+def _admin_cache_registry() -> list[tuple[str, str, object]]:
+    return [
+        ("wire_json_response", "响应序列化/Gzip缓存", WIRE_JSON_RESPONSE_CACHE),
+        ("static_file_bytes", "静态文件字节缓存", STATIC_FILE_BYTES_CACHE),
+        ("result_display_payload", "结果展示缓存", RESULT_DISPLAY_PAYLOAD_CACHE),
+        ("comparison_workbook", "对比工作簿缓存", COMPARISON_WORKBOOK_CACHE),
+        ("comparison_curve_slice", "对比曲线切片缓存", COMPARISON_CURVE_SLICE_CACHE),
+        ("evaluation_planning_result", "评估规划表缓存", EVALUATION_PLANNING_RESULT_CACHE),
+        ("result_workbook_health", "结果文件健康缓存", RESULT_WORKBOOK_HEALTH_CACHE),
+        ("task_result_file_list", "任务结果列表缓存", TASK_RESULT_FILE_LIST_CACHE),
+        ("load_curve_templates", "负荷模板缓存", LOAD_CURVE_TEMPLATE_CACHE),
+        ("dashboard_csv_rows", "CSV 读取缓存", CSV_ROWS_CACHE),
+    ]
+
+
+def _cache_entry_count(cache_obj: object) -> tuple[int, int]:
+    if isinstance(cache_obj, _WireResponseCache):
+        return cache_obj.size(), cache_obj._max_entries
+    lock = getattr(cache_obj, "_lock", None)
+    entries = getattr(cache_obj, "_entries", None)
+    max_entries = int(getattr(cache_obj, "max_entries", 0) or 0)
+    if entries is not None:
+        if lock is not None:
+            with lock:
+                return len(entries), max_entries
+        return len(entries), max_entries
+    return 0, max_entries
+
+
+def handle_admin_system_status(current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    if not current_user or current_user.get("role") != "admin":
+        return _json_response({"error": "forbidden", "message": "仅管理员可访问系统诊断"}, HTTPStatus.FORBIDDEN)
+    caps = milp_solver.solver_capabilities()
+    solvers_raw = caps.get("solvers") if isinstance(caps.get("solvers"), dict) else {}
+    solver_rows = [
+        {
+            "key": key,
+            "label": str(info.get("label") or key),
+            "native": bool(info.get("native")),
+            "cvxpy": bool(info.get("cvxpy")),
+        }
+        for key, info in solvers_raw.items()
+        if isinstance(info, dict)
+    ]
+    cache_rows = []
+    total_cached = 0
+    for key, label, obj in _admin_cache_registry():
+        cnt, cap = _cache_entry_count(obj)
+        total_cached += cnt
+        cache_rows.append({"key": key, "label": label, "entries": cnt, "max_entries": cap})
+    tasks = build_task_list(schedule=False, current_user=current_user)
+    running_cnt = sum(1 for t in tasks if t.get("status") == "计算中")
+    queued_cnt = sum(1 for t in tasks if t.get("queued") or t.get("status") == "排队中")
+    schemes_cnt = len(safe_list_schemes_for_tasks(current_user))
+    return _json_response(
+        {
+            "ok": True,
+            "timestamp": _now_text(),
+            "environment": {
+                "python_version": sys.version.split()[0],
+                "cpu_count": os.cpu_count() or 1,
+                "schemes_count": schemes_cnt,
+                "running_tasks": running_cnt,
+                "queued_tasks": queued_cnt,
+                "total_cached_entries": total_cached,
+                "default_interface": caps.get("default_interface", ""),
+                "cvxpy_version": (caps.get("interfaces") or {}).get("cvxpy", {}).get("version", ""),
+            },
+            "solvers": solver_rows,
+            "caches": cache_rows,
+        }
+    )
+
+
+def handle_admin_clear_caches(current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    if not current_user or current_user.get("role") != "admin":
+        return _json_response({"error": "forbidden", "message": "仅管理员可清理缓存"}, HTTPStatus.FORBIDDEN)
+    cleared_total = 0
+    for _, _, obj in _admin_cache_registry():
+        before, _ = _cache_entry_count(obj)
+        cleared_total += before
+        clear_fn = getattr(obj, "clear", None)
+        if callable(clear_fn):
+            clear_fn()
+    status_code, headers, body = handle_admin_system_status(current_user=current_user)
+    payload = json.loads(body.decode("utf-8"))
+    payload["cleared_entries"] = cleared_total
+    payload["message"] = f"已清空 {cleared_total} 条只读缓存"
+    return _json_response(payload, status=status_code)
+
+
 def handle_api_path(path: str, query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
     parsed_api_path = urlparse(path)
     if parsed_api_path.query and not query:
@@ -10111,6 +10213,8 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves)
         cache_key = _runtime_status_wire_cache_key("optimization_status", scheme, "", include_hourly_curves, payload)
         return _cached_json_response(cache_key, lambda: payload)
+    if path == "/api/admin/system-status":
+        return handle_admin_system_status(current_user=current_user)
     if path == "/api/sensitivity/summary":
         return handle_sensitivity_summary(query, current_user=current_user)
     if path == "/api/report/summary":
@@ -10215,6 +10319,8 @@ def handle_control_path(
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
         return _json_response({"ok": True, "state": state})
+    if path == "/api/admin/clear-caches":
+        return handle_admin_clear_caches(current_user=current_user)
     if path == "/api/sensitivity/generate":
         return handle_sensitivity_generate(body, current_user=current_user)
     if path == "/api/sensitivity/cleanup":

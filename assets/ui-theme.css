@@ -4139,6 +4139,207 @@ html[data-theme] .evaluation-main-resize-handle.is-dragging::before {
   width: 3px !important;
 }
 
+/* 全站残留浅色图表与摘要卡片深浅主题统一（彻底消除暗色模式白底块） */
+html[data-theme] .green-chart-card,
+html[data-theme] .safety-chart-card,
+html[data-theme] .annual-comparison-card,
+html[data-theme] .histogram-panel,
+html[data-theme] .mini-bar-chart,
+html[data-theme] .overview-item {
+  background: var(--bg-surface) !important;
+  border: var(--border) !important;
+  border-radius: calc(var(--radius-card) - 2px) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme] .overview-item span,
+html[data-theme] .histogram-head span,
+html[data-theme] .histogram-meta,
+html[data-theme] .green-chart-legend,
+html[data-theme] .safety-chart-legend,
+html[data-theme] .annual-comparison-head,
+html[data-theme] .annual-comparison-subtitle {
+  color: var(--text-secondary) !important;
+}
+
+html[data-theme] .overview-item strong,
+html[data-theme] .histogram-head strong,
+html[data-theme] .annual-comparison-head strong {
+  color: var(--text-primary) !important;
+}
+
+html[data-theme] .annual-line-point {
+  fill: var(--bg-surface) !important;
+}
+
+html[data-theme] .green-chart-legend button,
+html[data-theme] .safety-chart-legend button {
+  background: var(--bg-elevated) !important;
+  border: 1px solid var(--border-strong) !important;
+  color: var(--text-primary) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme] .green-chart-legend button.is-hidden,
+html[data-theme] .safety-chart-legend button.is-hidden {
+  opacity: 0.45 !important;
+  color: var(--text-muted) !important;
+}
+
+/* 用户管理页单列全宽铺满，避免继承 .workspace > .editor-panel { grid-column: 2 } 导致左侧留白 */
+body .workspace.user-management-workspace {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body .workspace.user-management-workspace > .editor-panel {
+  grid-column: 1 !important;
+  grid-row: 1 / -1 !important;
+}
+
+/* 结果对比页下方曲线板：左侧曲线名列表支持纵向拖拽调宽与一键隐藏/展开 */
+body .comparison-curve-board.has-curve-sidebar-splitter {
+  grid-template-columns: minmax(0, var(--curve-sidebar-width, 220px)) 10px minmax(0, 1fr) !important;
+  column-gap: 4px !important;
+}
+
+body .comparison-curve-board.has-curve-sidebar-splitter > .comparison-curve-list-panel {
+  grid-column: 1 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+}
+
+body .comparison-curve-board.has-curve-sidebar-splitter > .sidebar-splitter {
+  grid-column: 2 !important;
+  grid-row: 1 !important;
+}
+
+body .comparison-curve-board.has-curve-sidebar-splitter > .comparison-curve-chart-panel {
+  grid-column: 3 !important;
+  grid-row: 1 !important;
+  min-width: 0 !important;
+}
+
+body .comparison-curve-board.has-curve-sidebar-splitter.is-sidebar-collapsed {
+  grid-template-columns: 0px 14px minmax(0, 1fr) !important;
+}
+
+body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel {
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  overflow: hidden !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+}
+
+/* 用户管理页双标签（用户管理 | 系统诊断）高密度样式 */
+.admin-tabs-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-tab-btn {
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 12px !important;
+  border-radius: 6px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-surface) !important;
+  color: var(--text-secondary) !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+}
+
+.admin-tab-btn.active {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+.sys-diag-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sys-diag-panel[hidden] {
+  display: none !important;
+}
+
+.sys-diag-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sys-diag-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.sys-diag-kpi {
+  background: var(--bg-surface);
+  border: var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sys-diag-kpi span {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.sys-diag-kpi strong {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.sys-diag-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sys-diag-card {
+  background: var(--bg-surface);
+  border: var(--border);
+  border-radius: 7px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.sys-diag-card h2 {
+  margin: 0 0 8px;
+  font-size: 13px !important;
+}
+
+.sys-diag-card .data-table table {
+  min-width: 0 !important;
+  width: 100% !important;
+}
+
+.sys-badge-ok {
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.sys-badge-off {
+  color: var(--text-muted);
+}
+
 @media print {
   body, html {
     background: #FFFFFF !important;

@@ -6,8 +6,8 @@
   <title>用户管理 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="assets/planning.css?v=20260518-legend-pct6">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v7">
-  <script src="assets/ui-kit.js?v=20261126-ui-v7"></script>
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v13">
+  <script src="assets/ui-kit.js?v=20261126-ui-v13"></script>
 </head>
 <body data-admin-page="true">
   <main class="planning-shell">
@@ -32,17 +32,40 @@
     <section class="workspace user-management-workspace">
       <section class="editor-panel user-management-panel">
         <div class="editor-header">
-          <div class="panel-heading"><h1>用户管理</h1></div>
+          <div class="admin-tabs-bar" role="tablist" aria-label="系统管理切换">
+            <button type="button" class="admin-tab-btn active" data-admin-tab="users" role="tab" aria-selected="true">用户管理</button>
+            <button type="button" class="admin-tab-btn" data-admin-tab="system" role="tab" aria-selected="false">系统诊断</button>
+          </div>
           <div id="usersStatus" class="weather-import-status" role="status" aria-live="polite"></div>
         </div>
-        <section class="tab-panel active">
+        <section id="adminUsersPanel" class="tab-panel active" data-admin-panel="users">
           <div id="usersTable" class="data-table users-table"></div>
+        </section>
+        <section id="adminSystemPanel" class="sys-diag-panel" data-admin-panel="system" hidden>
+          <div class="sys-diag-toolbar">
+            <span id="sysDiagTimestamp" class="weather-import-status">—</span>
+            <div class="admin-tabs-bar">
+              <button id="sysDiagRefreshBtn" type="button">刷新状态</button>
+              <button id="sysDiagClearCacheBtn" class="danger" type="button">清空缓存</button>
+            </div>
+          </div>
+          <div id="sysDiagKpiStrip" class="sys-diag-kpi-strip"></div>
+          <div class="sys-diag-grid">
+            <div class="sys-diag-card">
+              <h2>MILP 求解器可用状态</h2>
+              <div id="sysDiagSolverTable" class="data-table"></div>
+            </div>
+            <div class="sys-diag-card">
+              <h2>只读内存与响应缓存</h2>
+              <div id="sysDiagCacheTable" class="data-table"></div>
+            </div>
+          </div>
         </section>
       </section>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20261126-ui-v2"></script>
+  <script src="assets/i18n.js?v=20261126-ui-v13"></script>
   <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/users.js?v=20260510-auth"></script>
+  <script src="assets/users.js?v=20261126-ui-v13"></script>
 </body>
 </html>
