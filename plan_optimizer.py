@@ -807,85 +807,83 @@ def solve_planning_model(model: dict[str, Any], log: LogSink | None = None) -> n
         for device in renewable_devices:
             builder.add_var(("renewable_built_indicator", device["key"], device["index"]), 0.0, 1.0, integer=True)
 
+    storage_power_upper = max(0.0, sum(device["capacity"] * device["quantity_upper"] for device in storage_pcs_devices))
+    grid_storage_power_upper = max(
+        0.0, sum(device["capacity"] * device["quantity_upper"] for device in grid_storage_pcs_devices)
+    )
+    storage_energy_upper = max(0.0, sum(device["capacity"] * device["quantity_upper"] for device in storage_battery_devices))
+    hydrogen_tank_upper = max(0.0, sum(device["capacity"] * device["quantity_upper"] for device in hydrogen_tank_devices))
+    wind_avail_per_unit = model["wind_available_per_unit"]
+    pv_avail_per_unit = model["pv_available_per_unit"]
+    diesel_obj_price_per_kw = model["diesel_objective_price"] / 1000.0
+    renewable_n1_enabled = bool(model["renewable_n_1_enabled"])
+    frequency_enabled = bool(model["frequency"]["enabled"])
+    storage_freq_reg_enabled = bool(model["frequency"]["storage_frequency_regulation_enabled"])
+    add_var = builder.add_var
+
+    diesel_var_specs = [
+        (
+            device["index"],
+            device["power_upper"] * device["quantity_upper"],
+            device["quantity_upper"],
+            device["fuel_rate"] * diesel_obj_price_per_kw,
+        )
+        for device in diesel_devices
+    ]
+    grid_wind_var_specs = [(device["index"], device["quantity_upper"]) for device in grid_forming_wind_devices]
+    grid_storage_var_specs = [
+        (device["index"], device["quantity_upper"], device["capacity"] * device["quantity_upper"])
+        for device in grid_storage_pcs_devices
+    ]
+    electrolyzer_var_specs = [
+        (device["index"], device["capacity"] * device["quantity_upper"], device["quantity_upper"])
+        for device in electrolyzer_devices
+    ]
+    fuel_cell_var_specs = [(device["index"], device["capacity"] * device["quantity_upper"]) for device in fuel_cell_devices]
+
     for hour in range(n):
-        wind_upper = sum(model["wind_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in wind_devices)
-        pv_upper = sum(model["pv_available_per_unit"][device["id"]][hour] * device["quantity_upper"] for device in pv_devices)
-        storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_pcs_devices)
-        grid_storage_power_upper = sum(device["capacity"] * device["quantity_upper"] for device in grid_storage_pcs_devices)
-        storage_energy_upper = sum(device["capacity"] * device["quantity_upper"] for device in storage_battery_devices)
-        hydrogen_tank_upper = sum(device["capacity"] * device["quantity_upper"] for device in hydrogen_tank_devices)
+        wind_upper = max(0.0, sum(wind_avail_per_unit[device["id"]][hour] * device["quantity_upper"] for device in wind_devices))
+        pv_upper = max(0.0, sum(pv_avail_per_unit[device["id"]][hour] * device["quantity_upper"] for device in pv_devices))
 
-        builder.add_var(("wind_power", hour), 0.0, max(0.0, wind_upper))
-        builder.add_var(("wind_curtailed", hour), 0.0, max(0.0, wind_upper))
-        builder.add_var(("pv_power", hour), 0.0, max(0.0, pv_upper))
-        builder.add_var(("pv_curtailed", hour), 0.0, max(0.0, pv_upper))
+        add_var(("wind_power", hour), 0.0, wind_upper)
+        add_var(("wind_curtailed", hour), 0.0, wind_upper)
+        add_var(("pv_power", hour), 0.0, pv_upper)
+        add_var(("pv_curtailed", hour), 0.0, pv_upper)
         add_renewable_hour_variables(builder, hour, renewable_devices)
-        if model["renewable_n_1_enabled"]:
+        if renewable_n1_enabled:
             add_renewable_n1_hour_variables(builder, hour, renewable_devices)
-        builder.add_var(("storage_charge", hour), 0.0, max(0.0, storage_power_upper))
-        builder.add_var(("storage_discharge", hour), 0.0, max(0.0, storage_power_upper))
+        add_var(("storage_charge", hour), 0.0, storage_power_upper)
+        add_var(("storage_discharge", hour), 0.0, storage_power_upper)
         if storage_power_upper > 0:
-            builder.add_var(("storage_charge_mode", hour), 0.0, 1.0, integer=True)
-        builder.add_var(("grid_storage_charge", hour), 0.0, max(0.0, grid_storage_power_upper))
-        builder.add_var(("grid_storage_discharge", hour), 0.0, max(0.0, grid_storage_power_upper))
-        builder.add_var(("storage_soc", hour), 0.0, max(0.0, storage_energy_upper))
-        builder.add_var(("hydrogen_storage", hour), 0.0, max(0.0, hydrogen_tank_upper))
-        builder.add_var(("unmet_load", hour), 0.0, 0.0)
+            add_var(("storage_charge_mode", hour), 0.0, 1.0, integer=True)
+        add_var(("grid_storage_charge", hour), 0.0, grid_storage_power_upper)
+        add_var(("grid_storage_discharge", hour), 0.0, grid_storage_power_upper)
+        add_var(("storage_soc", hour), 0.0, storage_energy_upper)
+        add_var(("hydrogen_storage", hour), 0.0, hydrogen_tank_upper)
+        add_var(("unmet_load", hour), 0.0, 0.0)
 
-        for device in diesel_devices:
-            builder.add_var(
-                ("diesel_power", hour, device["index"]),
-                0.0,
-                device["power_upper"] * device["quantity_upper"],
-                cost=device["fuel_rate"] * model["diesel_objective_price"] / 1000,
-            )
-            builder.add_var(
-                ("diesel_on_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
-                cost=DIESEL_ON_COUNT_PENALTY,
-            )
-        for device in grid_forming_wind_devices:
-            builder.add_var(
-                ("grid_wind_on_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
-            )
-        for device in grid_storage_pcs_devices:
-            builder.add_var(("grid_storage_on_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
-            builder.add_var(("grid_storage_up_available_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
-            builder.add_var(("grid_storage_down_available_count", hour, device["index"]), 0.0, device["quantity_upper"], integer=True)
-        for device in electrolyzer_devices:
-            builder.add_var(
-                ("electrolyzer_power", hour, device["index"]),
-                0.0,
-                device["capacity"] * device["quantity_upper"],
-            )
-            builder.add_var(
-                ("electrolyzer_on_count", hour, device["index"]),
-                0.0,
-                device["quantity_upper"],
-                integer=True,
-                cost=ELECTROLYZER_ON_COUNT_PENALTY,
-            )
-        for device in fuel_cell_devices:
-            builder.add_var(
-                ("fuel_cell_power", hour, device["index"]),
-                0.0,
-                device["capacity"] * device["quantity_upper"],
-            )
-        if model["frequency"]["enabled"]:
-            for device in diesel_devices:
-                response_upper = device["power_upper"] * device["quantity_upper"]
-                builder.add_var(("frequency_diesel_up_response", hour, device["index"]), 0.0, response_upper)
-                builder.add_var(("frequency_diesel_down_response", hour, device["index"]), 0.0, response_upper)
-            if model["frequency"]["storage_frequency_regulation_enabled"]:
-                for device in grid_storage_pcs_devices:
-                    response_upper = device["capacity"] * device["quantity_upper"]
-                    builder.add_var(("frequency_storage_up_response", hour, device["index"]), 0.0, response_upper)
-                    builder.add_var(("frequency_storage_down_response", hour, device["index"]), 0.0, response_upper)
+        for dev_idx, power_ub, qty_ub, diesel_cost in diesel_var_specs:
+            add_var(("diesel_power", hour, dev_idx), 0.0, power_ub, cost=diesel_cost)
+            add_var(("diesel_on_count", hour, dev_idx), 0.0, qty_ub, integer=True, cost=DIESEL_ON_COUNT_PENALTY)
+        for dev_idx, qty_ub in grid_wind_var_specs:
+            add_var(("grid_wind_on_count", hour, dev_idx), 0.0, qty_ub, integer=True)
+        for dev_idx, qty_ub, _ in grid_storage_var_specs:
+            add_var(("grid_storage_on_count", hour, dev_idx), 0.0, qty_ub, integer=True)
+            add_var(("grid_storage_up_available_count", hour, dev_idx), 0.0, qty_ub, integer=True)
+            add_var(("grid_storage_down_available_count", hour, dev_idx), 0.0, qty_ub, integer=True)
+        for dev_idx, power_ub, qty_ub in electrolyzer_var_specs:
+            add_var(("electrolyzer_power", hour, dev_idx), 0.0, power_ub)
+            add_var(("electrolyzer_on_count", hour, dev_idx), 0.0, qty_ub, integer=True, cost=ELECTROLYZER_ON_COUNT_PENALTY)
+        for dev_idx, power_ub in fuel_cell_var_specs:
+            add_var(("fuel_cell_power", hour, dev_idx), 0.0, power_ub)
+        if frequency_enabled:
+            for dev_idx, response_upper, _, _ in diesel_var_specs:
+                add_var(("frequency_diesel_up_response", hour, dev_idx), 0.0, response_upper)
+                add_var(("frequency_diesel_down_response", hour, dev_idx), 0.0, response_upper)
+            if storage_freq_reg_enabled:
+                for dev_idx, _, response_upper in grid_storage_var_specs:
+                    add_var(("frequency_storage_up_response", hour, dev_idx), 0.0, response_upper)
+                    add_var(("frequency_storage_down_response", hour, dev_idx), 0.0, response_upper)
 
     def qty_terms(devices: list[dict[str, Any]], coefficient_key: str = "capacity", multiplier: float = 1.0) -> dict[int, float]:
         return {

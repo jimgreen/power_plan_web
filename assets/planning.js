@@ -3530,6 +3530,61 @@ function renderAll() {
   renderSummary();
 }
 
+function buildDownsampledChartPath(rows, curveKey, x, y, plotWidth) {
+  const count = rows.length;
+  if (!count) return "";
+  const bucketCount = Math.max(200, Math.min(900, Math.round(plotWidth)));
+  if (count <= bucketCount * 2) {
+    const parts = new Array(count);
+    for (let i = 0; i < count; i += 1) {
+      parts[i] = `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(rows[i][curveKey]).toFixed(1)}`;
+    }
+    return parts.join(" ");
+  }
+  // Min-Max 极值包络分桶降采样：每个像素桶保留最小值与最大值点，视觉无损且大幅减少 SVG 顶点数
+  const parts = [`M${x(0).toFixed(1)},${y(rows[0][curveKey]).toFixed(1)}`];
+  let lastIndex = 0;
+  const innerCount = count - 2;
+  const step = innerCount / bucketCount;
+  for (let bucket = 0; bucket < bucketCount; bucket += 1) {
+    const start = 1 + Math.floor(bucket * step);
+    const end = bucket === bucketCount - 1 ? count - 1 : Math.min(count - 1, 1 + Math.floor((bucket + 1) * step));
+    if (start >= end) continue;
+    let minIdx = start;
+    let maxIdx = start;
+    let minVal = Number(rows[start][curveKey]);
+    if (!Number.isFinite(minVal)) minVal = 0;
+    let maxVal = minVal;
+    for (let i = start + 1; i < end; i += 1) {
+      const raw = Number(rows[i][curveKey]);
+      const val = Number.isFinite(raw) ? raw : 0;
+      if (val < minVal) {
+        minVal = val;
+        minIdx = i;
+      }
+      if (val > maxVal) {
+        maxVal = val;
+        maxIdx = i;
+      }
+    }
+    const firstIdx = minIdx <= maxIdx ? minIdx : maxIdx;
+    const secondIdx = minIdx <= maxIdx ? maxIdx : minIdx;
+    if (firstIdx !== lastIndex) {
+      parts.push(`L${x(firstIdx).toFixed(1)},${y(rows[firstIdx][curveKey]).toFixed(1)}`);
+      lastIndex = firstIdx;
+    }
+    if (secondIdx !== lastIndex) {
+      parts.push(`L${x(secondIdx).toFixed(1)},${y(rows[secondIdx][curveKey]).toFixed(1)}`);
+      lastIndex = secondIdx;
+    }
+  }
+  const tailIndex = count - 1;
+  if (tailIndex !== lastIndex) {
+    parts.push(`L${x(tailIndex).toFixed(1)},${y(rows[tailIndex][curveKey]).toFixed(1)}`);
+  }
+  return parts.join(" ");
+}
+
 function renderChart() {
   const svg = document.getElementById("timeChart");
   if (!state.payload) {
@@ -3541,11 +3596,11 @@ function renderChart() {
     const width = svg.clientWidth || 900;
     const height = svg.clientHeight || 320;
     svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="#5a716e" font-size="16">${state.timeSeriesLoading ? "时序数据加载中..." : "时序数据尚未加载"}</text>`;
+    svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="transparent"/><text x="${width / 2}" y="${height / 2}" text-anchor="middle" fill="var(--muted)" font-size="16">${state.timeSeriesLoading ? "时序数据加载中..." : "时序数据尚未加载"}</text>`;
     state.chartMeta = null;
     return;
   }
-  const rows = filteredTimeChartRows(state.payload.time_series || []);
+  const { rows, offset: rowOffset } = filteredTimeChartView(state.payload.time_series || []);
   const width = svg.clientWidth || 900;
   const height = svg.clientHeight || 320;
   const padLeft = 62;
@@ -3556,13 +3611,24 @@ function renderChart() {
   const plotHeight = Math.max(1, height - padTop - padBottom);
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   const [curveKey, curveTitle, color, unit] = selectedCurveSpec();
-  const values = numericValues(rows, curveKey);
-  const rawMin = values.length ? Math.min(...values) : 0;
-  const rawMax = values.length ? Math.max(...values) : 1;
+  let rawMin = Infinity;
+  let rawMax = -Infinity;
+  for (let i = 0; i < rows.length; i += 1) {
+    const number = Number(rows[i]?.[curveKey]);
+    if (Number.isFinite(number)) {
+      if (number < rawMin) rawMin = number;
+      if (number > rawMax) rawMax = number;
+    }
+  }
+  if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax)) {
+    rawMin = 0;
+    rawMax = 1;
+  }
   const minValue = rawMin === rawMax ? rawMin - 1 : rawMin;
   const maxValue = rawMin === rawMax ? rawMax + 1 : rawMax;
   const valueSpan = maxValue - minValue || 1;
-  const x = (index) => padLeft + (index / Math.max(1, rows.length - 1)) * plotWidth;
+  const denomIndex = Math.max(1, rows.length - 1);
+  const x = (index) => padLeft + (index / denomIndex) * plotWidth;
   const y = (value) => {
     const number = Number(value);
     const safeValue = Number.isFinite(number) ? number : 0;
@@ -3572,14 +3638,14 @@ function renderChart() {
   const yGrid = yTicks
     .map((value) => {
       const tickY = y(value);
-      return `<line x1="${padLeft}" x2="${width - padRight}" y1="${tickY.toFixed(1)}" y2="${tickY.toFixed(1)}" stroke="#d4e1dd"/><text x="${padLeft - 8}" y="${(tickY + 4).toFixed(1)}" text-anchor="end" fill="#5a716e" font-size="11">${escapeHtml(formatNumber(value))}</text>`;
+      return `<line x1="${padLeft}" x2="${width - padRight}" y1="${tickY.toFixed(1)}" y2="${tickY.toFixed(1)}" stroke="var(--border)" stroke-opacity="0.7"/><text x="${padLeft - 8}" y="${(tickY + 4).toFixed(1)}" text-anchor="end" fill="var(--muted)" font-size="11">${escapeHtml(formatNumber(value))}</text>`;
     })
     .join("");
-  const xTicks = timeChartXTicks(rows, x, height, padTop, plotHeight);
-  const d = rows.map((row, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(1)},${y(row[curveKey]).toFixed(1)}`).join(" ");
+  const xTicks = timeChartXTicks(rows, rowOffset, x, height, padTop, plotHeight);
+  const d = buildDownsampledChartPath(rows, curveKey, x, y, plotWidth);
   const axisTitle = `${curveTitle}${unit ? `(${unit})` : ""}`;
-  svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="transparent"/><g>${yGrid}</g><line x1="${padLeft}" x2="${width - padRight}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight}" stroke="#5a716e"/><line x1="${padLeft}" x2="${padLeft}" y1="${padTop}" y2="${padTop + plotHeight}" stroke="#5a716e"/><g>${xTicks}</g><path d="${d}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/><g id="chartCursor" class="chart-cursor" hidden><line id="chartCursorLine" x1="0" x2="0" y1="${padTop}" y2="${padTop + plotHeight}"/><circle id="chartCursorPoint" cx="0" cy="0" r="4"/></g><text x="${padLeft}" y="18" fill="#294944" font-size="13" font-weight="700">${escapeHtml(axisTitle)}</text>`;
-  state.chartMeta = { rows, curveKey, curveTitle, color, unit, padLeft, padRight, padTop, plotWidth, plotHeight, minValue, valueSpan, width, height };
+  svg.innerHTML = `<rect x="0" y="0" width="${width}" height="${height}" rx="18" fill="transparent"/><g>${yGrid}</g><line x1="${padLeft}" x2="${width - padRight}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight}" stroke="var(--muted)" stroke-opacity="0.65"/><line x1="${padLeft}" x2="${padLeft}" y1="${padTop}" y2="${padTop + plotHeight}" stroke="var(--muted)" stroke-opacity="0.65"/><g>${xTicks}</g><path d="${d}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/><g id="chartCursor" class="chart-cursor" hidden><line id="chartCursorLine" x1="0" x2="0" y1="${padTop}" y2="${padTop + plotHeight}"/><circle id="chartCursorPoint" cx="0" cy="0" r="4"/></g><text x="${padLeft}" y="18" fill="var(--ink)" font-size="13" font-weight="700">${escapeHtml(axisTitle)}</text>`;
+  state.chartMeta = { rows, rowOffset, curveKey, curveTitle, color, unit, padLeft, padRight, padTop, plotWidth, plotHeight, minValue, valueSpan, width, height };
 }
 
 function bindTimeChartRangeControls() {
@@ -3652,34 +3718,39 @@ function availableDaysInMonth(monthIndex) {
   return Array.from({ length: Math.ceil((end - start) / 24) }, (_, index) => index + 1);
 }
 
-function filteredTimeChartRows(rows) {
+function filteredTimeChartView(rows) {
   const range = normalizeTimeChartRange(state.timeChartRange);
   if (range.scope === "year") {
-    return rows.map((row, index) => ({ ...row, absoluteIndex: index }));
+    return { rows, offset: 0 };
   }
   const [, monthStart, monthEnd] = monthRanges[range.month] || monthRanges[0];
   const start = range.scope === "day" ? monthStart + (range.day - 1) * 24 : monthStart;
   const end = range.scope === "day" ? Math.min(start + 24, monthEnd) : monthEnd;
-  return rows.slice(start, end).map((row, offset) => ({ ...row, absoluteIndex: start + offset }));
+  return { rows: rows.slice(start, end), offset: start };
 }
 
-function timeChartXTicks(rows, x, height, padTop, plotHeight) {
+function filteredTimeChartRows(rows) {
+  const { rows: viewRows, offset } = filteredTimeChartView(rows);
+  return viewRows.map((row, index) => ({ ...row, absoluteIndex: offset + index }));
+}
+
+function timeChartXTicks(rows, rowOffset, x, height, padTop, plotHeight) {
   if (!rows.length) return "";
   if (state.timeChartRange.scope === "year") {
     return monthRanges
       .map(([label, start]) => {
         const tickX = x(start);
-        return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="#8ba49f"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="#5a716e" font-size="11">${label}</text>`;
+        return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="var(--muted)" stroke-opacity="0.7"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="var(--muted)" font-size="11">${label}</text>`;
       })
       .join("");
   }
   const tickCount = state.timeChartRange.scope === "day" ? 6 : 5;
   return Array.from({ length: tickCount }, (_, index) => {
     const pointIndex = Math.min(Math.round((index / Math.max(tickCount - 1, 1)) * Math.max(rows.length - 1, 0)), rows.length - 1);
-    const row = rows[pointIndex] || {};
-    const label = state.timeChartRange.scope === "day" ? `${((row.absoluteIndex || 0) % 24) + 1}时` : `第${Math.floor(pointIndex / 24) + 1}日`;
+    const absIdx = rowOffset + pointIndex;
+    const label = state.timeChartRange.scope === "day" ? `${(absIdx % 24) + 1}时` : `第${Math.floor(pointIndex / 24) + 1}日`;
     const tickX = x(pointIndex);
-    return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="#8ba49f"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="#5a716e" font-size="11">${escapeHtml(label)}</text>`;
+    return `<line x1="${tickX.toFixed(1)}" x2="${tickX.toFixed(1)}" y1="${padTop + plotHeight}" y2="${padTop + plotHeight + 5}" stroke="var(--muted)" stroke-opacity="0.7"/><text x="${tickX.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="var(--muted)" font-size="11">${escapeHtml(label)}</text>`;
   }).join("");
 }
 
@@ -3797,7 +3868,7 @@ function applyChartValueEdit(event) {
   const points = interpolatedCurveEditPoints(state.chartDrag?.lastPoint, point);
   let edited = false;
   points.forEach(({ index: pointIndex, value }) => {
-    const absoluteIndex = meta.rows[pointIndex]?.absoluteIndex ?? pointIndex;
+    const absoluteIndex = (meta.rowOffset || 0) + pointIndex;
     const row = state.payload.time_series[absoluteIndex];
     if (!row) return;
     const editedValue = roundEditedCurveValue(clampEditedCurveValue(value, meta.curveKey));

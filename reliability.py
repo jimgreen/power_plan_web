@@ -13,7 +13,10 @@ Returned payloads contain only JSON-serializable Python values.
 
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 import math
+import multiprocessing
+import os
 import random
 import statistics
 from typing import Any, Mapping, Sequence
@@ -812,7 +815,7 @@ def _tiled_profile_array(profile: Sequence[Any], horizon: int) -> np.ndarray:
 
     if profile is None or len(profile) == 0:
         return np.zeros(horizon, dtype=np.float64)
-    base = np.asarray(profile, dtype=np.float64)
+    base = profile if isinstance(profile, np.ndarray) and profile.dtype == np.float64 else np.asarray(profile, dtype=np.float64)
     length = base.shape[0]
     if length == horizon:
         return base
@@ -820,6 +823,48 @@ def _tiled_profile_array(profile: Sequence[Any], horizon: int) -> np.ndarray:
         return base[:horizon]
     reps = (horizon + length - 1) // length
     return np.tile(base, reps)[:horizon]
+
+
+_CASE_PROFILE_CACHE: dict[tuple[int, int, int, Any, Any], tuple[np.ndarray, dict[str, np.ndarray]]] = {}
+
+
+def _compiled_case_profiles(
+    case: Mapping[str, Any],
+    horizon: int,
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """缓存 case 在指定 horizon 下的负荷与风光单机出力数组，避免重复 numeric/asarray 转换。"""
+
+    raw_load = case.get("load_kw", [])
+    load_len = len(raw_load)
+    cache_key = (
+        id(case),
+        horizon,
+        load_len,
+        raw_load[0] if load_len else None,
+        raw_load[-1] if load_len else None,
+    )
+    cached = _CASE_PROFILE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    try:
+        base_load_raw = np.asarray(raw_load, dtype=np.float64)
+        base_load = np.where(np.isfinite(base_load_raw), np.maximum(0.0, base_load_raw), 0.0)
+    except (TypeError, ValueError):
+        base_load = np.maximum(0.0, np.asarray([numeric(value, 0.0) for value in raw_load], dtype=np.float64))
+    load_arr = _tiled_profile_array(base_load, horizon)
+    group_profiles: dict[str, np.ndarray] = {}
+    for group in case.get("groups", []):
+        dtype = group.get("device_type")
+        if dtype in {"wind", "pv"}:
+            group_profiles[str(group["id"])] = _tiled_profile_array(
+                group.get("available_power_per_unit_kw") or (0.0,),
+                horizon,
+            )
+    if len(_CASE_PROFILE_CACHE) >= 32:
+        _CASE_PROFILE_CACHE.clear()
+    result = (load_arr, group_profiles)
+    _CASE_PROFILE_CACHE[cache_key] = result
+    return result
 
 
 def dispatch_hourly(
@@ -842,10 +887,9 @@ def dispatch_hourly(
     """
 
     raw_load = case.get("load_kw", [])
-    if not raw_load:
+    if raw_load is None or len(raw_load) == 0:
         raise ValueError("可靠性case缺少load_kw时序")
-    base_load = np.maximum(0.0, np.asarray([numeric(value, 0.0) for value in raw_load], dtype=np.float64))
-    load_len = int(base_load.shape[0])
+    load_len = len(raw_load)
     horizon = load_len if hours is None else non_negative_int(hours, field_name="调度小时数")
     if horizon <= 0:
         raise ValueError("调度小时数必须大于0")
@@ -866,7 +910,7 @@ def dispatch_hourly(
     specs = normalize_availability(case, availability, horizon)
 
     # 1. NumPy 预计算整年各小时可用台数、风光出力、柴发容量与 PCS 充放电能力/效率
-    load_arr = _tiled_profile_array(base_load, horizon)
+    load_arr, group_profiles = _compiled_case_profiles(case, horizon)
     wind_arr = np.zeros(horizon, dtype=np.float64)
     pv_arr = np.zeros(horizon, dtype=np.float64)
     diesel_cap_arr = np.zeros(horizon, dtype=np.float64)
@@ -885,10 +929,14 @@ def dispatch_hourly(
         available_unit_hours[group_id] = float(counts_arr.sum()) * dt
         dtype = group.get("device_type")
         if dtype == "wind":
-            prof = _tiled_profile_array(group.get("available_power_per_unit_kw") or (0.0,), horizon)
+            prof = group_profiles.get(group_id)
+            if prof is None:
+                prof = _tiled_profile_array(group.get("available_power_per_unit_kw") or (0.0,), horizon)
             wind_arr += counts_arr * prof
         elif dtype == "pv":
-            prof = _tiled_profile_array(group.get("available_power_per_unit_kw") or (0.0,), horizon)
+            prof = group_profiles.get(group_id)
+            if prof is None:
+                prof = _tiled_profile_array(group.get("available_power_per_unit_kw") or (0.0,), horizon)
             pv_arr += counts_arr * prof
         elif dtype == "diesel":
             unit_cap = float(group.get("unit_capacity_kw", 0.0))
@@ -1410,6 +1458,136 @@ def annualized_sample(summary: Mapping[str, Any], factor: float, year: int, year
     }
 
 
+_MC_WORKER_CASE: Mapping[str, Any] | None = None
+_DEFAULT_SAMPLE_FLEET_AVAILABILITY = sample_fleet_availability
+_DEFAULT_DISPATCH_HOURLY = dispatch_hourly
+
+
+def _init_mc_worker(case: Mapping[str, Any]) -> None:
+    """初始化蒙特卡洛子进程共享的只读 case。"""
+
+    global _MC_WORKER_CASE
+    _MC_WORKER_CASE = case
+
+
+def _run_monte_carlo_batch(
+    case: Mapping[str, Any],
+    year_pairs: list[tuple[int, int]],
+    horizon: int,
+    initial_state: str,
+    annualization_factor: float,
+    calculate_contributions: bool,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, float]], dict[str, dict[str, list[float]]]]:
+    """按确定性 year_seed 列表执行一批序贯蒙特卡洛年份仿真。"""
+
+    dt = numeric(case.get("time_step_hours"), 1.0)
+    groups = list(case.get("groups", []))
+    samples: list[dict[str, Any]] = []
+    contribution_samples: dict[str, dict[str, list[float]]] = {
+        str(group["id"]): {"ens": [], "lole": []} for group in groups
+    }
+    observed_stats: dict[str, dict[str, float]] = {
+        str(group["id"]): {"available_unit_hours": 0.0, "duration_hours": 0.0}
+        for group in groups
+    }
+    duration_step = horizon * dt
+
+    for year_number, year_seed in year_pairs:
+        availability = sample_fleet_availability(
+            case,
+            horizon,
+            seed=year_seed,
+            initial_state=initial_state,
+        )
+        result = dispatch_hourly(case, availability, hours=horizon, include_hourly=False)
+        sample = annualized_sample(result["summary"], annualization_factor, year_number, year_seed)
+        samples.append(sample)
+        for item in result["availability_stats"]:
+            device_id = str(item["device_id"])
+            observed_stats[device_id]["available_unit_hours"] += float(item["available_unit_hours"])
+            observed_stats[device_id]["duration_hours"] += duration_step
+
+        if calculate_contributions and result["summary"]["ens_kwh"] > NUMERIC_EPSILON:
+            unavail_by_id = {
+                str(item["device_id"]): float(item["observed_unavailability"])
+                for item in result["availability_stats"]
+            }
+            for group in groups:
+                device_id = str(group["id"])
+                if (
+                    int(group.get("unit_count", 0)) <= 0
+                    or float(group.get("forced_outage_rate", 0.0)) <= 0.0
+                    or unavail_by_id.get(device_id, 0.0) <= NUMERIC_EPSILON
+                ):
+                    contribution_samples[device_id]["ens"].append(0.0)
+                    contribution_samples[device_id]["lole"].append(0.0)
+                    continue
+                counterfactual = dict(availability)
+                counterfactual.pop(device_id, None)
+                perfect_result = dispatch_hourly(case, counterfactual, hours=horizon, include_hourly=False)["summary"]
+                contribution_samples[device_id]["ens"].append(
+                    max(0.0, float(result["summary"]["ens_kwh"]) - float(perfect_result["ens_kwh"]))
+                    * annualization_factor
+                )
+                contribution_samples[device_id]["lole"].append(
+                    max(0.0, float(result["summary"]["lole_hours"]) - float(perfect_result["lole_hours"]))
+                    * annualization_factor
+                )
+        elif calculate_contributions:
+            for group in groups:
+                device_id = str(group["id"])
+                contribution_samples[device_id]["ens"].append(0.0)
+                contribution_samples[device_id]["lole"].append(0.0)
+
+    return samples, observed_stats, contribution_samples
+
+
+def _run_monte_carlo_worker_batch(
+    task: tuple[list[tuple[int, int]], int, str, float, bool],
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, float]], dict[str, dict[str, list[float]]]]:
+    """进程池工作函数：复用初始化阶段传入的 case。"""
+
+    year_pairs, horizon, initial_state, annualization_factor, calculate_contributions = task
+    assert _MC_WORKER_CASE is not None
+    return _run_monte_carlo_batch(
+        _MC_WORKER_CASE,
+        year_pairs,
+        horizon,
+        initial_state,
+        annualization_factor,
+        calculate_contributions,
+    )
+
+
+def _monte_carlo_worker_count(years: int, horizon: int) -> int:
+    """根据计算量与平台启动成本决定并行工作进程数，不满足条件返回 1（单核）。"""
+
+    if sample_fleet_availability is not _DEFAULT_SAMPLE_FLEET_AVAILABILITY:
+        return 1
+    if dispatch_hourly is not _DEFAULT_DISPATCH_HOURLY:
+        return 1
+    env_raw = str(os.environ.get("POWER_PLAN_RELIABILITY_WORKERS", "")).strip()
+    if env_raw == "1":
+        return 1
+    is_windows = os.name == "nt"
+    min_years = 200 if is_windows else 80
+    if years < min_years or years * horizon < min_years * 8760:
+        return 1
+    try:
+        if multiprocessing.current_process().daemon:
+            return 1
+    except Exception:
+        return 1
+    cpu_count = os.cpu_count() or 1
+    if cpu_count < 2:
+        return 1
+    default_cap = 4 if is_windows else 8
+    cap = min(default_cap, cpu_count)
+    if env_raw.isdigit() and int(env_raw) >= 1:
+        cap = min(cpu_count, int(env_raw))
+    return max(1, min(cap, years // 40))
+
+
 def run_sequential_monte_carlo(
     case: Mapping[str, Any],
     *,
@@ -1457,63 +1635,59 @@ def run_sequential_monte_carlo(
         else truthy(config.get("include_device_contributions"), True)
     )
     annualization_factor = HOURS_PER_CALENDAR_YEAR / (horizon * numeric(case.get("time_step_hours"), 1.0))
+    initial_state = str(config.get("initial_availability") or "stationary")
     master = random.Random(master_seed)
-    samples: list[dict[str, Any]] = []
-    contribution_samples: dict[str, dict[str, list[float]]] = {
-        str(group["id"]): {"ens": [], "lole": []} for group in case.get("groups", [])
-    }
-    observed_stats: dict[str, dict[str, float]] = {
-        str(group["id"]): {"available_unit_hours": 0.0, "duration_hours": 0.0}
-        for group in case.get("groups", [])
-    }
+    year_pairs = [(year_index + 1, master.getrandbits(63)) for year_index in range(years)]
 
-    for year_index in range(years):
-        year_seed = master.getrandbits(63)
-        availability = sample_fleet_availability(
+    workers = _monte_carlo_worker_count(years, horizon)
+    batch_results: list[tuple[list[dict[str, Any]], dict[str, dict[str, float]], dict[str, dict[str, list[float]]]]] | None = None
+    if workers > 1:
+        chunk_count = min(years, workers * 2)
+        base_size, remainder = divmod(years, chunk_count)
+        tasks = []
+        offset = 0
+        for idx in range(chunk_count):
+            size = base_size + (1 if idx < remainder else 0)
+            if size <= 0:
+                continue
+            tasks.append((year_pairs[offset : offset + size], horizon, initial_state, annualization_factor, calculate_contributions))
+            offset += size
+        try:
+            with ProcessPoolExecutor(
+                max_workers=workers,
+                initializer=_init_mc_worker,
+                initargs=(case,),
+            ) as executor:
+                batch_results = list(executor.map(_run_monte_carlo_worker_batch, tasks))
+        except Exception:
+            batch_results = None
+
+    if batch_results is None:
+        samples, observed_stats, contribution_samples = _run_monte_carlo_batch(
             case,
+            year_pairs,
             horizon,
-            seed=year_seed,
-            initial_state=str(config.get("initial_availability") or "stationary"),
+            initial_state,
+            annualization_factor,
+            calculate_contributions,
         )
-        result = dispatch_hourly(case, availability, hours=horizon, include_hourly=False)
-        sample = annualized_sample(result["summary"], annualization_factor, year_index + 1, year_seed)
-        samples.append(sample)
-        for item in result["availability_stats"]:
-            device_id = str(item["device_id"])
-            observed_stats[device_id]["available_unit_hours"] += float(item["available_unit_hours"])
-            observed_stats[device_id]["duration_hours"] += horizon * numeric(case.get("time_step_hours"), 1.0)
-
-        if calculate_contributions and result["summary"]["ens_kwh"] > NUMERIC_EPSILON:
-            unavail_by_id = {
-                str(item["device_id"]): float(item["observed_unavailability"])
-                for item in result["availability_stats"]
-            }
-            for group in case.get("groups", []):
-                device_id = str(group["id"])
-                if (
-                    int(group.get("unit_count", 0)) <= 0
-                    or float(group.get("forced_outage_rate", 0.0)) <= 0.0
-                    or unavail_by_id.get(device_id, 0.0) <= NUMERIC_EPSILON
-                ):
-                    contribution_samples[device_id]["ens"].append(0.0)
-                    contribution_samples[device_id]["lole"].append(0.0)
-                    continue
-                counterfactual = dict(availability)
-                counterfactual.pop(device_id, None)
-                perfect_result = dispatch_hourly(case, counterfactual, hours=horizon, include_hourly=False)["summary"]
-                contribution_samples[device_id]["ens"].append(
-                    max(0.0, float(result["summary"]["ens_kwh"]) - float(perfect_result["ens_kwh"]))
-                    * annualization_factor
-                )
-                contribution_samples[device_id]["lole"].append(
-                    max(0.0, float(result["summary"]["lole_hours"]) - float(perfect_result["lole_hours"]))
-                    * annualization_factor
-                )
-        elif calculate_contributions:
-            for group in case.get("groups", []):
-                device_id = str(group["id"])
-                contribution_samples[device_id]["ens"].append(0.0)
-                contribution_samples[device_id]["lole"].append(0.0)
+    else:
+        samples = []
+        contribution_samples = {
+            str(group["id"]): {"ens": [], "lole": []} for group in case.get("groups", [])
+        }
+        observed_stats = {
+            str(group["id"]): {"available_unit_hours": 0.0, "duration_hours": 0.0}
+            for group in case.get("groups", [])
+        }
+        for batch_samples, batch_observed, batch_contrib in batch_results:
+            samples.extend(batch_samples)
+            for device_id, stats_item in batch_observed.items():
+                observed_stats[device_id]["available_unit_hours"] += stats_item["available_unit_hours"]
+                observed_stats[device_id]["duration_hours"] += stats_item["duration_hours"]
+            for device_id, contrib_item in batch_contrib.items():
+                contribution_samples[device_id]["ens"].extend(contrib_item["ens"])
+                contribution_samples[device_id]["lole"].extend(contrib_item["lole"])
 
     ens_values = [float(sample["ens_kwh_per_year"]) for sample in samples]
     lole_values = [float(sample["lole_hours_per_year"]) for sample in samples]

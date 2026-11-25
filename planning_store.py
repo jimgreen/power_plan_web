@@ -1004,9 +1004,15 @@ class PlanningStore:
         self.write_scheme(clean, payload)
 
 
-def build_workbook(payload: dict[str, Any], include_keys: list[str] | None = None) -> Workbook:
-    workbook = Workbook()
-    workbook.remove(workbook.active)
+def build_workbook(
+    payload: dict[str, Any],
+    include_keys: list[str] | None = None,
+    *,
+    write_only: bool = False,
+) -> Workbook:
+    workbook = Workbook(write_only=write_only)
+    if not write_only and workbook.active is not None:
+        workbook.remove(workbook.active)
     selected_keys = set(include_keys) if include_keys is not None else set(SHEET_SPECS)
     for key, (sheet_name, headers) in SHEET_SPECS.items():
         if key not in selected_keys:
@@ -1016,13 +1022,14 @@ def build_workbook(payload: dict[str, Any], include_keys: list[str] | None = Non
         rows = payload.get(key, default_rows_for_key(key))
         if key == "planning_parameters" and isinstance(rows, dict):
             rows = [rows]
+        defaults = [field_default_for_key(key, header, "") for header in headers]
         for row in rows:
-            sheet.append([row.get(header, field_default_for_key(key, header, "")) for header in headers])
+            sheet.append([row.get(header, default) for header, default in zip(headers, defaults)])
     return workbook
 
 
 def build_time_series_workbook(payload: dict[str, Any]) -> Workbook:
-    return build_workbook(payload, include_keys=["time_series"])
+    return build_workbook(payload, include_keys=["time_series"], write_only=True)
 
 
 def time_series_workbook_path_from_parameter_path(path: Path) -> Path:

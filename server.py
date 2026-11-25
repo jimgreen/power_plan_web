@@ -26,6 +26,7 @@ import time
 import traceback
 import zlib
 from copy import deepcopy
+from collections import OrderedDict
 from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
@@ -77,6 +78,7 @@ from urllib.parse import parse_qs, quote, urlencode, unquote, urlparse
 from urllib.request import urlopen
 from zipfile import BadZipFile
 
+import numpy as np
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -146,6 +148,10 @@ TASK_RESULT_FILE_LIST_CACHE = file_cache.FileCache("task_result_file_list", max_
 FREQUENCY_CURVE_DURATION_SECONDS = 3.0
 FREQUENCY_CURVE_STEP_SECONDS = 0.05
 FREQUENCY_CURVE_POINT_COUNT = int(round(FREQUENCY_CURVE_DURATION_SECONDS / FREQUENCY_CURVE_STEP_SECONDS)) + 1
+FREQUENCY_CURVE_TIMES_NP = np.arange(FREQUENCY_CURVE_POINT_COUNT, dtype=np.float64) * FREQUENCY_CURVE_STEP_SECONDS
+FREQUENCY_CURVE_POINT_HEADERS = tuple(
+    f"f_{index * FREQUENCY_CURVE_STEP_SECONDS:.2f}s" for index in range(FREQUENCY_CURVE_POINT_COUNT)
+)
 COMPARISON_CURVE_GROUPS = {
     "hourly": {"title": "小时级曲线", "sheet": "调度结果", "limit": 8760},
     "daily": {"title": "日级统计", "sheet": "供能日曲线", "limit": None},
@@ -1491,8 +1497,7 @@ def build_optimization_results_workbook(payload: dict, include_curves: bool = Fa
 
 
 def build_result_curves_workbook(payload: dict) -> Workbook:
-    workbook = Workbook()
-    workbook.remove(workbook.active)
+    workbook = Workbook(write_only=True)
     append_result_curve_sheets(workbook, payload)
     return workbook
 
@@ -1655,7 +1660,8 @@ def append_rows_sheet(
     for row in normalized_rows:
         if isinstance(row, dict):
             sheet.append([row.get(key, "") for key in header_keys])
-    style_result_sheet(sheet)
+    if not getattr(workbook, "write_only", False):
+        style_result_sheet(sheet)
 
 
 def keys_from_rows(rows: list[dict]) -> list[str]:
@@ -5520,7 +5526,7 @@ class ReliabilityRuntime:
                         target_parameters,
                         str(PLANNING_STORE.root),
                     ),
-                    daemon=True,
+                    daemon=False,
                 )
                 self._process.start()
                 self.process_id = self._process.pid
@@ -6348,8 +6354,13 @@ def frequency_curve_output_row(base: dict, curve_type: str, disturbance_mw: floa
     row = dict(base)
     row["curve_type"] = curve_type
     row["disturbance_mw"] = round(disturbance_mw, 4)
-    for index, value in enumerate(points):
-        row[frequency_curve_point_header(index)] = round(value, 5)
+    headers = FREQUENCY_CURVE_POINT_HEADERS
+    if len(points) == len(headers):
+        for header, value in zip(headers, points):
+            row[header] = round(value, 5)
+    else:
+        for index, value in enumerate(points):
+            row[frequency_curve_point_header(index)] = round(value, 5)
     return row
 
 
@@ -6361,51 +6372,48 @@ def frequency_response_curve_points(
     delta_p_mw: float,
     nominal_frequency_hz: float,
 ) -> list[float]:
-    times = [index * FREQUENCY_CURVE_STEP_SECONDS for index in range(FREQUENCY_CURVE_POINT_COUNT)]
+    """向量化计算二阶系统频率响应离散时间曲线。"""
+    nominal_rounded = round(float(nominal_frequency_hz), 5)
     if m_eq <= plan_optimizer.FREQUENCY_EPS or t_d <= plan_optimizer.FREQUENCY_EPS:
-        return [round(float(nominal_frequency_hz), 5) for _ in times]
+        return [nominal_rounded] * FREQUENCY_CURVE_POINT_COUNT
     denom = d_eq + k_eq / (2.0 * math.pi)
     if denom <= plan_optimizer.FREQUENCY_EPS:
-        return [round(float(nominal_frequency_hz), 5) for _ in times]
+        return [nominal_rounded] * FREQUENCY_CURVE_POINT_COUNT
     omega_ss = -delta_p_mw / denom
     alpha, beta = plan_optimizer.second_order_coefficients(m_eq, k_eq, d_eq, t_d)
     if beta <= plan_optimizer.FREQUENCY_EPS:
-        return [round(float(nominal_frequency_hz), 5) for _ in times]
+        return [nominal_rounded] * FREQUENCY_CURVE_POINT_COUNT
     disc = alpha**2 - 4.0 * beta
-    omega_values: list[float] = []
+    times = FREQUENCY_CURVE_TIMES_NP
     if disc < -plan_optimizer.FREQUENCY_EPS:
         omega_n = math.sqrt(beta)
         zeta = alpha / (2.0 * omega_n)
         omega_d_sq = beta * (1.0 - zeta**2)
         if omega_d_sq <= plan_optimizer.FREQUENCY_EPS:
-            return [round(float(nominal_frequency_hz), 5) for _ in times]
+            return [nominal_rounded] * FREQUENCY_CURVE_POINT_COUNT
         omega_d = math.sqrt(omega_d_sq)
         a = -omega_ss
         b = (-delta_p_mw / m_eq + zeta * omega_n * a) / omega_d
-        omega_values = [
-            omega_ss
-            + math.exp(-zeta * omega_n * t) * (a * math.cos(omega_d * t) + b * math.sin(omega_d * t))
-            for t in times
-        ]
+        phase = omega_d * times
+        omega_arr = omega_ss + np.exp((-zeta * omega_n) * times) * (a * np.cos(phase) + b * np.sin(phase))
     elif disc > plan_optimizer.FREQUENCY_EPS:
         sqrt_disc = math.sqrt(disc)
         lam1 = -0.5 * alpha + 0.5 * sqrt_disc
         lam2 = -0.5 * alpha - 0.5 * sqrt_disc
         denom_lam = lam1 - lam2
         if abs(denom_lam) <= plan_optimizer.FREQUENCY_EPS:
-            return [round(float(nominal_frequency_hz), 5) for _ in times]
+            return [nominal_rounded] * FREQUENCY_CURVE_POINT_COUNT
         c1 = (-delta_p_mw / m_eq + omega_ss * lam2) / denom_lam
         c2 = -omega_ss - c1
-        omega_values = [omega_ss + c1 * math.exp(lam1 * t) + c2 * math.exp(lam2 * t) for t in times]
+        omega_arr = omega_ss + c1 * np.exp(lam1 * times) + c2 * np.exp(lam2 * times)
     else:
         lam = -0.5 * alpha
         c1 = -omega_ss
         c2 = -delta_p_mw / m_eq + lam * omega_ss
-        omega_values = [omega_ss + (c1 + c2 * t) * math.exp(lam * t) for t in times]
-    return [
-        round(float(nominal_frequency_hz) + (value if math.isfinite(value) else 0.0) / (2.0 * math.pi), 5)
-        for value in omega_values
-    ]
+        omega_arr = omega_ss + (c1 + c2 * times) * np.exp(lam * times)
+    safe_omega = np.where(np.isfinite(omega_arr), omega_arr, 0.0)
+    freq_arr = np.round(float(nominal_frequency_hz) + safe_omega / (2.0 * math.pi), 5)
+    return freq_arr.tolist()
 
 
 def frequency_metrics_from_rows(safety_table: list[dict], safety_daily: list[dict]) -> list[dict]:
@@ -7328,6 +7336,169 @@ def build_snapshot(force_reload: bool = False) -> dict:
     return DATA_SOURCE.snapshot(force_reload=force_reload)
 
 
+class _WireResponseCache:
+    """线程安全的有界 JSON 字节与 Gzip 预压缩响应缓存。"""
+
+    def __init__(self, max_entries: int = 24) -> None:
+        self._max_entries = max(4, int(max_entries))
+        self._lock = threading.Lock()
+        self._by_key: OrderedDict[tuple, list] = OrderedDict()
+        self._by_raw_id: dict[int, tuple] = {}
+
+    def get_or_encode(self, key: tuple, payload_factory) -> bytes:
+        with self._lock:
+            entry = self._by_key.get(key)
+            if entry is not None:
+                self._by_key.move_to_end(key)
+                return entry[0]
+        payload = payload_factory()
+        raw_bytes = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        with self._lock:
+            existing = self._by_key.get(key)
+            if existing is not None:
+                self._by_key.move_to_end(key)
+                return existing[0]
+            self._by_key[key] = [raw_bytes, None]
+            self._by_raw_id[id(raw_bytes)] = key
+            while len(self._by_key) > self._max_entries:
+                _, evicted = self._by_key.popitem(last=False)
+                self._by_raw_id.pop(id(evicted[0]), None)
+        return raw_bytes
+
+    def get_or_compress_gzip(self, body: bytes) -> bytes | None:
+        with self._lock:
+            key = self._by_raw_id.get(id(body))
+            if key is None:
+                return None
+            entry = self._by_key.get(key)
+            if entry is None or entry[0] is not body:
+                return None
+            cached_gzip = entry[1]
+            if cached_gzip is not None:
+                self._by_key.move_to_end(key)
+                return cached_gzip
+        compressor = zlib.compressobj(level=3, wbits=16 + zlib.MAX_WBITS)
+        compressed = compressor.compress(body) + compressor.flush()
+        stored = compressed if len(compressed) < len(body) else b""
+        with self._lock:
+            entry = self._by_key.get(key)
+            if entry is not None and entry[0] is body:
+                entry[1] = stored
+                self._by_key.move_to_end(key)
+        return stored
+
+
+WIRE_JSON_RESPONSE_CACHE = _WireResponseCache(max_entries=24)
+
+
+def _path_stat_sig(path: Path | str | None) -> tuple[int, int] | None:
+    if not path:
+        return None
+    try:
+        st = Path(path).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _scheme_wire_cache_key(kind: str, name: str) -> tuple | None:
+    try:
+        param_path = PLANNING_STORE.workbook_path(name)
+    except ValueError:
+        return None
+    param_sig = _path_stat_sig(param_path)
+    if param_sig is None:
+        return None
+    ts_path = PLANNING_STORE.time_series_workbook_path(name)
+    sqlite_path = planning_store.time_series_sqlite_path_from_parameter_path(param_path)
+    return (kind, str(param_path), param_sig, _path_stat_sig(ts_path), _path_stat_sig(sqlite_path))
+
+
+def _runtime_status_wire_cache_key(
+    endpoint: str,
+    scheme: str,
+    filename: str,
+    include_hourly_curves: bool,
+    payload: dict,
+) -> tuple | None:
+    if not isinstance(payload, dict) or payload.get("status") == "运行中":
+        return None
+    # 仅对含大量曲线/8760行的非运行态快照启用响应字节缓存
+    results_obj = payload.get("results")
+    freq_rows = payload.get("frequency_8760_table")
+    has_heavy_body = (
+        (isinstance(results_obj, dict) and bool(results_obj))
+        or (isinstance(freq_rows, list) and len(freq_rows) > 100)
+    )
+    if not has_heavy_body:
+        return None
+    logs = payload.get("logs") if isinstance(payload.get("logs"), list) else []
+    last_log = logs[-1] if logs else {}
+    last_log_sig = (
+        (last_log.get("time"), last_log.get("level"), last_log.get("message"))
+        if isinstance(last_log, dict)
+        else str(last_log)
+    )
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), list) else []
+    metrics_sig = tuple(
+        (item.get("label"), item.get("value"), item.get("unit"))
+        for item in metrics
+        if isinstance(item, dict)
+    )
+    result_file = str(payload.get("result_file") or "")
+    freq_file = str(payload.get("frequency_result_file") or "")
+    curve_sig = None
+    curve_sqlite_sig = None
+    if result_file:
+        result_path = Path(result_file)
+        curve_sig = _path_stat_sig(result_curves_workbook_path(result_path))
+        curve_sqlite_sig = _path_stat_sig(result_curves_sqlite_path(result_path))
+    return (
+        endpoint,
+        str(PLANNING_STORE.root),
+        scheme,
+        filename,
+        bool(include_hourly_curves),
+        payload.get("status"),
+        payload.get("scheme"),
+        payload.get("result_filename"),
+        payload.get("start_time"),
+        payload.get("end_time"),
+        payload.get("progress"),
+        payload.get("process_id"),
+        payload.get("elapsed_seconds"),
+        result_file,
+        _path_stat_sig(result_file),
+        curve_sig,
+        curve_sqlite_sig,
+        freq_file,
+        _path_stat_sig(freq_file),
+        id(results_obj) if isinstance(results_obj, dict) else 0,
+        len(freq_rows) if isinstance(freq_rows, list) else 0,
+        len(logs),
+        last_log_sig,
+        metrics_sig,
+    )
+
+
+def _cached_json_response(
+    cache_key: tuple | None,
+    payload_factory,
+    status: int = 200,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    if cache_key is None or int(status) != 200:
+        return _json_response(payload_factory(), status=status, extra_headers=extra_headers)
+    body = WIRE_JSON_RESPONSE_CACHE.get_or_encode(cache_key, payload_factory)
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+    return status, headers, body
+
+
 def _json_response(payload: dict, status: int = 200, extra_headers: dict[str, str] | None = None) -> tuple[int, dict[str, str], bytes]:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     headers = {
@@ -7361,15 +7532,25 @@ def response_is_compressible(headers: dict[str, str], body: bytes) -> bool:
     return any(content_type.startswith(prefix) for prefix in COMPRESSIBLE_CONTENT_PREFIXES)
 
 
+def _compress_gzip_bytes(body: bytes) -> bytes:
+    compressed = zlib.compressobj(level=3, wbits=16 + zlib.MAX_WBITS)
+    return compressed.compress(body) + compressed.flush()
+
+
 def gzip_response_body_if_supported(request_headers, headers: dict[str, str], body: bytes) -> tuple[dict[str, str], bytes]:
     if "gzip" not in str(request_headers.get("Accept-Encoding", "")).lower():
         return headers, body
     if not response_is_compressible(headers, body):
         return headers, body
-    compressed = zlib.compressobj(level=3, wbits=16 + zlib.MAX_WBITS)
-    compressed_body = compressed.compress(body) + compressed.flush()
-    if len(compressed_body) >= len(body):
-        return headers, body
+    cached_gzip = WIRE_JSON_RESPONSE_CACHE.get_or_compress_gzip(body)
+    if cached_gzip is not None:
+        if not cached_gzip:
+            return headers, body
+        compressed_body = cached_gzip
+    else:
+        compressed_body = _compress_gzip_bytes(body)
+        if len(compressed_body) >= len(body):
+            return headers, body
     next_headers = dict(headers)
     next_headers["Content-Encoding"] = "gzip"
     next_headers["Vary"] = append_vary_header(next_headers.get("Vary", ""), "Accept-Encoding")
@@ -9351,12 +9532,14 @@ def handle_planning_api_path(
         if path.startswith(f"{prefix}/") and path.endswith("/time-series") and method == "GET":
             name = unquote(path[len(prefix) + 1 : -len("/time-series")])
             ensure_planning_scheme_access(name, current_user)
-            return _json_response(PLANNING_STORE.read_time_series(name))
+            cache_key = _scheme_wire_cache_key("scheme_time_series", name)
+            return _cached_json_response(cache_key, lambda: PLANNING_STORE.read_time_series(name))
         if path.startswith(f"{prefix}/"):
             name = unquote(path[len(prefix) + 1 :])
             if method == "GET":
                 name = ensure_planning_scheme_access(name, current_user)
-                return _json_response(PLANNING_STORE.read_scheme(name))
+                cache_key = _scheme_wire_cache_key("scheme_full", name)
+                return _cached_json_response(cache_key, lambda: PLANNING_STORE.read_scheme(name))
             if method == "PUT":
                 name = ensure_planning_scheme_manage_access(name, current_user)
                 payload = _read_json_body(body)
@@ -9406,7 +9589,9 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         filename = query_params.get("filename", [""])[0]
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
-        return _json_response(EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
+        payload = EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves)
+        cache_key = _runtime_status_wire_cache_key("evaluation_status", scheme, filename, include_hourly_curves, payload)
+        return _cached_json_response(cache_key, lambda: payload)
     if path == "/api/frequency/status":
         scheme = query_params.get("scheme", [""])[0]
         if scheme:
@@ -9416,7 +9601,9 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         filename = query_params.get("filename", [""])[0]
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
-        return _json_response(FREQUENCY_EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves))
+        payload = FREQUENCY_EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves)
+        cache_key = _runtime_status_wire_cache_key("frequency_status", scheme, filename, include_hourly_curves, payload)
+        return _cached_json_response(cache_key, lambda: payload)
     if path == "/api/frequency/time-curve":
         try:
             scheme = query_params.get("scheme", [""])[0]
@@ -9451,7 +9638,9 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
                 return access_error
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
-        return _json_response(OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves))
+        payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves)
+        cache_key = _runtime_status_wire_cache_key("optimization_status", scheme, "", include_hourly_curves, payload)
+        return _cached_json_response(cache_key, lambda: payload)
     snapshot = build_snapshot()
     routes = {
         "/api/health": {"ok": True, "timestamp": snapshot["timestamp"]},
@@ -9609,6 +9798,7 @@ def resolve_static_path(request_path: str) -> Path:
 
 
 class PowerPlanHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     server_version = "PowerPlan/1.0"
 
     def _current_user(self) -> dict | None:
@@ -9665,6 +9855,20 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.NOT_MODIFIED, headers, b"")
             return
         body = STATIC_FILE_BYTES_CACHE.get(path, lambda resolved: resolved.read_bytes(), variant="static_bytes")
+        if (
+            "gzip" in str(self.headers.get("Accept-Encoding", "")).lower()
+            and response_is_compressible(headers, body)
+        ):
+            gzip_body = STATIC_FILE_BYTES_CACHE.get(
+                path,
+                lambda _resolved, raw=body: _compress_gzip_bytes(raw),
+                variant="static_gzip",
+            )
+            if len(gzip_body) < len(body):
+                headers = dict(headers)
+                headers["Content-Encoding"] = "gzip"
+                headers["Vary"] = append_vary_header(headers.get("Vary", ""), "Accept-Encoding")
+                body = gzip_body
         self._send(HTTPStatus.OK, headers, body)
 
     def do_POST(self) -> None:
@@ -9769,14 +9973,21 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
         self._send(status, {"Content-Type": "text/plain; charset=utf-8"}, text.encode("utf-8"))
 
     def _send(self, status: int, headers: dict[str, str], body: bytes) -> None:
-        if int(status) not in (HTTPStatus.NOT_MODIFIED, HTTPStatus.NO_CONTENT):
+        status_code = int(status)
+        no_body = status_code in (HTTPStatus.NOT_MODIFIED, HTTPStatus.NO_CONTENT)
+        if not no_body:
             headers, body = gzip_response_body_if_supported(self.headers, headers, body)
-        self.send_response(int(status))
-        for key, value in headers.items():
-            self.send_header(key, value)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status_code)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            if not no_body:
+                self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if not no_body and body:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
 
 
 def run(host: str = "127.0.0.1", port: int = 8866) -> None:
