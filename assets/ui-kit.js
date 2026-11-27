@@ -585,6 +585,12 @@
       };
 
       const setOpen = (open) => {
+        if (open) {
+          document.querySelectorAll(".user-menu-host.is-open").forEach((el) => {
+            el.classList.remove("is-open");
+            el.querySelector(".user-menu-trigger")?.setAttribute("aria-expanded", "false");
+          });
+        }
         prefHost.classList.toggle("is-open", open);
         trigger.setAttribute("aria-expanded", String(open));
         if (open) syncPrefUi();
@@ -692,6 +698,10 @@
       if (!userStatus.classList.contains("user-menu-host")) {
         const usernameEl = userStatus.querySelector("[data-auth-username]");
         const roleEl = userStatus.querySelector("[data-auth-role]");
+        if (usernameEl) {
+          usernameEl.setAttribute("translate", "no");
+          usernameEl.classList.add("notranslate");
+        }
 
         userStatus.classList.add("user-menu-host");
 
@@ -715,7 +725,8 @@
         const header = document.createElement("div");
         header.className = "user-menu-header";
         const mirrorName = document.createElement("span");
-        mirrorName.className = "user-menu-name";
+        mirrorName.className = "user-menu-name notranslate";
+        mirrorName.setAttribute("translate", "no");
         mirrorName.dataset.authUsername = "";
         mirrorName.textContent = usernameEl?.textContent || "";
         header.appendChild(mirrorName);
@@ -735,6 +746,12 @@
         userStatus.append(trigger, popover);
 
         const setOpen = (open) => {
+          if (open) {
+            document.querySelectorAll(".ui-pref-host.is-open").forEach((el) => {
+              el.classList.remove("is-open");
+              el.querySelector(".ui-pref-trigger")?.setAttribute("aria-expanded", "false");
+            });
+          }
           userStatus.classList.toggle("is-open", open);
           trigger.setAttribute("aria-expanded", String(open));
         };
@@ -2336,6 +2353,10 @@
       [/^(扫参|批量扫参|Sweep)/i, "sweep", "ui-ico-sm ui-ico-accent"],
       [/^(简报|综合简报|Report)/i, "report", "ui-ico-sm"],
       [/^(南极气象|气象|Weather)/i, "snowflake", "ui-ico-sm ui-ico-accent"],
+      [/^(规划计算任务)/i, "cpu", "ui-ico-sm ui-ico-accent"],
+      [/^(方案评估任务)/i, "chart", "ui-ico-sm ui-ico-aurora"],
+      [/^(频率计算任务)/i, "wave", "ui-ico-sm ui-ico-accent"],
+      [/^(供电可靠性任务)/i, "shield", "ui-ico-sm ui-ico-ok"],
       [/^(规划配置与年流)/i, "topology", "ui-ico-sm"],
       [/^(典型日校核)/i, "sun", "ui-ico-sm"],
     ];

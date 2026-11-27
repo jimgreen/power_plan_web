@@ -1464,7 +1464,7 @@
   }
 
   function isIgnored(element) {
-    return !element || ignoredTags.has(element.tagName) || element.closest("[data-i18n-ignore]");
+    return !element || ignoredTags.has(element.tagName) || element.closest("[data-i18n-ignore], [data-auth-username]");
   }
 
   // 补充 v14 新增工程洞察、雷达、龙卷风、命令面板、Stale 警示、撤销重做与导出三语词典

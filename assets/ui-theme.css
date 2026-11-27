@@ -2559,13 +2559,14 @@ body .auth-links a:hover {
 
 .ui-toast-stack {
   position: fixed;
-  top: 52px;
-  right: 14px;
-  z-index: 9500;
+  bottom: 18px;
+  right: 16px;
+  top: auto;
+  z-index: 9850;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 8px;
-  max-width: min(380px, calc(100vw - 28px));
+  max-width: min(360px, calc(100vw - 28px));
   pointer-events: none;
 }
 
@@ -3887,7 +3888,7 @@ body .comparison-tabs-row .comparison-add-tab:hover:not(:disabled) {
 
 .cmp-base-tag {
   font-style: normal;
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 4px;
   border-radius: 3px;
   background: var(--accent-soft);
@@ -4869,7 +4870,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
 
 .sys-diag-kpi-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -4947,7 +4948,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     height: 28px;
     padding: 0 8px;
     border-radius: 6px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
     color: var(--text-secondary);
     cursor: pointer;
@@ -4960,11 +4961,11 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   }
   .cmd-palette-trigger kbd {
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     padding: 1px 4px;
     border-radius: 4px;
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     color: var(--text-secondary);
   }
   .cmd-palette-backdrop {
@@ -4994,7 +4995,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     align-items: center;
     gap: 8px;
     padding: 10px 12px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-color);
   }
   .cmd-palette-input-row input {
     flex: 1;
@@ -5006,10 +5007,10 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   }
   .cmd-palette-input-row kbd {
     font-family: var(--font-mono);
-    font-size: 10.5px;
+    font-size: 11px;
     padding: 2px 6px;
     border-radius: 4px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     color: var(--text-muted);
   }
   .cmd-palette-list {
@@ -5040,7 +5041,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     background: var(--bg-selected);
   }
   .cmd-palette-group {
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--accent);
     text-align: center;
@@ -5123,7 +5124,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #F59E0B;
+    background: var(--warn);
     flex-shrink: 0;
   }
   .stale-banner-text {
@@ -5134,7 +5135,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     padding: 2px 9px;
     font-size: 11.5px;
     border-radius: 5px;
-    border: 1px solid #F59E0B;
+    border: 1px solid var(--warn);
     background: rgba(245, 158, 11, 0.22);
     color: var(--text-primary);
     cursor: pointer;
@@ -5148,11 +5149,11 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     padding: 1px 5px;
     margin-left: 4px;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: 11px;
     font-style: normal;
     font-weight: 600;
     background: rgba(245, 158, 11, 0.2);
-    color: #F59E0B;
+    color: var(--warn);
     border: 1px solid rgba(245, 158, 11, 0.45);
     vertical-align: middle;
   }
@@ -5188,7 +5189,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     position: absolute;
     right: 0;
     transform: translateY(-50%);
-    font-size: 10.5px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-secondary);
   }
@@ -5203,7 +5204,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     height: 24px;
     padding: 0 7px;
     border-radius: 5px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
     color: var(--text-secondary);
     font-size: 11px;
@@ -5233,7 +5234,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   }
   .insight-card {
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 8px 10px;
     min-width: 0;
@@ -5277,7 +5278,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     height: 24px;
     padding: 0 8px;
     border-radius: 999px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
     color: var(--text-secondary);
     font-size: 11px;
@@ -5339,7 +5340,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     padding: 6px 9px;
     border-radius: 6px;
     background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
     font-size: 11.5px;
     color: var(--text-primary);
@@ -5359,7 +5360,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   /* 结果对比 5 维雷达图 + 权重评分器 */
   .comparison-radar-card {
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 8px 10px;
     margin-bottom: 6px;
@@ -5413,7 +5414,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     gap: 7px;
     padding: 5px 8px;
     border-radius: 6px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
     font-size: 12px;
   }
@@ -5439,7 +5440,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     border-radius: 999px;
     background: var(--ok, #10B981);
     color: #052E16;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
   }
   .radar-rank-score {
@@ -5460,22 +5461,22 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     gap: 8px;
     padding: 8px 10px;
     border-radius: 7px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
   }
-  .report-conclusion-item.is-pass { border-left: 3px solid #10B981; }
-  .report-conclusion-item.is-warn { border-left: 3px solid #F59E0B; }
-  .report-conclusion-item.is-risk { border-left: 3px solid #EF4444; }
+  .report-conclusion-item.is-pass { border-left: 3px solid var(--ok); }
+  .report-conclusion-item.is-warn { border-left: 3px solid var(--warn); }
+  .report-conclusion-item.is-risk { border-left: 3px solid var(--danger); }
   .report-conclusion-badge {
     padding: 1px 6px;
     border-radius: 4px;
-    font-size: 10.5px;
+    font-size: 11px;
     font-weight: 700;
     white-space: nowrap;
   }
-  .report-conclusion-item.is-pass .report-conclusion-badge { background: rgba(16, 185, 129, 0.18); color: #10B981; }
-  .report-conclusion-item.is-warn .report-conclusion-badge { background: rgba(245, 158, 11, 0.18); color: #F59E0B; }
-  .report-conclusion-item.is-risk .report-conclusion-badge { background: rgba(239, 68, 68, 0.18); color: #EF4444; }
+  .report-conclusion-item.is-pass .report-conclusion-badge { background: var(--ok-soft); color: var(--ok); }
+  .report-conclusion-item.is-warn .report-conclusion-badge { background: var(--warn-soft); color: var(--warn); }
+  .report-conclusion-item.is-risk .report-conclusion-badge { background: var(--danger-soft); color: var(--danger); }
   .report-conclusion-body strong {
     display: block;
     font-size: 12px;
@@ -5536,7 +5537,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     display: flex;
     flex-direction: column;
     background: var(--bg-surface);
-    border-right: 1px solid var(--border);
+    border-right: 1px solid var(--border-color);
     transform: translateX(-104%);
     opacity: 0;
     pointer-events: none;
@@ -5570,7 +5571,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     align-items: center;
     justify-content: space-between;
     gap: 6px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-color);
     background: var(--bg-subtle);
   }
 
@@ -5595,7 +5596,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     align-items: center;
     padding: 1px;
     border-radius: 5px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-surface);
   }
 
@@ -5606,7 +5607,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     border-radius: 4px;
     background: transparent;
     color: var(--text-secondary);
-    font-size: 10.5px;
+    font-size: 11px;
     cursor: pointer;
     white-space: nowrap;
   }
@@ -5622,7 +5623,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     height: 22px;
     padding: 0;
     border-radius: 5px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-surface);
     color: var(--text-secondary);
     font-size: 14px;
@@ -5673,7 +5674,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     display: inline-block;
     width: 12px;
     text-align: center;
-    font-size: 10px;
+    font-size: 11px;
     transition: transform 140ms ease;
   }
 
@@ -5685,7 +5686,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     list-style: none;
     margin: 2px 0 4px;
     padding: 0 0 0 10px;
-    border-left: 1px solid var(--border);
+    border-left: 1px solid var(--border-color);
     margin-left: 11px;
     display: flex;
     flex-direction: column;
@@ -5777,7 +5778,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     padding: 2px;
     gap: 2px;
     border-radius: 6px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
   }
 
@@ -5813,7 +5814,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     height: 24px;
     padding: 0 8px;
     border-radius: 5px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
     color: var(--text-primary);
     font-size: 11.5px;
@@ -5838,7 +5839,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     flex: 1 1 auto;
     min-height: 320px;
     border-radius: 8px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background-color: var(--bg-input, var(--bg-canvas));
     background-image:
       linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
@@ -5927,7 +5928,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     flex-wrap: wrap;
     padding: 6px 10px;
     border-radius: 6px;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
     background: var(--bg-subtle);
     font-size: 12px;
   }
@@ -5945,7 +5946,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     padding: 1px 8px;
     border-radius: 4px;
     background: var(--bg-surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-color);
   }
 
   /* ==========================================================================
@@ -6086,7 +6087,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     padding: 10px;
     border-radius: 14px;
     border: 1px solid var(--border-strong);
-    background: var(--bg-elevated, var(--bg-surface));
+    background: var(--bg-surface-solid, var(--bg-elevated));
     backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
     -webkit-backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
     box-shadow: var(--shadow-popover);
@@ -6597,6 +6598,202 @@ table td {
 .sys-diag-header-tools button.danger:hover {
   background: var(--danger) !important;
   color: #FFFFFF !important;
+}
+
+/* ==========================================================================
+   v32 全站视觉与布局一致性精修（顶栏零裁切、按钮对比度、表格无缝内嵌、防遮挡与防截断）
+   ========================================================================== */
+
+/* 1. 顶栏 1440px 下 9 项导航 + 全屏图标完整展示零裁切 */
+@media (max-width: 1520px) {
+  html[data-theme] body .topbar {
+    gap: 6px !important;
+    padding: 0 8px !important;
+  }
+  html[data-theme] body .brand {
+    font-size: 13px !important;
+    gap: 6px !important;
+  }
+  html[data-theme] body .main-nav {
+    gap: 1px !important;
+  }
+  html[data-theme] body .main-nav a {
+    padding: 0 5.5px !important;
+    font-size: 12px !important;
+    gap: 3px !important;
+  }
+  .topbar-utilities {
+    gap: 4px !important;
+  }
+  .cmd-palette-trigger {
+    padding: 0 6px !important;
+  }
+}
+
+/* 2. 主按钮与禁用按钮全主题高对比度修复（彻底消除浅色禁用深蓝底黑字、亮青底白字发虚） */
+html[data-theme] button.primary:disabled,
+html[data-theme] .btn-primary:disabled,
+html[data-theme] #saveScheme:disabled {
+  background: var(--bg-subtle) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-muted) !important;
+  box-shadow: none !important;
+  opacity: 0.62 !important;
+  filter: none !important;
+}
+
+html[data-theme] body #sensGenerateBtn,
+html[data-theme] body button#sensGenerateBtn.primary,
+html[data-theme] body .sens-actions button.primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover)) !important;
+  border-color: var(--accent) !important;
+  color: var(--text-on-accent) !important;
+  text-shadow: none !important;
+}
+
+html[data-theme] body #sensGenerateBtn .ui-ico,
+html[data-theme] body .sens-actions button.primary .ui-ico {
+  color: var(--text-on-accent) !important;
+  filter: none !important;
+}
+
+/* 3. 全站表格单元格内嵌 input/select 无缝去独立边框（统一设备参数与规划参数表质感） */
+#planningParametersTable td:has(input:not([type="checkbox"]):not([type="radio"])),
+#planningParametersTable td:has(select),
+#usersTable td:has(select),
+.reliability-device-table td:has(input),
+.reliability-device-table td:has(select) {
+  padding: 0 !important;
+}
+
+#planningParametersTable td input:not([type="checkbox"]):not([type="radio"]),
+#planningParametersTable td select,
+#usersTable td select,
+.reliability-device-table td input:not([type="checkbox"]):not([type="radio"]),
+.reliability-device-table td select {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100% !important;
+  min-height: 28px !important;
+  padding: 4px 8px !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-primary) !important;
+  box-sizing: border-box !important;
+}
+
+#planningParametersTable td input:not([type="checkbox"]):not([type="radio"]):focus,
+#planningParametersTable td select:focus,
+#usersTable td select:focus,
+.reliability-device-table td input:focus,
+.reliability-device-table td select:focus {
+  outline: none !important;
+  box-shadow: inset 0 0 0 1.5px var(--accent) !important;
+  background: var(--accent-soft) !important;
+}
+
+/* 4. 可靠性页面：修复恢复演示值/保存参数悬浮遮挡设备表头，并放宽顶部当前方案宽度 */
+.reliability-parameter-actions {
+  position: static !important;
+  flex: 0 0 auto !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  margin-top: 6px !important;
+  padding-top: 6px !important;
+  border-top: 1px solid var(--border-color) !important;
+  background: transparent !important;
+}
+
+#reliabilityCurrentSelection {
+  max-width: 320px !important;
+}
+
+/* 5. 参数维护 & 方案评估侧栏底部按钮防挤压裁切 + 时序工具栏紧凑单行 + 设备首列防折行 */
+.scheme-actions-rail-bottom {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 4px !important;
+}
+
+.scheme-actions-rail-bottom button {
+  padding: 0 4px !important;
+  font-size: 11.5px !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.evaluation-result-action-buttons {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px !important;
+}
+
+.evaluation-result-action-buttons button {
+  flex: 1 1 auto !important;
+  padding: 0 7px !important;
+  height: 26px !important;
+  font-size: 11.5px !important;
+  white-space: nowrap !important;
+}
+
+#deviceTables table td:first-child,
+#deviceTables table th:first-child {
+  white-space: nowrap !important;
+  min-width: 92px !important;
+}
+
+html[data-theme] .time-chart-toolbar {
+  flex-wrap: nowrap !important;
+  gap: 5px !important;
+  overflow-x: auto !important;
+  scrollbar-width: none;
+}
+
+html[data-theme] .time-chart-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-theme] .time-chart-toolbar button,
+html[data-theme] .time-chart-toolbar select {
+  padding: 0 6px !important;
+  font-size: 11.5px !important;
+  white-space: nowrap !important;
+}
+
+/* 6. 任务表头、系统诊断更新时间、批量扫参直达列、结果对比胶囊防截断 */
+.task-table th {
+  white-space: nowrap !important;
+}
+
+#sysDiagTimestamp {
+  max-width: none !important;
+  overflow: visible !important;
+  white-space: nowrap !important;
+}
+
+#sensSummaryTable td:last-child,
+#sensSummaryTable th:last-child {
+  min-width: 122px !important;
+  white-space: nowrap !important;
+}
+
+.comparison-tab select {
+  min-width: 102px !important;
+}
+
+/* 7. 浅色模式下柔化分隔拖拽条光晕，避免高饱和亮青突兀 */
+html[data-color-mode="light"] .sidebar-splitter::after,
+html[data-color-mode="light"] .evaluation-main-resize-handle::after {
+  background: var(--border-strong) !important;
+  box-shadow: none !important;
 }
 
 /* 内嵌模式仅推开顶栏下方的主内容区，顶栏始终 100% 从左到右通栏不受左栏影响（须置于 @layer 之外） */
