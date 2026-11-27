@@ -1735,6 +1735,11 @@
     ["龙卷风", "Tornado", "Торнадо"],
     ["情景", "Cases", "Сцен."],
     ["柴发耗油", "Diesel Fuel", "Топливо"],
+    ["琥珀鎏金", "SCADA Amber", "Янтарь SCADA"],
+    ["深海钴蓝", "SCADA Cobalt", "Кобальт SCADA"],
+    ["赤霞星辰", "Crimson Aurora", "Алая заря"],
+    ["青瓷雪雾", "Arctic Jade", "Нефрит"],
+    ["晨曦暖玉", "Warm Ivory", "Тёплый свет"],
   ];
   EXTRA_I18N_ENTRIES.forEach(([zh, en, ru]) => {
     if (!enTranslations.has(zh)) enTranslations.set(zh, en);

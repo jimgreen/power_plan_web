@@ -1275,22 +1275,26 @@
     const draw = () => {
       const dark = window.PowerPlanUI?.isDarkTheme?.() ?? true;
       const p = getPalette();
+      const cs = getComputedStyle(document.documentElement);
+      const css = (k, fb) => cs.getPropertyValue(k).trim() || fb;
+      const accent = css("--accent", dark ? "#67E8F9" : "#0284C7");
+      const accent2 = css("--accent-2", dark ? "#C4B5FD" : "#7C3AED");
       const pal = {
-        wind: dark ? "#67E8F9" : "#0284C7",
+        wind: dark ? accent : "#0284C7",
         solar: dark ? "#FCD34D" : "#D97706",
-        bess: dark ? "#5EEAD4" : "#0D9488",
-        h2: dark ? "#C4B5FD" : "#7C3AED",
-        diesel: dark ? "#FDA4AF" : "#E11D48",
+        bess: dark ? css("--ok", "#5EEAD4") : "#0D9488",
+        h2: dark ? accent2 : "#7C3AED",
+        diesel: dark ? css("--danger", "#FDA4AF") : "#E11D48",
         load: dark ? "#6EE7B7" : "#059669",
-        warn: dark ? "#FCD34D" : "#D97706",
-        busAc: dark ? "#67E8F9" : "#0284C7",
-        busDc: dark ? "#C4B5FD" : "#7C3AED",
-        nodeFill: dark ? "rgba(15, 26, 52, 0.84)" : "rgba(255, 255, 255, 0.90)",
-        nodeFillAlt: dark ? "rgba(20, 34, 66, 0.86)" : "rgba(241, 248, 255, 0.94)",
-        nodeBorder: dark ? "rgba(165, 216, 255, 0.24)" : "rgba(125, 165, 204, 0.48)",
-        pillBg: dark ? "rgba(10, 19, 42, 0.88)" : "rgba(255, 255, 255, 0.94)",
-        text: dark ? "#F1F7FF" : "#10243E",
-        muted: dark ? "#9CB6D4" : "#5B7694",
+        warn: css("--warn", dark ? "#FCD34D" : "#D97706"),
+        busAc: accent,
+        busDc: accent2,
+        nodeFill: css("--bg-surface", dark ? "rgba(15, 26, 52, 0.84)" : "rgba(255, 255, 255, 0.90)"),
+        nodeFillAlt: css("--bg-elevated", dark ? "rgba(20, 34, 66, 0.86)" : "rgba(241, 248, 255, 0.94)"),
+        nodeBorder: css("--border-strong", dark ? "rgba(165, 216, 255, 0.24)" : "rgba(125, 165, 204, 0.48)"),
+        pillBg: css("--chart-tooltip-bg", dark ? "rgba(10, 19, 42, 0.88)" : "rgba(255, 255, 255, 0.94)"),
+        text: css("--text-primary", dark ? "#F1F7FF" : "#10243E"),
+        muted: css("--text-secondary", dark ? "#9CB6D4" : "#5B7694"),
       };
 
       const isTyp = localState.mode === "typical" && typicalDays.length > 0;

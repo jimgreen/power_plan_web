@@ -5,10 +5,15 @@
 
   const THEMES = [
     { id: "precision-dark", label: "极光幻境", dark: true },
-    { id: "minimalist-light", label: "冰川月白", dark: false },
     { id: "sci-fi-cyan", label: "星海冰青", dark: true },
+    { id: "scada-cobalt", label: "深海钴蓝", dark: true },
     { id: "sci-fi-purple", label: "紫霞星云", dark: true },
     { id: "sci-fi-matrix", label: "翠雾极光", dark: true },
+    { id: "scada-amber", label: "琥珀鎏金", dark: true },
+    { id: "scada-crimson", label: "赤霞星辰", dark: true },
+    { id: "minimalist-light", label: "冰川月白", dark: false },
+    { id: "arctic-jade", label: "青瓷雪雾", dark: false },
+    { id: "warm-ivory", label: "晨曦暖玉", dark: false },
   ];
 
   /** 全站统一高可读线性微发光 SVG 图标库（16×16/24×24 圆润线条） */
@@ -161,6 +166,7 @@
     const next = normalizeTheme(themeId);
     const prev = document.documentElement.dataset.theme;
     document.documentElement.dataset.theme = next;
+    document.documentElement.dataset.colorMode = isDarkTheme(next) ? "dark" : "light";
     // 清理旧版 data-home-theme，防止历史样式表干扰
     if (document.documentElement.dataset.homeTheme) {
       delete document.documentElement.dataset.homeTheme;
@@ -474,10 +480,15 @@
     // 整合「主题切换 + 语言切换」为 1 个超紧凑柔光图标按钮 + 琉璃浮层，释放顶栏宽度
     const THEME_SWATCHES = {
       "precision-dark": "linear-gradient(135deg,#67E8F9,#A78BFA)",
-      "minimalist-light": "linear-gradient(135deg,#E0F2FE,#38BDF8)",
       "sci-fi-cyan": "linear-gradient(135deg,#22D3EE,#818CF8)",
+      "scada-cobalt": "linear-gradient(135deg,#3B82F6,#38BDF8)",
       "sci-fi-purple": "linear-gradient(135deg,#D8B4FE,#F472B6)",
       "sci-fi-matrix": "linear-gradient(135deg,#5EEAD4,#34D399)",
+      "scada-amber": "linear-gradient(135deg,#FBBF24,#FB923C)",
+      "scada-crimson": "linear-gradient(135deg,#FB7185,#FDBA74)",
+      "minimalist-light": "linear-gradient(135deg,#E0F2FE,#0284C7)",
+      "arctic-jade": "linear-gradient(135deg,#CCFBF1,#0D9488)",
+      "warm-ivory": "linear-gradient(135deg,#FEF3C7,#C2690E)",
     };
     const LANG_OPTIONS = [
       { code: "zh-CN", short: "中文", label: "中文" },

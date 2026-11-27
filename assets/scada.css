@@ -207,7 +207,7 @@ html[data-theme] .scada-topbar .scada-brand,
   text-shadow: 0 0 12px rgba(103, 232, 249, 0.14);
 }
 
-[data-theme="minimalist-light"] .scada-kpi-item strong {
+[data-color-mode="light"] .scada-kpi-item strong {
   text-shadow: none;
 }
 
@@ -550,7 +550,7 @@ html[data-theme] .scada-topbar .scada-brand,
   justify-content: center;
 }
 
-[data-theme="minimalist-light"] .scada-mimic-stage {
+[data-color-mode="light"] .scada-mimic-stage {
   background-color: rgba(244, 249, 255, 0.88);
   background-image:
     radial-gradient(ellipse 68% 58% at 50% 48%, rgba(14, 165, 233, 0.10), transparent 72%),

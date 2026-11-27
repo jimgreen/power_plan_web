@@ -368,6 +368,307 @@ html[data-theme="sci-fi-matrix"] {
   --chart-tooltip-strong: #FFFFFF;
 }
 
+/* 6. 琥珀鎏金（scada-amber · 参考 SCADA 暖琥珀调度台） */
+html[data-theme="scada-amber"] {
+  color-scheme: dark;
+  --bg-canvas: #120E08;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 68% 52% at 16% 10%, rgba(251, 191, 36, 0.14), transparent 60%),
+    radial-gradient(ellipse 56% 48% at 86% 14%, rgba(251, 146, 60, 0.12), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 50% 96%, rgba(56, 189, 248, 0.08), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(31, 24, 15, 0.78);
+  --bg-surface-solid: #1F180F;
+  --bg-subtle: rgba(46, 36, 22, 0.66);
+  --bg-elevated: rgba(38, 30, 18, 0.84);
+  --bg-input: rgba(20, 15, 9, 0.76);
+  --bg-selected: rgba(251, 191, 36, 0.16);
+  --table-head: rgba(39, 30, 18, 0.90);
+  --table-stripe: rgba(34, 26, 16, 0.46);
+  --table-hover: rgba(251, 191, 36, 0.10);
+  --text-primary: #FFF8EB;
+  --text-secondary: #D4BFA0;
+  --text-muted: #9E886B;
+  --text-on-accent: #241604;
+  --accent: #FBBF24;
+  --accent-2: #FB923C;
+  --accent-hover: #FDE68A;
+  --accent-soft: rgba(251, 191, 36, 0.15);
+  --accent-border: rgba(251, 191, 36, 0.40);
+  --accent-glow: 0 0 20px rgba(251, 191, 36, 0.22);
+  --ok: #34D399;
+  --ok-soft: rgba(52, 211, 153, 0.15);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.16);
+  --danger: #FB7185;
+  --danger-soft: rgba(251, 113, 133, 0.16);
+  --info: #38BDF8;
+  --info-soft: rgba(56, 189, 248, 0.14);
+  --border-color: rgba(251, 191, 36, 0.18);
+  --border-strong: rgba(251, 191, 36, 0.34);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(14, 9, 2, 0.50);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(12, 8, 2, 0.65);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(8, 5, 1, 0.78);
+  --scrollbar-track: rgba(20, 15, 9, 0.62);
+  --scrollbar-thumb: rgba(251, 191, 36, 0.26);
+  --scrollbar-thumb-hover: rgba(251, 191, 36, 0.48);
+  --chart-grid: rgba(251, 191, 36, 0.09);
+  --chart-axis: rgba(251, 191, 36, 0.28);
+  --chart-text: #D4BFA0;
+  --chart-crosshair: rgba(251, 191, 36, 0.55);
+  --chart-tooltip-bg: rgba(26, 20, 12, 0.94);
+  --chart-tooltip-border: rgba(251, 191, 36, 0.38);
+  --chart-tooltip-text: #FFF8EB;
+  --chart-tooltip-muted: #D4BFA0;
+  --chart-tooltip-strong: #FFFFFF;
+}
+
+/* 7. 深海钴蓝（scada-cobalt · 参考经典电力调度蓝屏柔光版） */
+html[data-theme="scada-cobalt"] {
+  color-scheme: dark;
+  --bg-canvas: #061326;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 68% 52% at 15% 10%, rgba(59, 130, 246, 0.18), transparent 62%),
+    radial-gradient(ellipse 56% 48% at 86% 14%, rgba(56, 189, 248, 0.14), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 50% 96%, rgba(99, 102, 241, 0.12), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(11, 28, 56, 0.78);
+  --bg-surface-solid: #0B1C38;
+  --bg-subtle: rgba(19, 44, 84, 0.64);
+  --bg-elevated: rgba(15, 36, 70, 0.84);
+  --bg-input: rgba(7, 20, 42, 0.76);
+  --bg-selected: rgba(96, 165, 250, 0.16);
+  --table-head: rgba(14, 35, 68, 0.90);
+  --table-stripe: rgba(13, 32, 62, 0.46);
+  --table-hover: rgba(96, 165, 250, 0.11);
+  --text-primary: #EFF6FF;
+  --text-secondary: #9EC0E6;
+  --text-muted: #6C93BE;
+  --text-on-accent: #041A36;
+  --accent: #60A5FA;
+  --accent-2: #38BDF8;
+  --accent-hover: #93C5FD;
+  --accent-soft: rgba(96, 165, 250, 0.15);
+  --accent-border: rgba(96, 165, 250, 0.42);
+  --accent-glow: 0 0 20px rgba(96, 165, 250, 0.22);
+  --ok: #34D399;
+  --ok-soft: rgba(52, 211, 153, 0.15);
+  --warn: #FBBF24;
+  --warn-soft: rgba(251, 191, 36, 0.15);
+  --danger: #FB7185;
+  --danger-soft: rgba(251, 113, 133, 0.16);
+  --info: #60A5FA;
+  --info-soft: rgba(96, 165, 250, 0.15);
+  --border-color: rgba(147, 197, 253, 0.18);
+  --border-strong: rgba(147, 197, 253, 0.34);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(2, 10, 26, 0.50);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(2, 8, 22, 0.64);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(1, 6, 18, 0.78);
+  --scrollbar-track: rgba(6, 18, 38, 0.62);
+  --scrollbar-thumb: rgba(96, 165, 250, 0.28);
+  --scrollbar-thumb-hover: rgba(96, 165, 250, 0.50);
+  --chart-grid: rgba(147, 197, 253, 0.10);
+  --chart-axis: rgba(147, 197, 253, 0.30);
+  --chart-text: #9EC0E6;
+  --chart-crosshair: rgba(96, 165, 250, 0.55);
+  --chart-tooltip-bg: rgba(8, 22, 46, 0.94);
+  --chart-tooltip-border: rgba(96, 165, 250, 0.40);
+  --chart-tooltip-text: #EFF6FF;
+  --chart-tooltip-muted: #9EC0E6;
+  --chart-tooltip-strong: #FFFFFF;
+}
+
+/* 8. 赤霞星辰（scada-crimson · 极光绯红星云调度风） */
+html[data-theme="scada-crimson"] {
+  color-scheme: dark;
+  --bg-canvas: #140912;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 68% 52% at 16% 10%, rgba(251, 113, 133, 0.15), transparent 60%),
+    radial-gradient(ellipse 56% 48% at 86% 14%, rgba(253, 186, 116, 0.12), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 50% 96%, rgba(192, 132, 252, 0.11), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(34, 15, 29, 0.76);
+  --bg-surface-solid: #220F1D;
+  --bg-subtle: rgba(52, 23, 44, 0.64);
+  --bg-elevated: rgba(42, 19, 36, 0.82);
+  --bg-input: rgba(22, 10, 19, 0.76);
+  --bg-selected: rgba(251, 113, 133, 0.16);
+  --table-head: rgba(44, 19, 37, 0.90);
+  --table-stripe: rgba(38, 17, 32, 0.46);
+  --table-hover: rgba(251, 113, 133, 0.10);
+  --text-primary: #FFF1F5;
+  --text-secondary: #D9B0C3;
+  --text-muted: #A1768B;
+  --text-on-accent: #2B0713;
+  --accent: #FB7185;
+  --accent-2: #FDBA74;
+  --accent-hover: #FDA4AF;
+  --accent-soft: rgba(251, 113, 133, 0.15);
+  --accent-border: rgba(251, 113, 133, 0.42);
+  --accent-glow: 0 0 20px rgba(251, 113, 133, 0.22);
+  --ok: #5EEAD4;
+  --ok-soft: rgba(94, 234, 212, 0.15);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.15);
+  --danger: #FF5C77;
+  --danger-soft: rgba(255, 92, 119, 0.18);
+  --info: #FDBA74;
+  --info-soft: rgba(253, 186, 116, 0.15);
+  --border-color: rgba(253, 164, 175, 0.18);
+  --border-strong: rgba(253, 164, 175, 0.34);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(20, 4, 14, 0.52);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(18, 3, 12, 0.66);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(14, 2, 10, 0.78);
+  --scrollbar-track: rgba(22, 10, 19, 0.62);
+  --scrollbar-thumb: rgba(251, 113, 133, 0.28);
+  --scrollbar-thumb-hover: rgba(251, 113, 133, 0.50);
+  --chart-grid: rgba(253, 164, 175, 0.09);
+  --chart-axis: rgba(253, 164, 175, 0.28);
+  --chart-text: #D9B0C3;
+  --chart-crosshair: rgba(251, 113, 133, 0.55);
+  --chart-tooltip-bg: rgba(30, 13, 25, 0.94);
+  --chart-tooltip-border: rgba(251, 113, 133, 0.40);
+  --chart-tooltip-text: #FFF1F5;
+  --chart-tooltip-muted: #D9B0C3;
+  --chart-tooltip-strong: #FFFFFF;
+}
+
+/* 9. 青瓷雪雾（arctic-jade · 日间浅色 SCADA 护眼青瓷风） */
+html[data-theme="arctic-jade"] {
+  color-scheme: light;
+  --bg-canvas: #ECF7F5;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 65% 50% at 14% 8%, rgba(20, 184, 166, 0.13), transparent 62%),
+    radial-gradient(ellipse 58% 48% at 86% 12%, rgba(56, 189, 248, 0.12), transparent 60%),
+    radial-gradient(ellipse 50% 45% at 50% 96%, rgba(16, 185, 129, 0.09), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(255, 255, 255, 0.82);
+  --bg-surface-solid: #FFFFFF;
+  --bg-subtle: rgba(226, 245, 242, 0.78);
+  --bg-elevated: rgba(244, 252, 250, 0.90);
+  --bg-input: rgba(255, 255, 255, 0.94);
+  --bg-selected: rgba(13, 148, 136, 0.11);
+  --glass-blur: blur(14px) saturate(140%);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  --table-head: rgba(226, 245, 242, 0.92);
+  --table-stripe: rgba(240, 250, 248, 0.68);
+  --table-hover: rgba(13, 148, 136, 0.08);
+  --text-primary: #0D2B2A;
+  --text-secondary: #3E6664;
+  --text-muted: #628886;
+  --text-on-accent: #FFFFFF;
+  --accent: #0D9488;
+  --accent-2: #0284C7;
+  --accent-hover: #0F766E;
+  --accent-soft: rgba(13, 148, 136, 0.11);
+  --accent-border: rgba(13, 148, 136, 0.36);
+  --accent-glow: 0 0 16px rgba(13, 148, 136, 0.15);
+  --ok: #059669;
+  --ok-soft: rgba(5, 150, 105, 0.12);
+  --warn: #D97706;
+  --warn-soft: rgba(217, 119, 6, 0.12);
+  --danger: #E11D48;
+  --danger-soft: rgba(225, 29, 72, 0.10);
+  --info: #0284C7;
+  --info-soft: rgba(2, 132, 199, 0.10);
+  --border-color: rgba(134, 196, 189, 0.42);
+  --border-strong: rgba(94, 168, 160, 0.56);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 6px 22px rgba(13, 72, 68, 0.06);
+  --shadow-popover: var(--glass-highlight), 0 12px 28px rgba(13, 72, 68, 0.12);
+  --shadow-modal: var(--glass-highlight), 0 22px 54px rgba(13, 72, 68, 0.20);
+  --scrollbar-track: #E3F3F0;
+  --scrollbar-thumb: rgba(94, 168, 160, 0.55);
+  --scrollbar-thumb-hover: rgba(13, 148, 136, 0.55);
+  --chart-grid: rgba(134, 196, 189, 0.36);
+  --chart-axis: rgba(94, 168, 160, 0.58);
+  --chart-text: #3E6664;
+  --chart-crosshair: rgba(13, 148, 136, 0.45);
+  --chart-tooltip-bg: rgba(255, 255, 255, 0.95);
+  --chart-tooltip-border: rgba(134, 196, 189, 0.68);
+  --chart-tooltip-text: #0D2B2A;
+  --chart-tooltip-muted: #3E6664;
+  --chart-tooltip-strong: #0D2B2A;
+  --chart-tooltip-shadow: 0 10px 26px rgba(13, 72, 68, 0.12);
+}
+
+/* 10. 晨曦暖玉（warm-ivory · 极地朝霞低蓝光日间风） */
+html[data-theme="warm-ivory"] {
+  color-scheme: light;
+  --bg-canvas: #F9F5EE;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 65% 50% at 14% 8%, rgba(245, 158, 11, 0.12), transparent 62%),
+    radial-gradient(ellipse 58% 48% at 86% 12%, rgba(244, 114, 182, 0.09), transparent 60%),
+    radial-gradient(ellipse 50% 45% at 50% 96%, rgba(14, 165, 233, 0.08), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(255, 253, 249, 0.84);
+  --bg-surface-solid: #FFFDF9;
+  --bg-subtle: rgba(245, 238, 226, 0.80);
+  --bg-elevated: rgba(253, 249, 242, 0.92);
+  --bg-input: rgba(255, 255, 255, 0.94);
+  --bg-selected: rgba(194, 105, 14, 0.11);
+  --glass-blur: blur(14px) saturate(135%);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.90);
+  --table-head: rgba(245, 238, 226, 0.92);
+  --table-stripe: rgba(250, 245, 236, 0.70);
+  --table-hover: rgba(194, 105, 14, 0.08);
+  --text-primary: #2B1F14;
+  --text-secondary: #6B5642;
+  --text-muted: #8F7A65;
+  --text-on-accent: #FFFFFF;
+  --accent: #C2690E;
+  --accent-2: #0E7490;
+  --accent-hover: #9A520A;
+  --accent-soft: rgba(194, 105, 14, 0.11);
+  --accent-border: rgba(194, 105, 14, 0.36);
+  --accent-glow: 0 0 16px rgba(194, 105, 14, 0.15);
+  --ok: #0F766E;
+  --ok-soft: rgba(15, 118, 110, 0.12);
+  --warn: #D97706;
+  --warn-soft: rgba(217, 119, 6, 0.13);
+  --danger: #DC2626;
+  --danger-soft: rgba(220, 38, 38, 0.10);
+  --info: #0E7490;
+  --info-soft: rgba(14, 116, 144, 0.10);
+  --border-color: rgba(209, 190, 165, 0.50);
+  --border-strong: rgba(186, 162, 132, 0.65);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 6px 22px rgba(68, 42, 16, 0.06);
+  --shadow-popover: var(--glass-highlight), 0 12px 28px rgba(68, 42, 16, 0.12);
+  --shadow-modal: var(--glass-highlight), 0 22px 54px rgba(68, 42, 16, 0.20);
+  --scrollbar-track: #F2EAE0;
+  --scrollbar-thumb: rgba(186, 162, 132, 0.58);
+  --scrollbar-thumb-hover: rgba(194, 105, 14, 0.55);
+  --chart-grid: rgba(209, 190, 165, 0.42);
+  --chart-axis: rgba(186, 162, 132, 0.62);
+  --chart-text: #6B5642;
+  --chart-crosshair: rgba(194, 105, 14, 0.45);
+  --chart-tooltip-bg: rgba(255, 253, 249, 0.96);
+  --chart-tooltip-border: rgba(209, 190, 165, 0.72);
+  --chart-tooltip-text: #2B1F14;
+  --chart-tooltip-muted: #6B5642;
+  --chart-tooltip-strong: #2B1F14;
+  --chart-tooltip-shadow: 0 10px 26px rgba(68, 42, 16, 0.12);
+}
+
 /* ==========================================================================
    全局基础、滚动条与原生控件主题防穿帮
    ========================================================================== */
@@ -1720,12 +2021,12 @@ body.home-page {
     linear-gradient(180deg, rgba(4, 10, 24, 0.72) 0%, rgba(4, 10, 24, 0.16) 20%, rgba(4, 10, 24, 0.18) 80%, rgba(4, 10, 24, 0.78) 100%);
 }
 
-html[data-theme="minimalist-light"] .home-backdrop-img {
+html[data-color-mode="light"] .home-backdrop-img {
   filter: saturate(0.95) brightness(1.08) contrast(0.96);
   opacity: 0.42;
 }
 
-html[data-theme="minimalist-light"] .home-backdrop-vignette {
+html[data-color-mode="light"] .home-backdrop-vignette {
   background:
     radial-gradient(ellipse 80% 70% at 50% 48%, rgba(244, 246, 248, 0.36) 0%, rgba(244, 246, 248, 0.76) 80%, rgba(241, 245, 249, 0.92) 100%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.82) 0%, rgba(248, 250, 252, 0.34) 24%, rgba(248, 250, 252, 0.48) 78%, rgba(241, 245, 249, 0.88) 100%);
@@ -1786,7 +2087,7 @@ html[data-theme] body.home-page .home-brand {
   isolation: isolate;
 }
 
-html[data-theme="minimalist-light"] .home-hero-banner {
+html[data-color-mode="light"] .home-hero-banner {
   background: rgba(255, 255, 255, 0.78);
   box-shadow: 0 8px 26px rgba(15, 23, 42, 0.08);
 }
@@ -1933,7 +2234,7 @@ html[data-theme="minimalist-light"] .home-hero-banner {
   overflow: hidden;
 }
 
-html[data-theme="minimalist-light"] .portal-card {
+html[data-color-mode="light"] .portal-card {
   background: rgba(255, 255, 255, 0.82);
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
 }
@@ -1946,9 +2247,9 @@ html[data-theme="minimalist-light"] .portal-card {
 .portal-card[data-tone="cyan"]    { --card-tone: #06B6D4; --card-tone-soft: rgba(6, 182, 212, 0.14); }
 .portal-card[data-tone="orange"]  { --card-tone: #FB923C; --card-tone-soft: rgba(251, 146, 60, 0.14); }
 
-html[data-theme="minimalist-light"] .portal-card[data-tone="violet"] { --card-tone: #7C3AED; --card-tone-soft: rgba(124, 58, 237, 0.10); }
-html[data-theme="minimalist-light"] .portal-card[data-tone="amber"]  { --card-tone: #D97706; --card-tone-soft: rgba(217, 119, 6, 0.11); }
-html[data-theme="minimalist-light"] .portal-card[data-tone="orange"] { --card-tone: #EA580C; --card-tone-soft: rgba(234, 88, 12, 0.10); }
+html[data-color-mode="light"] .portal-card[data-tone="violet"] { --card-tone: #7C3AED; --card-tone-soft: rgba(124, 58, 237, 0.10); }
+html[data-color-mode="light"] .portal-card[data-tone="amber"]  { --card-tone: #D97706; --card-tone-soft: rgba(217, 119, 6, 0.11); }
+html[data-color-mode="light"] .portal-card[data-tone="orange"] { --card-tone: #EA580C; --card-tone-soft: rgba(234, 88, 12, 0.10); }
 
 .portal-card:hover {
   transform: translateY(-2px);
@@ -1971,7 +2272,7 @@ html[data-theme="minimalist-light"] .portal-card[data-tone="orange"] { --card-to
     color-mix(in srgb, var(--bg-surface) 72%, transparent);
 }
 
-html[data-theme="minimalist-light"] .portal-card-primary {
+html[data-color-mode="light"] .portal-card-primary {
   background:
     radial-gradient(circle at 12% 0%, var(--accent-soft), transparent 62%),
     rgba(255, 255, 255, 0.88);
@@ -2097,7 +2398,7 @@ html[data-theme="minimalist-light"] .portal-card-primary {
   box-shadow: 0 8px 24px rgba(0, 6, 20, 0.28);
 }
 
-html[data-theme="minimalist-light"] .home-recent-bar {
+html[data-color-mode="light"] .home-recent-bar {
   background: rgba(255, 255, 255, 0.82);
   box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
 }
@@ -2933,9 +3234,9 @@ html[data-theme] .bento-card:hover {
 }
 
 /* 极简明亮模式下提升启用按钮 vs 禁用按钮区分度 */
-html[data-theme="minimalist-light"] .task-actions button:not(:disabled):not(.primary):not(.danger),
-html[data-theme="minimalist-light"] .scheme-actions button:not(:disabled):not(.primary):not(.danger),
-html[data-theme="minimalist-light"] .optimization-actions button:not(:disabled):not(.primary):not(.danger):not(.queue-action) {
+html[data-color-mode="light"] .task-actions button:not(:disabled):not(.primary):not(.danger),
+html[data-color-mode="light"] .scheme-actions button:not(:disabled):not(.primary):not(.danger),
+html[data-color-mode="light"] .optimization-actions button:not(:disabled):not(.primary):not(.danger):not(.queue-action) {
   background: #FFFFFF !important;
   border-color: #94A3B8 !important;
   color: #0F172A !important;
@@ -5253,7 +5554,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     box-shadow: 12px 0 32px rgba(2, 6, 23, 0.42);
   }
 
-  [data-theme="minimalist-light"] .global-nav-tree.is-floating {
+  [data-color-mode="light"] .global-nav-tree.is-floating {
     box-shadow: 8px 0 24px rgba(15, 23, 42, 0.14);
   }
 
@@ -5549,7 +5850,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     overflow: hidden;
   }
 
-  [data-theme="minimalist-light"] .topo-stage {
+  [data-color-mode="light"] .topo-stage {
     background-color: #F8FAFC;
     background-image:
       linear-gradient(to right, rgba(15, 23, 42, 0.05) 1px, transparent 1px),
@@ -5774,7 +6075,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    width: 238px;
+    width: 248px;
     padding: 10px;
     border-radius: 14px;
     border: 1px solid var(--border-strong);
@@ -5963,7 +6264,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     background-size: 100% 100%, 100% 100%, 26px 26px;
   }
 
-  [data-theme="minimalist-light"] .topo-stage {
+  [data-color-mode="light"] .topo-stage {
     background-color: rgba(244, 249, 255, 0.86);
     background-image:
       radial-gradient(ellipse 64% 58% at 50% 48%, rgba(14, 165, 233, 0.09), transparent 72%),
@@ -6009,7 +6310,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     pointer-events: none;
   }
 
-  [data-theme="minimalist-light"] .ui-ico {
+  [data-color-mode="light"] .ui-ico {
     filter: none;
   }
 
