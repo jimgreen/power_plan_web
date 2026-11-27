@@ -636,14 +636,14 @@
       drawer.hidden = false;
       pill.setAttribute("aria-expanded", "true");
       refreshTasks({ forceRender: true });
-      schedulePoll(3000);
+      schedulePoll(12000);
     };
 
     const closeDrawer = () => {
       backdrop.hidden = true;
       drawer.hidden = true;
       pill.setAttribute("aria-expanded", "false");
-      schedulePoll(6000);
+      schedulePoll(30000);
     };
 
     const renderDrawer = () => {
@@ -720,9 +720,8 @@
       if (fetching || document.hidden) return;
       fetching = true;
       try {
-        const resp = await fetch("/api/tasks");
-        if (!resp.ok) return;
-        const data = await resp.json().catch(() => ({}));
+        const data = await fetchJson("/api/tasks", { slot: "global-tasks-drawer", ttlMs: 0, useEtag: true });
+        if (!data) return;
         const nextTasks = Array.isArray(data.tasks) ? data.tasks : [];
         if (initialized) {
           nextTasks.forEach((task) => {
@@ -738,8 +737,8 @@
         initialized = true;
         latestTasks = nextTasks;
         renderDrawer();
-      } catch (_) {
-        // 静默忽略后台轮询偶发失败
+      } catch (err) {
+        if (err && err.name === "AbortError") return;
       } finally {
         fetching = false;
       }
@@ -749,6 +748,11 @@
       if (pollTimer) window.clearInterval(pollTimer);
       pollTimer = window.setInterval(refreshTasks, delayMs);
     };
+
+    // 订阅全站 SSE 任务事件实现毫秒级更新，空闲仅靠 30s 兜底
+    sseHub.on("tasks", () => {
+      if (!document.hidden) refreshTasks();
+    });
 
     pill.addEventListener("click", () => (drawer.hidden ? openDrawer() : closeDrawer()));
     backdrop.addEventListener("click", closeDrawer);
@@ -1191,6 +1195,467 @@
     });
   }
 
+  // =========================================================================
+  // 统一请求层：AbortController 竞态取消 + 客户端 LRU 缓存 + ETag/304 协商
+  // =========================================================================
+  const INFLIGHT_SLOTS = new Map();
+  const CLIENT_LRU_CACHE = new Map(); // url -> { data, etag, ts }
+  const CLIENT_LRU_MAX = 64;
+
+  function lruSet(key, entry) {
+    if (CLIENT_LRU_CACHE.has(key)) CLIENT_LRU_CACHE.delete(key);
+    CLIENT_LRU_CACHE.set(key, entry);
+    while (CLIENT_LRU_CACHE.size > CLIENT_LRU_MAX) {
+      const oldest = CLIENT_LRU_CACHE.keys().next().value;
+      CLIENT_LRU_CACHE.delete(oldest);
+    }
+  }
+
+  function clearClientCache(prefix = "") {
+    if (!prefix) {
+      CLIENT_LRU_CACHE.clear();
+      return;
+    }
+    for (const k of Array.from(CLIENT_LRU_CACHE.keys())) {
+      if (k.startsWith(prefix)) CLIENT_LRU_CACHE.delete(k);
+    }
+  }
+
+  async function fetchJson(url, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    const slot = options.slot ? String(options.slot) : "";
+    const ttlMs = Number.isFinite(Number(options.ttlMs)) ? Number(options.ttlMs) : 0;
+    const useEtag = options.useEtag !== false && method === "GET";
+
+    if (method === "GET" && ttlMs > 0) {
+      const hit = CLIENT_LRU_CACHE.get(url);
+      if (hit && Date.now() - hit.ts <= ttlMs) {
+        return hit.data;
+      }
+    }
+
+    let controller = null;
+    if (slot) {
+      const prev = INFLIGHT_SLOTS.get(slot);
+      if (prev) {
+        try { prev.abort(); } catch (_) {}
+      }
+      controller = new AbortController();
+      INFLIGHT_SLOTS.set(slot, controller);
+    }
+
+    const headers = { ...(options.headers || {}) };
+    const cached = method === "GET" ? CLIENT_LRU_CACHE.get(url) : null;
+    if (useEtag && cached && cached.etag) {
+      headers["If-None-Match"] = cached.etag;
+    }
+
+    try {
+      const resp = await fetch(url, {
+        ...options,
+        method,
+        headers,
+        signal: controller ? controller.signal : options.signal,
+      });
+      if (resp.status === 304 && cached) {
+        cached.ts = Date.now();
+        lruSet(url, cached);
+        return cached.data;
+      }
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        if (resp.status === 401 && !["/login.html", "/register.html"].includes(window.location.pathname)) {
+          const next = encodeURIComponent(window.location.pathname + window.location.search);
+          window.location.href = `/login.html?next=${next}`;
+        }
+        throw new Error(data.message || data.error || `请求失败 (${resp.status})`);
+      }
+      if (method === "GET") {
+        const etag = resp.headers.get("ETag") || "";
+        if (etag || ttlMs > 0) {
+          lruSet(url, { data, etag, ts: Date.now() });
+        }
+      } else {
+        // 写操作后清理只读缓存，避免脏数据
+        clearClientCache();
+      }
+      return data;
+    } finally {
+      if (slot && INFLIGHT_SLOTS.get(slot) === controller) {
+        INFLIGHT_SLOTS.delete(slot);
+      }
+    }
+  }
+
+  // =========================================================================
+  // 全站单连接 SSE 事件总线（替代多处高频 setInterval 轮询）
+  // =========================================================================
+  function createSseHub() {
+    const listeners = new Map();
+    let es = null;
+    let reconnectDelay = 2000;
+    let reconnectTimer = 0;
+    let connected = false;
+
+    const emit = (eventName, payload) => {
+      const set = listeners.get(eventName);
+      if (!set) return;
+      set.forEach((fn) => {
+        try { fn(payload); } catch (_) {}
+      });
+    };
+
+    const close = () => {
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = 0;
+      }
+      if (es) {
+        try { es.close(); } catch (_) {}
+        es = null;
+      }
+      connected = false;
+    };
+
+    const connect = () => {
+      if (typeof window.EventSource !== "function") return;
+      if (["/login.html", "/register.html"].includes(window.location.pathname)) return;
+      if (document.hidden || es) return;
+      try {
+        es = new EventSource("/api/events");
+        es.addEventListener("ready", () => {
+          connected = true;
+          reconnectDelay = 2000;
+          emit("ready", { connected: true });
+        });
+        es.addEventListener("tasks", (ev) => {
+          let parsed = {};
+          try { parsed = JSON.parse(ev.data || "{}"); } catch (_) {}
+          clearClientCache("/api/tasks");
+          emit("tasks", parsed);
+        });
+        es.onerror = () => {
+          close();
+          if (!document.hidden) {
+            reconnectTimer = window.setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(30000, Math.round(reconnectDelay * 1.6));
+          }
+        };
+      } catch (_) {
+        close();
+      }
+    };
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) close();
+      else connect();
+    });
+    window.addEventListener("beforeunload", close);
+
+    return {
+      connect,
+      isConnected: () => connected,
+      on(eventName, handler) {
+        if (!listeners.has(eventName)) listeners.set(eventName, new Set());
+        listeners.get(eventName).add(handler);
+        if (!es && !document.hidden) connect();
+        return () => listeners.get(eventName)?.delete(handler);
+      },
+    };
+  }
+  const sseHub = createSseHub();
+  window.PowerPlanEvents = sseHub;
+
+  // =========================================================================
+  // 骨架屏、陈旧结果提醒条与通用导出工具（PNG / SVG / CSV）
+  // =========================================================================
+  function renderSkeleton(target, kind = "chart") {
+    const el = typeof target === "string" ? document.querySelector(target) : target;
+    if (!el) return;
+    if (kind === "table") {
+      el.innerHTML = `<div class="ui-skeleton-wrap" aria-busy="true"><div class="ui-skeleton-row"></div><div class="ui-skeleton-row"></div><div class="ui-skeleton-row"></div><div class="ui-skeleton-row short"></div></div>`;
+    } else if (kind === "cards") {
+      el.innerHTML = `<div class="ui-skeleton-grid" aria-busy="true"><div class="ui-skeleton-card"></div><div class="ui-skeleton-card"></div><div class="ui-skeleton-card"></div></div>`;
+    } else {
+      el.innerHTML = `<div class="ui-skeleton-chart" aria-busy="true"><div class="ui-skeleton-row short"></div><div class="ui-skeleton-box"></div></div>`;
+    }
+  }
+
+  function renderStaleBanner(staleInfo, options = {}) {
+    if (!staleInfo || !staleInfo.is_stale) return "";
+    const reason = staleInfo.reason || tr("方案参数已变更，当前结果已过期，建议重新计算");
+    const btnHtml = options.actionAttr
+      ? `<button type="button" class="stale-recalc-btn" ${options.actionAttr}>${tr(options.actionLabel || "立即重算")}</button>`
+      : "";
+    return `<div class="stale-result-banner" role="status">
+      <span class="stale-badge-dot" aria-hidden="true"></span>
+      <span class="stale-banner-text">${String(reason).replace(/</g, "&lt;")}</span>
+      ${btnHtml}
+    </div>`;
+  }
+
+  function triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function serializeSvgForExport(svgEl) {
+    if (!svgEl) return null;
+    const clone = svgEl.cloneNode(true);
+    const rect = svgEl.getBoundingClientRect();
+    const vb = svgEl.getAttribute("viewBox");
+    const w = Math.max(320, Math.round(rect.width || 960));
+    const h = Math.max(200, Math.round(rect.height || 360));
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    if (!vb) clone.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    clone.setAttribute("width", String(w));
+    clone.setAttribute("height", String(h));
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim() || (isDarkTheme() ? "#0F172A" : "#FFFFFF");
+    const bgRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bgRect.setAttribute("x", "0");
+    bgRect.setAttribute("y", "0");
+    bgRect.setAttribute("width", "100%");
+    bgRect.setAttribute("height", "100%");
+    bgRect.setAttribute("fill", bg);
+    clone.insertBefore(bgRect, clone.firstChild);
+    const text = new XMLSerializer().serializeToString(clone);
+    return { text, w, h, bg };
+  }
+
+  function exportSvgAsSvg(svgEl, filename = "chart.svg") {
+    const info = serializeSvgForExport(svgEl);
+    if (!info) return;
+    triggerDownload(new Blob([info.text], { type: "image/svg+xml;charset=utf-8" }), filename);
+    toast(`${tr("已导出")} ${filename}`, { level: "success" });
+  }
+
+  function exportSvgAsPng(svgEl, filename = "chart.png", overlayCanvas = null) {
+    const info = serializeSvgForExport(svgEl);
+    if (!info) return;
+    const scale = 2;
+    const img = new Image();
+    const svgBlob = new Blob([info.text], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(svgBlob);
+    img.onload = () => {
+      const out = document.createElement("canvas");
+      out.width = info.w * scale;
+      out.height = info.h * scale;
+      const ctx = out.getContext("2d");
+      ctx.fillStyle = info.bg;
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(img, 0, 0, out.width, out.height);
+      if (overlayCanvas && overlayCanvas.width > 0 && overlayCanvas.height > 0) {
+        ctx.drawImage(overlayCanvas, 0, 0, out.width, out.height);
+      }
+      URL.revokeObjectURL(url);
+      out.toBlob((blob) => {
+        if (blob) {
+          triggerDownload(blob, filename);
+          toast(`${tr("已导出")} ${filename}`, { level: "success" });
+        }
+      }, "image/png");
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      exportSvgAsSvg(svgEl, filename.replace(/\.png$/i, ".svg"));
+    };
+    img.src = url;
+  }
+
+  function exportCanvasAsPng(canvasEl, filename = "chart.png") {
+    if (!canvasEl) return;
+    const out = document.createElement("canvas");
+    out.width = canvasEl.width;
+    out.height = canvasEl.height;
+    const ctx = out.getContext("2d");
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim() || (isDarkTheme() ? "#0F172A" : "#FFFFFF");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(canvasEl, 0, 0);
+    out.toBlob((blob) => {
+      if (blob) {
+        triggerDownload(blob, filename);
+        toast(`${tr("已导出")} ${filename}`, { level: "success" });
+      }
+    }, "image/png");
+  }
+
+  function exportRowsAsCsv(headers, rows, filename = "data.csv") {
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [headers.map(esc).join(","), ...rows.map((r) => r.map(esc).join(","))];
+    triggerDownload(new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" }), filename);
+    toast(`${tr("已导出")} ${filename}`, { level: "success" });
+  }
+
+  // =========================================================================
+  // 全局快捷命令面板（Ctrl+K / Cmd+K）
+  // =========================================================================
+  function mountCommandPalette() {
+    const topbar = document.querySelector(".topbar");
+    const utilities = topbar?.querySelector(".topbar-utilities");
+    if (!topbar || !utilities || document.getElementById("cmdPaletteTrigger")) return;
+
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.id = "cmdPaletteTrigger";
+    trigger.className = "cmd-palette-trigger";
+    trigger.title = tr("全局快捷命令 (Ctrl+K)");
+    trigger.innerHTML = `<svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg><kbd>Ctrl K</kbd>`;
+    utilities.insertBefore(trigger, utilities.firstChild);
+
+    const backdrop = document.createElement("div");
+    backdrop.id = "cmdPaletteBackdrop";
+    backdrop.className = "cmd-palette-backdrop";
+    backdrop.hidden = true;
+    backdrop.innerHTML = `
+      <div class="cmd-palette-dialog" role="dialog" aria-modal="true" aria-label="快捷命令面板">
+        <div class="cmd-palette-input-row">
+          <input id="cmdPaletteInput" type="search" placeholder="搜索方案、页面、主题或语言..." autocomplete="off">
+          <kbd>Esc</kbd>
+        </div>
+        <div id="cmdPaletteList" class="cmd-palette-list" role="listbox"></div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+
+    const input = backdrop.querySelector("#cmdPaletteInput");
+    const listEl = backdrop.querySelector("#cmdPaletteList");
+    let cachedSchemes = [];
+    let filtered = [];
+    let activeIdx = 0;
+
+    const STATIC_COMMANDS = [
+      { group: "导航", label: "系统首页", sub: "index.html", run: () => { window.location.href = "index.html"; } },
+      { group: "导航", label: "参数维护", sub: "planning.html", run: () => { window.location.href = "planning.html"; } },
+      { group: "导航", label: "规划求解", sub: "optimize.html", run: () => { window.location.href = "optimize.html"; } },
+      { group: "导航", label: "方案评估", sub: "evaluation.html", run: () => { window.location.href = "evaluation.html"; } },
+      { group: "导航", label: "供电可靠性", sub: "reliability.html", run: () => { window.location.href = "reliability.html"; } },
+      { group: "导航", label: "频率计算", sub: "frequency.html", run: () => { window.location.href = "frequency.html"; } },
+      { group: "导航", label: "结果对比", sub: "comparison.html", run: () => { window.location.href = "comparison.html"; } },
+      { group: "导航", label: "批量扫参 / 敏感性分析", sub: "sensitivity.html", run: () => { window.location.href = "sensitivity.html"; } },
+      { group: "导航", label: "综合评审简报", sub: "report.html", run: () => { window.location.href = "report.html"; } },
+      { group: "导航", label: "任务并发监控", sub: "tasks.html", run: () => { window.location.href = "tasks.html"; } },
+      ...THEMES.map((t) => ({ group: "主题", label: `切换主题：${t.label}`, sub: t.id, run: () => setTheme(t.id) })),
+      { group: "语言", label: "切换语言：简体中文", sub: "zh-CN", run: () => window.PowerPlanI18n?.setLanguage?.("zh-CN") },
+      { group: "语言", label: "Switch Language: English", sub: "en-US", run: () => window.PowerPlanI18n?.setLanguage?.("en-US") },
+      { group: "语言", label: "Сменить язык: Русский", sub: "ru-RU", run: () => window.PowerPlanI18n?.setLanguage?.("ru-RU") },
+    ];
+
+    const renderList = () => {
+      const q = String(input.value || "").trim().toLowerCase();
+      const schemeCmds = cachedSchemes.flatMap((s) => [
+        {
+          group: "方案",
+          label: `${s.name} · 方案评估`,
+          sub: "evaluation.html",
+          run: () => { window.location.href = `evaluation.html?scheme=${encodeURIComponent(s.name)}`; },
+        },
+        {
+          group: "方案",
+          label: `${s.name} · 参数维护`,
+          sub: "planning.html",
+          run: () => { window.location.href = `planning.html?scheme=${encodeURIComponent(s.name)}`; },
+        },
+        {
+          group: "方案",
+          label: `${s.name} · 综合简报`,
+          sub: "report.html",
+          run: () => { window.location.href = `report.html?scheme=${encodeURIComponent(s.name)}`; },
+        },
+      ]);
+      const all = [...schemeCmds, ...STATIC_COMMANDS];
+      filtered = q
+        ? all.filter((item) => `${item.group} ${item.label} ${item.sub}`.toLowerCase().includes(q)).slice(0, 18)
+        : [...STATIC_COMMANDS.slice(0, 10), ...schemeCmds.slice(0, 6)];
+      activeIdx = Math.min(activeIdx, Math.max(0, filtered.length - 1));
+      if (!filtered.length) {
+        listEl.innerHTML = `<div class="cmd-palette-empty">${tr("未找到匹配命令或方案")}</div>`;
+        return;
+      }
+      listEl.innerHTML = filtered
+        .map(
+          (item, idx) => `
+        <button type="button" class="cmd-palette-item${idx === activeIdx ? " is-active" : ""}" data-cmd-idx="${idx}" role="option" aria-selected="${idx === activeIdx}">
+          <span class="cmd-palette-group">${tr(item.group)}</span>
+          <span class="cmd-palette-label">${item.label}</span>
+          <span class="cmd-palette-sub">${item.sub}</span>
+        </button>`,
+        )
+        .join("");
+    };
+
+    const close = () => {
+      backdrop.hidden = true;
+    };
+
+    const open = async () => {
+      backdrop.hidden = false;
+      input.value = "";
+      activeIdx = 0;
+      renderList();
+      input.focus();
+      try {
+        const res = await fetchJson("/api/planning/schemes", { slot: "cmd-palette-schemes", ttlMs: 15000 });
+        cachedSchemes = Array.isArray(res?.schemes) ? res.schemes : [];
+        if (!backdrop.hidden) renderList();
+      } catch (_) {}
+    };
+
+    const runSelected = (idx) => {
+      const target = filtered[idx];
+      if (!target) return;
+      close();
+      target.run();
+    };
+
+    trigger.addEventListener("click", open);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) close();
+    });
+    input.addEventListener("input", () => {
+      activeIdx = 0;
+      renderList();
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activeIdx = filtered.length ? (activeIdx + 1) % filtered.length : 0;
+        renderList();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activeIdx = filtered.length ? (activeIdx - 1 + filtered.length) % filtered.length : 0;
+        renderList();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        runSelected(activeIdx);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+      }
+    });
+    listEl.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-cmd-idx]");
+      if (item) runSelected(Number(item.dataset.cmdIdx));
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        if (backdrop.hidden) open();
+        else close();
+      }
+    });
+  }
+
   /** 注册全局快捷键：Ctrl+S 快捷保存、Esc 关闭右键菜单与原生弹窗 */
   function bindGlobalShortcuts() {
     document.addEventListener("keydown", (event) => {
@@ -1219,6 +1684,7 @@
     setTheme(getTheme(), { silent: true });
     mountTopbarUtilities();
     mountGlobalTaskDrawer();
+    mountCommandPalette();
     mountWorkflowNextStrip();
     mountSidebarSplitter();
     enhanceSchemeRail();
@@ -1237,6 +1703,14 @@
     prompt: promptDialog,
     alert: (message, options = {}) => toast(message, options),
     mountTopbarUtilities,
+    fetchJson,
+    clearClientCache,
+    renderSkeleton,
+    renderStaleBanner,
+    exportSvgAsPng,
+    exportSvgAsSvg,
+    exportCanvasAsPng,
+    exportRowsAsCsv,
   };
 
   if (document.readyState === "loading") {

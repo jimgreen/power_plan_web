@@ -270,6 +270,19 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function api(path, options = {}) {
+  if (window.PowerPlanUI?.fetchJson && (!options.method || String(options.method).toUpperCase() === "GET")) {
+    const slot = path.startsWith("/api/optimization/status") ? "opt-status" : "";
+    try {
+      return await window.PowerPlanUI.fetchJson(path, {
+        ...options,
+        slot,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") return null;
+      throw error;
+    }
+  }
   const response = await fetch(path, {
     ...options,
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -281,6 +294,7 @@ async function api(path, options = {}) {
     error.status = response.status;
     throw error;
   }
+  window.PowerPlanUI?.clearClientCache?.();
   return data;
 }
 
@@ -536,6 +550,7 @@ function renderOptimizationSwitchingState(scheme, base = defaultOptimizationStat
 
 async function refreshOptimizationStatus(scheme = state.currentScheme) {
   const data = await api(optimizationStatusPath(scheme));
+  if (!data) return;
   if (scheme !== state.currentScheme) return;
   state.isSwitchingScheme = false;
   state.optimization = data;
@@ -550,10 +565,31 @@ function optimizationStatusPath(scheme) {
 function scheduleOptimizationPolling() {
   if (state.pollTimer) window.clearInterval(state.pollTimer);
   const data = state.optimization || {};
-  state.pollDelay = data.status === "运行中" || data.task_status === "排队中" ? 1000 : 4000;
+  const isActive = data.status === "运行中" || data.task_status === "排队中";
+  state.pollDelay = isActive ? 1500 : 15000;
   state.pollTimer = window.setInterval(() => {
+    if (document.hidden) return;
     refreshOptimizationStatus().catch(showError);
   }, state.pollDelay);
+  if (!state._sseSubscribed && window.PowerPlanEvents?.on) {
+    state._sseSubscribed = true;
+    window.PowerPlanEvents.on("tasks", () => {
+      if (!document.hidden) refreshOptimizationStatus().catch(() => {});
+    });
+  }
+}
+
+function loadOptimizationInsights() {
+  const panel = document.getElementById("optimizationInsightsPanel");
+  if (!panel || !window.PowerPlanCharts?.loadAndRenderInsightsPanel) return;
+  const key = `${state.currentScheme}/${state.optimization?.end_time || ""}`;
+  if (state.insightsKey === key && panel.querySelector(".insights-grid")) return;
+  state.insightsKey = key;
+  window.PowerPlanCharts.loadAndRenderInsightsPanel(panel, {
+    scheme: state.currentScheme,
+    filename: "opt_results.xlsx",
+    slot: "opt-insights",
+  });
 }
 
 function bindResultTabs() {
@@ -582,6 +618,7 @@ function activateOptimizationResultTab(target, options = {}) {
   });
   if (options.remember !== false) rememberOptimizationPageState({ activeResultTab: activeTarget });
   if (activeTarget === "curves" && options.load !== false) loadOptimizationCurveData().catch(showError);
+  if (activeTarget === "insights" && options.load !== false) loadOptimizationInsights();
   window.requestAnimationFrame(refreshAdaptiveResultCharts);
 }
 
@@ -589,6 +626,16 @@ function renderOptimization(data) {
   const renderSignature = JSON.stringify(data || {});
   if (renderSignature && renderSignature === state.lastOptimizationRenderSignature) return;
   state.lastOptimizationRenderSignature = renderSignature;
+  const staleHost = document.getElementById("optimizationStaleHost");
+  if (staleHost) {
+    staleHost.innerHTML = window.PowerPlanUI?.renderStaleBanner?.(data.stale_info, {
+      actionAttr: 'data-stale-recalc="optimization"',
+      actionLabel: "重新求解",
+    }) || "";
+    staleHost.querySelector("[data-stale-recalc]")?.addEventListener("click", () => {
+      document.getElementById("startOptimization")?.click();
+    });
+  }
   updateOptimizationActions(data);
   renderMetrics(data.metrics || []);
   const allowEmptyResult = data.status === "切换中";
@@ -601,6 +648,7 @@ function renderOptimization(data) {
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
   if (state.activeResultTab === "curves" && !state.isSwitchingScheme) loadOptimizationCurveData().catch(showError);
+  if (state.activeResultTab === "insights" && !state.isSwitchingScheme) loadOptimizationInsights();
 }
 
 async function loadOptimizationCurveData() {

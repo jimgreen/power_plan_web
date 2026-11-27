@@ -108,6 +108,15 @@
   });
 
   async function api(path, options = {}) {
+    if (window.PowerPlanUI?.fetchJson && (!options.method || String(options.method).toUpperCase() === "GET")) {
+      const slot = path.startsWith("/api/reliability/status") ? "rel-status" : path.startsWith("/api/reliability/results") ? "rel-results" : "";
+      return await window.PowerPlanUI.fetchJson(path, {
+        credentials: "same-origin",
+        ...options,
+        slot,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+    }
     let response;
     try {
       response = await fetch(path, {
@@ -125,6 +134,7 @@
       error.payload = data;
       throw error;
     }
+    window.PowerPlanUI?.clearClientCache?.();
     return data;
   }
 

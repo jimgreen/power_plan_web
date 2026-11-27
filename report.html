@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>综合简报 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260530-scheme-rail-divider-visible">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v13">
-  <script src="assets/ui-kit.js?v=20261126-ui-v13"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v14">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v14">
+  <script src="assets/ui-kit.js?v=20261127-ui-v14"></script>
 </head>
 <body>
   <main class="planning-shell report-shell">
@@ -57,7 +57,12 @@
         <div id="reportGeneratedAt" class="report-doc-time">—</div>
       </header>
 
+      <div id="reportStaleHost"></div>
       <section id="reportKpiStrip" class="report-kpi-strip"></section>
+      <section id="reportConclusionsCard" class="report-card report-conclusions-card" hidden>
+        <h2>工程诊断结论与改进建议</h2>
+        <div id="reportConclusionsList" class="report-conclusions-list"></div>
+      </section>
 
       <section class="report-grid-two">
         <div class="report-card">
@@ -71,8 +76,22 @@
       </section>
 
       <section class="report-card">
-        <h2>月度供能结构与电量平衡</h2>
-        <svg id="reportMonthlyChart" class="report-monthly-chart" role="img" aria-label="月度供能结构图"></svg>
+        <div class="insight-card-head">
+          <h2>月度供能结构与电量平衡</h2>
+          <div class="insight-card-controls no-print">
+            <button id="reportMonthlyPng" type="button" class="insight-export-btn">PNG</button>
+            <button id="reportMonthlySvg" type="button" class="insight-export-btn">SVG</button>
+          </div>
+        </div>
+        <div class="insight-svg-stage">
+          <svg id="reportMonthlyChart" class="report-monthly-chart" role="img" aria-label="月度供能结构图"></svg>
+          <div id="reportMonthlyTip" class="insight-tooltip" hidden></div>
+        </div>
+      </section>
+
+      <section class="report-grid-two report-insights-row">
+        <div id="reportSankeyCard" class="report-card"></div>
+        <div id="reportWaterfallCard" class="report-card"></div>
       </section>
 
       <section class="report-grid-three">
@@ -92,9 +111,10 @@
     </article>
   </main>
 
-  <script src="assets/i18n.js?v=20261126-ui-v13"></script>
-  <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/page_state.js?v=20261126-ui-v13"></script>
-  <script src="assets/report.js?v=20261126-ui-v3"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v14"></script>
+  <script src="assets/auth.js?v=20261127-ui-v14"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v14"></script>
+  <script src="assets/chart-enhancer.js?v=20261127-ui-v14"></script>
+  <script src="assets/report.js?v=20261127-ui-v14"></script>
 </body>
 </html>

@@ -292,6 +292,19 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function api(path, options = {}) {
+  if (window.PowerPlanUI?.fetchJson && (!options.method || String(options.method).toUpperCase() === "GET")) {
+    const slot = path.startsWith("/api/evaluation/status") ? "eval-status" : "";
+    try {
+      return await window.PowerPlanUI.fetchJson(path, {
+        ...options,
+        slot,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") return null;
+      throw error;
+    }
+  }
   let response;
   try {
     response = await fetch(path, {
@@ -308,6 +321,7 @@ async function api(path, options = {}) {
     error.status = response.status;
     throw error;
   }
+  window.PowerPlanUI?.clearClientCache?.();
   return data;
 }
 
@@ -925,6 +939,7 @@ function saveEvaluationLogs() {
 
 async function refreshOptimizationStatus(scheme = state.currentScheme, filename = state.selectedResultFile) {
   const data = await api(optimizationStatusPath(scheme, filename));
+  if (!data) return;
   if (scheme !== state.currentScheme || filename !== state.selectedResultFile) return;
   state.isSwitchingResult = false;
   state.optimization = data;
@@ -941,10 +956,32 @@ function optimizationStatusPath(scheme, filename = state.selectedResultFile) {
 function scheduleOptimizationPolling() {
   if (state.pollTimer) window.clearInterval(state.pollTimer);
   const data = state.optimization || {};
-  state.pollDelay = data.status === "运行中" || data.task_status === "排队中" ? 1000 : 4000;
+  const isActive = data.status === "运行中" || data.task_status === "排队中";
+  // 活跃计算期间保持 1.5s，空闲状态依靠 SSE 实时推送 + 15s 低频兜底
+  state.pollDelay = isActive ? 1500 : 15000;
   state.pollTimer = window.setInterval(() => {
+    if (document.hidden) return;
     refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(showError);
   }, state.pollDelay);
+  if (!state._sseSubscribed && window.PowerPlanEvents?.on) {
+    state._sseSubscribed = true;
+    window.PowerPlanEvents.on("tasks", () => {
+      if (!document.hidden) refreshOptimizationStatus(state.currentScheme, state.selectedResultFile).catch(() => {});
+    });
+  }
+}
+
+function loadEvaluationInsights() {
+  const panel = document.getElementById("evaluationInsightsPanel");
+  if (!panel || !window.PowerPlanCharts?.loadAndRenderInsightsPanel) return;
+  const key = `${state.currentScheme}/${state.selectedResultFile}/${state.optimization?.end_time || ""}`;
+  if (state.insightsKey === key && panel.querySelector(".insights-grid")) return;
+  state.insightsKey = key;
+  window.PowerPlanCharts.loadAndRenderInsightsPanel(panel, {
+    scheme: state.currentScheme,
+    filename: state.selectedResultFile,
+    slot: "eval-insights",
+  });
 }
 
 function bindResultTabs() {
@@ -973,6 +1010,7 @@ function activateEvaluationResultTab(target, options = {}) {
   });
   if (options.remember !== false) rememberEvaluationPageState({ activeResultTab: activeTarget });
   if (activeTarget === "curves" && options.load !== false) loadEvaluationCurveData().catch(showError);
+  if (activeTarget === "insights" && options.load !== false) loadEvaluationInsights();
   window.requestAnimationFrame(refreshAdaptiveResultCharts);
 }
 
@@ -980,6 +1018,16 @@ function renderOptimization(data) {
   const renderSignature = JSON.stringify(data || {});
   if (renderSignature && renderSignature === state.lastOptimizationRenderSignature) return;
   state.lastOptimizationRenderSignature = renderSignature;
+  const staleHost = document.getElementById("evaluationStaleHost");
+  if (staleHost) {
+    staleHost.innerHTML = window.PowerPlanUI?.renderStaleBanner?.(data.stale_info, {
+      actionAttr: 'data-stale-recalc="evaluation"',
+      actionLabel: "重新评估",
+    }) || "";
+    staleHost.querySelector("[data-stale-recalc]")?.addEventListener("click", () => {
+      document.getElementById("startEvaluation")?.click();
+    });
+  }
   updateOptimizationActions(data);
   renderMetrics(data.metrics || []);
   const allowEmptyResult = data.status === "切换中";
@@ -992,6 +1040,7 @@ function renderOptimization(data) {
   bindChartHoverCursors();
   renderOptimizationLogs(data.logs || []);
   if (state.activeResultTab === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
+  if (state.activeResultTab === "insights" && !state.isSwitchingResult) loadEvaluationInsights();
 }
 
 async function loadEvaluationCurveData() {

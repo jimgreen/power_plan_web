@@ -105,6 +105,20 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function api(path, options = {}) {
+  if (window.PowerPlanUI?.fetchJson && (!options.method || String(options.method).toUpperCase() === "GET")) {
+    const slot = path.startsWith("/api/comparison/data") ? "cmp-data" : "";
+    try {
+      return await window.PowerPlanUI.fetchJson(path, {
+        ...options,
+        slot,
+        ttlMs: path.startsWith("/api/comparison/curves") ? 15000 : 0,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") return null;
+      throw error;
+    }
+  }
   let response;
   try {
     response = await fetch(path, {
@@ -412,7 +426,7 @@ async function refreshComparisonData() {
     state.comparison = { items: [], tables: { capacity: [], energy: [], safety: [] }, curve_groups: {}, annual_table: [], curves: [], series: {} };
   } else {
     const summary = await api(`/api/comparison/data?mode=summary&items=${encodeURIComponent(requestKey)}`);
-    if (state.curveDataKey !== requestKey) return;
+    if (!summary || state.curveDataKey !== requestKey) return;
     state.comparison = summary;
   }
   state.selectedCurves = state.selectedCurves.filter((name) => state.comparison.curves.includes(name));
@@ -580,15 +594,35 @@ function bindComparisonDecisionControls() {
     syncComparisonDecisionControls();
   });
 
+  const radarBtn = document.getElementById("comparisonRadarToggle");
+  radarBtn?.addEventListener("click", () => {
+    state.showRadarPanel = !state.showRadarPanel;
+    syncComparisonDecisionControls();
+    if (state.showRadarPanel) renderComparisonRadarPanel();
+  });
+
   exportBtn?.addEventListener("click", exportComparisonTablesCsv);
   syncComparisonDecisionControls();
+}
+
+function renderComparisonRadarPanel() {
+  const section = document.getElementById("comparisonRadarSection");
+  if (!section) return;
+  section.hidden = !state.showRadarPanel;
+  if (!state.showRadarPanel) return;
+  const items = Array.isArray(state.comparison.items) ? state.comparison.items : [];
+  if (window.PowerPlanCharts?.renderComparisonRadar) {
+    window.PowerPlanCharts.renderComparisonRadar(section, items, state.comparison.tables || {});
+  }
 }
 
 function syncComparisonDecisionControls() {
   const baselineSelect = document.getElementById("comparisonBaselineSelect");
   const deltaBtn = document.getElementById("comparisonDeltaToggle");
   const relBtn = document.getElementById("comparisonReliabilityToggle");
+  const radarBtn = document.getElementById("comparisonRadarToggle");
   const relSection = document.getElementById("reliabilityComparisonSection");
+  const radarSection = document.getElementById("comparisonRadarSection");
   const items = Array.isArray(state.comparison.items) ? state.comparison.items : [];
   const labels = items.map((item) => String(item.label || "")).filter(Boolean);
 
@@ -614,6 +648,22 @@ function syncComparisonDecisionControls() {
   }
   if (relSection) {
     relSection.hidden = !state.showReliabilityTable;
+  }
+  if (radarBtn) {
+    radarBtn.classList.toggle("active", Boolean(state.showRadarPanel));
+    radarBtn.setAttribute("aria-pressed", String(Boolean(state.showRadarPanel)));
+  }
+  if (radarSection) {
+    radarSection.hidden = !state.showRadarPanel;
+    if (state.showRadarPanel) renderComparisonRadarPanel();
+  }
+  // 过期结果警示汇总
+  const staleItems = items.filter((it) => it.stale);
+  const warnBox = document.getElementById("comparisonResultWarnings");
+  if (warnBox && staleItems.length) {
+    const names = staleItems.map((it) => it.label || it.scheme).join("、");
+    warnBox.hidden = false;
+    warnBox.innerHTML = `<span class="stale-inline-tag">参数已变·待重算</span> ${escapeHtml(names)} 的结果早于方案参数更新时间，建议重新计算后再做最终决策。`;
   }
 }
 

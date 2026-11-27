@@ -17,7 +17,15 @@
       .replace(/"/g, "&quot;");
   }
 
-  async function api(path) {
+  async function api(path, slot = "") {
+    if (window.PowerPlanUI?.fetchJson) {
+      try {
+        return await window.PowerPlanUI.fetchJson(path, { slot, ttlMs: 10000 });
+      } catch (err) {
+        if (err && err.name === "AbortError") return null;
+        throw err;
+      }
+    }
     const resp = await fetch(path);
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.message || data.error || "请求失败");
@@ -124,7 +132,7 @@
           acc += val;
           return `<rect x="${x0.toFixed(1)}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(0.5, yBot - yTop).toFixed(1)}" fill="${color}"/>`;
         };
-        return `${seg(p.wind, pal.wind)}${seg(p.pv, pal.solar)}${seg(p.diesel, pal.diesel)}<text x="${cx.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="${pal.text}" font-size="10.5">${escapeHtml(p.label)}</text>`;
+        return `${seg(p.wind, pal.wind)}${seg(p.pv, pal.solar)}${seg(p.diesel, pal.diesel)}<text x="${cx.toFixed(1)}" y="${height - 12}" text-anchor="middle" fill="${pal.text}" font-size="10.5">${escapeHtml(p.label)}</text><rect class="insight-hit-col" data-month-idx="${i}" x="${(padL + slotW * i).toFixed(1)}" y="${padT}" width="${slotW.toFixed(1)}" height="${plotH}" fill="transparent"/>`;
       })
       .join("");
 
@@ -148,6 +156,51 @@
       .join("");
 
     svg.innerHTML = `${grid}<line x1="${padL}" x2="${width - padR}" y1="${padT + plotH}" y2="${padT + plotH}" stroke="${pal.axis}"/>${bars}<path d="${loadLine}" fill="none" stroke="${pal.load}" stroke-width="2"/>${legend}`;
+
+    const tip = document.getElementById("reportMonthlyTip");
+    svg.querySelectorAll("[data-month-idx]").forEach((el) => {
+      el.addEventListener("mousemove", (e) => {
+        if (!tip) return;
+        const p = parsed[Number(el.dataset.monthIdx)];
+        if (!p) return;
+        const rect = svg.parentElement.getBoundingClientRect();
+        tip.hidden = false;
+        tip.innerHTML = `<strong>${escapeHtml(p.label)}</strong>
+          <div class="insight-tip-row"><span>风电</span><b>${Math.round(p.wind)} kWh</b></div>
+          <div class="insight-tip-row"><span>光伏</span><b>${Math.round(p.pv)} kWh</b></div>
+          <div class="insight-tip-row"><span>柴发</span><b>${Math.round(p.diesel)} kWh</b></div>
+          <div class="insight-tip-row"><span>负荷</span><b>${Math.round(p.load)} kWh</b></div>`;
+        tip.style.left = `${Math.min(rect.width - 175, Math.max(8, e.clientX - rect.left + 12))}px`;
+        tip.style.top = `${Math.max(6, e.clientY - rect.top - 44)}px`;
+      });
+      el.addEventListener("mouseleave", () => {
+        if (tip) tip.hidden = true;
+      });
+    });
+  }
+
+  function renderConclusions(items) {
+    const card = document.getElementById("reportConclusionsCard");
+    const list = document.getElementById("reportConclusionsList");
+    if (!card || !list) return;
+    if (!Array.isArray(items) || !items.length) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const badgeLabel = { pass: "达标", warn: "注意", risk: "风险" };
+    list.innerHTML = items
+      .map(
+        (it) => `
+      <div class="report-conclusion-item is-${escapeHtml(it.level || "warn")}">
+        <span class="report-conclusion-badge">${escapeHtml(badgeLabel[it.level] || "提示")}</span>
+        <div class="report-conclusion-body">
+          <strong>[${escapeHtml(it.category || "综合")}] ${escapeHtml(it.title || "")}</strong>
+          <p>${escapeHtml(it.detail || "")}</p>
+        </div>
+      </div>`,
+      )
+      .join("");
   }
 
   function renderReport() {
@@ -211,11 +264,18 @@
       "暂无站点数据",
     );
 
+    const staleHost = document.getElementById("reportStaleHost");
+    if (staleHost) {
+      staleHost.innerHTML = window.PowerPlanUI?.renderStaleBanner?.(d.stale_info) || "";
+    }
+    renderConclusions(d.conclusions);
     renderSimpleTable("reportCapacityTable", d.planning_table, null, "暂无规划装机配置");
     renderSimpleTable("reportGreenTable", d.green_table, null, "暂无经济性与绿电指标");
     renderSimpleTable("reportSafetyTable", d.safety_table, null, "暂无频率安全指标");
     renderSimpleTable("reportReliabilityTable", d.reliability_rows, ["指标", "数值", "单位"], "尚未执行供电可靠性评估，点击上方「可靠性校核」即可运行");
     renderMonthlyChart(d.monthly_curve);
+    window.PowerPlanCharts?.renderEnergySankey?.(document.getElementById("reportSankeyCard"), d.sankey);
+    window.PowerPlanCharts?.renderLcoeWaterfall?.(document.getElementById("reportWaterfallCard"), d.lcoe_waterfall);
 
     if (window.PowerPlanI18n) {
       window.PowerPlanI18n.translate(document.body, window.PowerPlanI18n.currentLanguage());
@@ -227,8 +287,11 @@
     state.currentScheme = scheme;
     state.selectedFile = filename;
     window.PowerPlanPageState?.write?.(PAGE_STATE_KEY, { currentScheme: scheme, selectedResultFile: filename });
+    window.PowerPlanUI?.renderSkeleton?.("#reportKpiStrip", "table");
     const qs = new URLSearchParams({ scheme, ...(filename ? { filename } : {}) }).toString();
-    state.data = await api(`/api/report/summary?${qs}`);
+    const res = await api(`/api/report/summary?${qs}`, "report-summary");
+    if (!res) return;
+    state.data = res;
     state.selectedFile = state.data.filename || "";
     renderReport();
   }
@@ -255,8 +318,20 @@
       loadReport(state.currentScheme, e.target.value).catch((err) => window.PowerPlanUI?.toast?.(err.message, { level: "error" }));
     });
     document.getElementById("reportPrintBtn")?.addEventListener("click", () => window.print());
-    window.addEventListener("powerplan:themechange", () => state.data && renderMonthlyChart(state.data.monthly_curve));
-    window.addEventListener("resize", () => state.data && renderMonthlyChart(state.data.monthly_curve));
+    document.getElementById("reportMonthlyPng")?.addEventListener("click", () => {
+      window.PowerPlanUI?.exportSvgAsPng?.(document.getElementById("reportMonthlyChart"), `${state.currentScheme || "report"}_monthly.png`);
+    });
+    document.getElementById("reportMonthlySvg")?.addEventListener("click", () => {
+      window.PowerPlanUI?.exportSvgAsSvg?.(document.getElementById("reportMonthlyChart"), `${state.currentScheme || "report"}_monthly.svg`);
+    });
+    const redrawCharts = () => {
+      if (!state.data) return;
+      renderMonthlyChart(state.data.monthly_curve);
+      window.PowerPlanCharts?.renderEnergySankey?.(document.getElementById("reportSankeyCard"), state.data.sankey);
+      window.PowerPlanCharts?.renderLcoeWaterfall?.(document.getElementById("reportWaterfallCard"), state.data.lcoe_waterfall);
+    };
+    window.addEventListener("powerplan:themechange", redrawCharts);
+    window.addEventListener("resize", redrawCharts);
 
     if (targetScheme) {
       await loadReport(targetScheme, targetFile);

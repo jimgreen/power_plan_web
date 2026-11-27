@@ -1306,6 +1306,21 @@ function maxTimeChartHeight() {
 }
 
 async function api(path, options = {}) {
+  if (window.PowerPlanUI?.fetchJson && (!options.method || String(options.method).toUpperCase() === "GET")) {
+    const isSchemeDetail = path.startsWith("/api/planning/schemes/") && !path.includes("/time-series");
+    const slot = isSchemeDetail ? "planning-scheme-detail" : "";
+    try {
+      return await window.PowerPlanUI.fetchJson(path, {
+        ...options,
+        slot,
+        ttlMs: path === "/api/planning/solver-capabilities" ? 60000 : 0,
+        headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      });
+    } catch (error) {
+      if (error && error.name === "AbortError") throw error;
+      throw error;
+    }
+  }
   const response = await fetch(path, {
     ...options,
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -1317,6 +1332,7 @@ async function api(path, options = {}) {
     error.status = response.status;
     throw error;
   }
+  window.PowerPlanUI?.clearClientCache?.();
   return data;
 }
 
@@ -5126,6 +5142,173 @@ function escapeHtml(value) {
 }
 
 function showError(error) {
+  if (error && error.name === "AbortError") return null;
   alert(error.message || String(error));
   return null;
 }
+
+// =========================================================================
+// 参数维护编辑效率增强：20 步撤销/重做（Ctrl+Z / Ctrl+Y）与 Excel Ctrl+V 块粘贴
+// =========================================================================
+(() => {
+  const MAX_HISTORY = 20;
+  const undoStack = [];
+  const redoStack = [];
+  let lastScheme = "";
+  let restoring = false;
+
+  function cloneEditablePayload() {
+    if (!state.payload) return null;
+    try {
+      return JSON.stringify(state.payload);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function syncHistoryButtons() {
+    const undoBtn = document.getElementById("undoPlanningBtn");
+    const redoBtn = document.getElementById("redoPlanningBtn");
+    if (undoBtn) undoBtn.disabled = undoStack.length <= 1;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+  }
+
+  function recordSnapshot() {
+    if (restoring || !state.payload) return;
+    if (state.currentScheme !== lastScheme) {
+      undoStack.length = 0;
+      redoStack.length = 0;
+      lastScheme = state.currentScheme;
+    }
+    const snap = cloneEditablePayload();
+    if (!snap) return;
+    if (undoStack.length && undoStack[undoStack.length - 1] === snap) return;
+    undoStack.push(snap);
+    if (undoStack.length > MAX_HISTORY) undoStack.shift();
+    redoStack.length = 0;
+    syncHistoryButtons();
+  }
+
+  function applySnapshot(snapText) {
+    if (!snapText) return;
+    restoring = true;
+    try {
+      state.payload = JSON.parse(snapText);
+      if (typeof renderAll === "function") renderAll();
+      else {
+        if (typeof renderDeviceTables === "function") renderDeviceTables();
+        if (typeof renderPlanningParameters === "function") renderPlanningParameters();
+        if (typeof renderTimeTable === "function") renderTimeTable();
+        if (typeof scheduleRenderChart === "function") scheduleRenderChart();
+      }
+      if (typeof setSchemeDirty === "function") setSchemeDirty(true);
+    } finally {
+      restoring = false;
+      syncHistoryButtons();
+    }
+  }
+
+  function undo() {
+    if (undoStack.length <= 1) return;
+    const current = undoStack.pop();
+    redoStack.push(current);
+    applySnapshot(undoStack[undoStack.length - 1]);
+    window.PowerPlanUI?.toast?.("已撤销上一步参数修改", { level: "info" });
+  }
+
+  function redo() {
+    if (!redoStack.length) return;
+    const next = redoStack.pop();
+    undoStack.push(next);
+    applySnapshot(next);
+    window.PowerPlanUI?.toast?.("已重做参数修改", { level: "info" });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("undoPlanningBtn")?.addEventListener("click", undo);
+    document.getElementById("redoPlanningBtn")?.addEventListener("click", redo);
+
+    // 监听编辑区任意参数变更以自动入栈
+    const editor = document.querySelector(".editor-panel");
+    if (editor) {
+      let debounceTimer = 0;
+      const scheduleRecord = () => {
+        if (restoring) return;
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(recordSnapshot, 180);
+      };
+      editor.addEventListener("change", scheduleRecord, true);
+      editor.addEventListener("focusin", () => {
+        if (!undoStack.length && state.payload) recordSnapshot();
+      });
+
+      // 支持从 Excel / WPS 直接复制多行多列并 Ctrl+V 粘贴到参数或时序表格单元格
+      editor.addEventListener("paste", (event) => {
+        const input = event.target?.closest?.("td input");
+        if (!input || input.readOnly || input.disabled) return;
+        const text = event.clipboardData?.getData("text/plain") || "";
+        if (!text.includes("\t") && !text.includes("\n")) return;
+        const table = input.closest("table");
+        const startCell = input.closest("td");
+        const startRow = input.closest("tr");
+        if (!table || !startCell || !startRow) return;
+        const tbody = startRow.parentElement;
+        if (!tbody) return;
+
+        event.preventDefault();
+        if (!undoStack.length) recordSnapshot();
+
+        const pastedRows = text
+          .replace(/\r\n/g, "\n")
+          .replace(/\r/g, "\n")
+          .split("\n")
+          .filter((line, idx, arr) => !(idx === arr.length - 1 && line === ""))
+          .map((line) => line.split("\t"));
+
+        const allRows = Array.from(tbody.querySelectorAll("tr"));
+        const rowStartIdx = allRows.indexOf(startRow);
+        const startRowCells = Array.from(startRow.children);
+        const colStartIdx = startRowCells.indexOf(startCell);
+        if (rowStartIdx < 0 || colStartIdx < 0) return;
+
+        let appliedCount = 0;
+        pastedRows.forEach((cols, rOff) => {
+          const tr = allRows[rowStartIdx + rOff];
+          if (!tr) return;
+          const tds = Array.from(tr.children);
+          cols.forEach((val, cOff) => {
+            const td = tds[colStartIdx + cOff];
+            const cellInput = td?.querySelector("input:not([disabled]):not([readonly]), select:not([disabled])");
+            if (!cellInput) return;
+            cellInput.value = val.trim();
+            cellInput.dispatchEvent(new Event("input", { bubbles: true }));
+            cellInput.dispatchEvent(new Event("change", { bubbles: true }));
+            appliedCount += 1;
+          });
+        });
+        if (appliedCount > 0) {
+          recordSnapshot();
+          window.PowerPlanUI?.toast?.(`已粘贴填充 ${appliedCount} 个单元格`, { level: "success" });
+        }
+      });
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const tag = (document.activeElement?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) {
+        if (undoStack.length > 1) {
+          event.preventDefault();
+          undo();
+        }
+      } else if (key === "y" || (key === "z" && event.shiftKey)) {
+        if (redoStack.length > 0) {
+          event.preventDefault();
+          redo();
+        }
+      }
+    });
+  });
+})();

@@ -37,7 +37,13 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("frequencySchemeFilter")?.addEventListener("change", handleFrequencySchemeFilterChange);
   document.getElementById("reliabilitySchemeFilter")?.addEventListener("change", handleReliabilitySchemeFilterChange);
   loadTasks().catch(showTaskError);
-  taskState.pollTimer = window.setInterval(() => loadTasks({ silent: true }).catch(showTaskError), 4000);
+  // 接入全站 SSE 实时推送，并将兜底轮询从 4s 退避至 15s 且隐藏页暂停
+  window.PowerPlanEvents?.on?.("tasks", () => {
+    if (!document.hidden) loadTasks({ silent: true }).catch(() => null);
+  });
+  taskState.pollTimer = window.setInterval(() => {
+    if (!document.hidden) loadTasks({ silent: true }).catch(showTaskError);
+  }, 15000);
 });
 
 function restoreTasksPageState() {

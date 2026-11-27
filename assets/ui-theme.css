@@ -3,6 +3,8 @@
    基于 web-ui-design / scientific-dashboard / web-ui-i18n 规范构建
    ========================================================================== */
 
+@layer base, layout, components, theme, enhancements;
+
 :root {
   --font-sans: "Inter", "Segoe UI", "Roboto", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Consolas", ui-monospace, monospace;
@@ -4340,14 +4342,595 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   color: var(--text-muted);
 }
 
+/* ==========================================================================
+   v14 交互效率、工程洞察可视化、骨架屏、命令面板与出版级打印增强（@layer enhancements）
+   ========================================================================== */
+@layer enhancements {
+  /* 全站工程表格与指标统一等宽数字防抖动 */
+  .data-table td,
+  .status-tile strong,
+  .report-kpi-item strong,
+  .radar-rank-score {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 顶栏快捷命令触发器与模态命令面板 (Ctrl+K) */
+  .cmd-palette-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 11px;
+    transition: border-color var(--transition-fast), color var(--transition-fast);
+  }
+  .cmd-palette-trigger:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+  }
+  .cmd-palette-trigger kbd {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+  }
+  .cmd-palette-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9990;
+    background: rgba(2, 6, 23, 0.58);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: 11vh;
+  }
+  .cmd-palette-backdrop[hidden] {
+    display: none;
+  }
+  .cmd-palette-dialog {
+    width: min(560px, 92vw);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong, var(--border));
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+  }
+  .cmd-palette-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .cmd-palette-input-row input {
+    flex: 1;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13.5px;
+  }
+  .cmd-palette-input-row kbd {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .cmd-palette-list {
+    max-height: 340px;
+    overflow-y: auto;
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .cmd-palette-item {
+    display: grid;
+    grid-template-columns: 48px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+  .cmd-palette-item.is-active,
+  .cmd-palette-item:hover {
+    background: var(--bg-selected);
+  }
+  .cmd-palette-group {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--accent);
+    text-align: center;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+  }
+  .cmd-palette-sub {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .cmd-palette-empty {
+    padding: 18px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12.5px;
+  }
+
+  /* 加载骨架屏 */
+  @keyframes uiSkeletonPulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  .ui-skeleton-row,
+  .ui-skeleton-card,
+  .ui-skeleton-box {
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--bg-subtle) 25%, var(--bg-elevated) 50%, var(--bg-subtle) 75%);
+    background-size: 200% 100%;
+    animation: uiSkeletonPulse 1.4s ease-in-out infinite;
+  }
+  .ui-skeleton-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+  .ui-skeleton-row {
+    height: 18px;
+    width: 100%;
+  }
+  .ui-skeleton-row.short {
+    width: 58%;
+  }
+  .ui-skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+    padding: 10px;
+  }
+  .ui-skeleton-card {
+    height: 150px;
+  }
+  .ui-skeleton-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+  }
+  .ui-skeleton-box {
+    height: 220px;
+    width: 100%;
+  }
+
+  /* 陈旧结果 (Stale) 警示条与内联标签 */
+  .stale-result-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    background: rgba(245, 158, 11, 0.12);
+    color: var(--text-primary);
+    font-size: 12px;
+  }
+  .stale-badge-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #F59E0B;
+    flex-shrink: 0;
+  }
+  .stale-banner-text {
+    flex: 1;
+    min-width: 0;
+  }
+  .stale-recalc-btn {
+    padding: 2px 9px;
+    font-size: 11.5px;
+    border-radius: 5px;
+    border: 1px solid #F59E0B;
+    background: rgba(245, 158, 11, 0.22);
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .stale-recalc-btn:hover {
+    background: rgba(245, 158, 11, 0.35);
+  }
+  .stale-inline-tag {
+    display: inline-block;
+    padding: 1px 5px;
+    margin-left: 4px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-style: normal;
+    font-weight: 600;
+    background: rgba(245, 158, 11, 0.2);
+    color: #F59E0B;
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    vertical-align: middle;
+  }
+
+  /* 8760 高频曲线 Canvas 混合层、框选缩放、右轴与导出工具条 */
+  .result-curve-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .comparison-chart-frame > svg {
+    position: relative;
+    z-index: 2;
+  }
+  .curve-brush-rect {
+    fill: rgba(56, 189, 248, 0.22);
+    stroke: var(--accent);
+    stroke-width: 1;
+  }
+  .curve-right-axis-labels {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 4px;
+    width: 52px;
+    pointer-events: none;
+    z-index: 3;
+  }
+  .curve-right-axis-labels span {
+    position: absolute;
+    right: 0;
+    transform: translateY(-50%);
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+  }
+  .curve-action-tools {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+  }
+  .curve-tool-btn,
+  .insight-export-btn {
+    height: 24px;
+    padding: 0 7px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast);
+  }
+  .curve-tool-btn:hover,
+  .insight-export-btn:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+  }
+  .curve-tool-btn.is-accent {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  /* 工程洞察四联视图 (热力图 / 典型日 / 桑基 / LCOE 瀑布) */
+  .insights-result-panel {
+    overflow: auto;
+    padding: 8px;
+  }
+  .insights-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .insight-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .insight-card-wide {
+    grid-column: 1 / -1;
+  }
+  .insight-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .insight-card-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .insight-card-title em {
+    font-style: normal;
+    color: var(--accent);
+    font-family: var(--font-mono);
+  }
+  .insight-card-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .insight-chip-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .insight-chip {
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-secondary);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .insight-chip.active {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .insight-heatmap-stage,
+  .insight-svg-stage {
+    position: relative;
+    width: 100%;
+    min-height: 220px;
+  }
+  .insight-heatmap-canvas {
+    display: block;
+    width: 100%;
+    border-radius: 4px;
+  }
+  .insight-typical-svg,
+  .insight-sankey-svg,
+  .insight-waterfall-svg {
+    display: block;
+    width: 100%;
+    height: 232px;
+  }
+  .insight-sankey-link {
+    transition: stroke-opacity 120ms ease;
+    cursor: pointer;
+  }
+  .insight-sankey-link:hover {
+    stroke-opacity: 0.82;
+  }
+  .insight-heatmap-footer,
+  .insight-typical-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .insight-colorbar {
+    flex: 1;
+    min-width: 120px;
+    max-width: 240px;
+    height: 8px;
+    border-radius: 999px;
+  }
+  .insight-tooltip {
+    position: absolute;
+    z-index: 20;
+    pointer-events: none;
+    min-width: 148px;
+    padding: 6px 9px;
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    font-size: 11.5px;
+    color: var(--text-primary);
+  }
+  .insight-tooltip strong {
+    display: block;
+    margin-bottom: 3px;
+    font-size: 11.5px;
+  }
+  .insight-tip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    line-height: 1.45;
+  }
+
+  /* 结果对比 5 维雷达图 + 权重评分器 */
+  .comparison-radar-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+  .comparison-radar-layout {
+    display: grid;
+    grid-template-columns: 344px 1fr;
+    gap: 14px;
+    align-items: center;
+    margin-top: 6px;
+  }
+  .comparison-radar-svg {
+    width: 340px;
+    height: 268px;
+    display: block;
+    margin: 0 auto;
+  }
+  .comparison-radar-controls {
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+  .radar-weights {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .radar-weight-row {
+    display: grid;
+    grid-template-columns: 112px 1fr 38px;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+  }
+  .radar-weight-row em {
+    font-style: normal;
+    font-family: var(--font-mono);
+    text-align: right;
+    color: var(--text-primary);
+  }
+  .radar-ranking {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .radar-rank-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    font-size: 12px;
+  }
+  .radar-rank-item.is-top {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .radar-rank-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .radar-rank-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .radar-rec-badge {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--ok, #10B981);
+    color: #052E16;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .radar-rank-score {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+
+  /* 综合简报自动诊断结论卡片 */
+  .report-conclusions-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    gap: 8px;
+  }
+  .report-conclusion-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+  }
+  .report-conclusion-item.is-pass { border-left: 3px solid #10B981; }
+  .report-conclusion-item.is-warn { border-left: 3px solid #F59E0B; }
+  .report-conclusion-item.is-risk { border-left: 3px solid #EF4444; }
+  .report-conclusion-badge {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .report-conclusion-item.is-pass .report-conclusion-badge { background: rgba(16, 185, 129, 0.18); color: #10B981; }
+  .report-conclusion-item.is-warn .report-conclusion-badge { background: rgba(245, 158, 11, 0.18); color: #F59E0B; }
+  .report-conclusion-item.is-risk .report-conclusion-badge { background: rgba(239, 68, 68, 0.18); color: #EF4444; }
+  .report-conclusion-body strong {
+    display: block;
+    font-size: 12px;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+  }
+  .report-conclusion-body p {
+    margin: 0;
+    font-size: 11.5px;
+    color: var(--text-secondary);
+    line-height: 1.45;
+  }
+  .report-insights-row {
+    margin-top: 8px;
+  }
+
+  @media (max-width: 1024px) {
+    .insights-grid,
+    .comparison-radar-layout,
+    .comparison-radar-controls {
+      grid-template-columns: 1fr;
+    }
+  }
+}
+
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
   body, html {
     background: #FFFFFF !important;
     color: #0F172A !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .no-print,
   .global-task-drawer,
   .global-task-drawer-backdrop,
+  .cmd-palette-backdrop,
   .ui-toast-stack {
     display: none !important;
   }
@@ -4361,10 +4944,12 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     box-shadow: none !important;
   }
   .report-card,
-  .report-kpi-item {
+  .report-kpi-item,
+  .report-conclusion-item {
     background: #FFFFFF !important;
     border: 1px solid #CBD5E1 !important;
     break-inside: avoid;
+    page-break-inside: avoid;
   }
   .report-canvas * {
     color: #0F172A !important;

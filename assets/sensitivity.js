@@ -39,6 +39,7 @@
     schemes: [],
     trackedItems: [], // [{ scheme, parameter_value, parameter_label }]
     rows: [],
+    tornado: {},
     viewMode: "trend",
     metricKey: "lcoe",
     pollTimer: 0,
@@ -53,12 +54,26 @@
   }
 
   async function api(path, options = {}) {
+    if (window.PowerPlanUI?.fetchJson && (!options.method || String(options.method).toUpperCase() === "GET")) {
+      const slot = path.startsWith("/api/sensitivity/summary") ? "sens-summary" : "";
+      try {
+        return await window.PowerPlanUI.fetchJson(path, {
+          ...options,
+          slot,
+          headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+        });
+      } catch (err) {
+        if (err && err.name === "AbortError") return null;
+        throw err;
+      }
+    }
     const resp = await fetch(path, {
       ...options,
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok) throw new Error(data.message || data.error || "请求失败");
+    window.PowerPlanUI?.clearClientCache?.();
     return data;
   }
 
@@ -76,7 +91,7 @@
     if (Array.isArray(saved.trackedItems)) {
       state.trackedItems = saved.trackedItems.filter((it) => it && it.scheme);
     }
-    if (["trend", "pareto"].includes(saved.viewMode)) state.viewMode = saved.viewMode;
+    if (["trend", "pareto", "tornado"].includes(saved.viewMode)) state.viewMode = saved.viewMode;
     if (METRIC_LABELS[saved.metricKey]) state.metricKey = saved.metricKey;
     return saved;
   }
@@ -172,38 +187,54 @@
     const baseScheme = document.getElementById("sensBaseScheme")?.value || "";
     const parameterKey = document.getElementById("sensParamKey")?.value || "load_scale";
     const rawText = document.getElementById("sensValuesInput")?.value || "";
+    const parameterKey2 = document.getElementById("sensParamKey2")?.value || "";
+    const rawText2 = document.getElementById("sensValues2Input")?.value || "";
     const prefix = document.getElementById("sensPrefixInput")?.value.trim() || "";
     const autoQueue = Boolean(document.getElementById("sensAutoQueue")?.checked);
-    const values = rawText
-      .split(/[,，\s]+/)
-      .map((s) => Number(s.trim()))
-      .filter((n) => Number.isFinite(n));
+    const parseNums = (txt) =>
+      txt
+        .split(/[,，\s]+/)
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isFinite(n));
+    const values = parseNums(rawText);
+    const values2 = parameterKey2 ? parseNums(rawText2) : [];
     if (!baseScheme || !values.length) {
       window.PowerPlanUI?.toast?.("请选择基准方案并填写有效的扫描数值序列", { level: "warn" });
+      return;
+    }
+    if (parameterKey2 && !values2.length) {
+      window.PowerPlanUI?.toast?.("请填写第二参数的有效扫描序列", { level: "warn" });
       return;
     }
     const btn = document.getElementById("sensGenerateBtn");
     if (btn) btn.disabled = true;
     try {
+      const payload = {
+        base_scheme: baseScheme,
+        parameter_key: parameterKey,
+        values,
+        prefix,
+        auto_queue: autoQueue,
+      };
+      if (parameterKey2) {
+        payload.parameter_key_2 = parameterKey2;
+        payload.values_2 = values2;
+      }
       const res = await api("/api/sensitivity/generate", {
         method: "POST",
-        body: JSON.stringify({
-          base_scheme: baseScheme,
-          parameter_key: parameterKey,
-          values,
-          prefix,
-          auto_queue: autoQueue,
-        }),
+        body: JSON.stringify(payload),
       });
       state.trackedItems = (res.items || []).map((it) => ({
         scheme: it.scheme,
         parameter_value: it.parameter_value,
         parameter_label: it.parameter_label,
+        parameter_value_2: it.parameter_value_2 ?? null,
+        parameter_label_2: it.parameter_label_2 || "",
       }));
       saveState();
       window.PowerPlanUI?.toast?.(res.message || "情景已生成", { level: "success" });
       const latestSchemes = await api("/api/planning/schemes");
-      state.schemes = Array.isArray(latestSchemes.schemes) ? latestSchemes.schemes : [];
+      state.schemes = Array.isArray(latestSchemes?.schemes) ? latestSchemes.schemes : [];
       renderSchemePicker();
       await refreshSummary();
     } catch (err) {
@@ -213,15 +244,33 @@
     }
   }
 
+  async function retryFailedScenarios() {
+    const names = state.trackedItems.map((it) => it.scheme);
+    if (!names.length) return;
+    try {
+      const res = await api("/api/sensitivity/retry-failed", {
+        method: "POST",
+        body: JSON.stringify({ schemes: names }),
+      });
+      window.PowerPlanUI?.toast?.(res.message || "已重试失败/待算情景", { level: res.requeued?.length ? "success" : "info" });
+      await refreshSummary();
+    } catch (err) {
+      window.PowerPlanUI?.toast?.(err.message || "重试失败", { level: "error" });
+    }
+  }
+
   async function refreshSummary() {
     const names = state.trackedItems.map((it) => it.scheme);
     if (!names.length) {
       state.rows = [];
+      state.tornado = {};
       renderAll();
       return;
     }
     const metaMap = new Map(state.trackedItems.map((it) => [it.scheme, it]));
     const data = await api(`/api/sensitivity/summary?schemes=${encodeURIComponent(names.join(","))}`);
+    if (!data) return;
+    state.tornado = data.tornado || {};
     state.rows = (data.rows || []).map((row) => {
       const meta = metaMap.get(row.scheme) || {};
       return {
@@ -280,6 +329,13 @@
     const padB = 42;
     const plotW = Math.max(10, width - padL - padR);
     const plotH = Math.max(10, height - padT - padB);
+
+    if (state.viewMode === "tornado") {
+      const metricKey = ["lcoe", "annual_cost", "green_ratio", "curtail_rate"].includes(state.metricKey) ? state.metricKey : "lcoe";
+      const items = state.tornado?.[metricKey] || [];
+      window.PowerPlanCharts?.renderTornadoChart?.(svg, items, METRIC_LABELS[metricKey] || metricKey);
+      return;
+    }
 
     if (state.viewMode === "pareto") {
       const pts = completed.filter((r) => Number.isFinite(r.lcoe) && Number.isFinite(r.green_ratio));
@@ -403,7 +459,7 @@
             .map(
               (r) => `
             <tr>
-              <td>${escapeHtml(r.scheme)}</td>
+              <td>${escapeHtml(r.scheme)}${r.stale ? ' <span class="stale-inline-tag">待重算</span>' : ""}</td>
               <td>${r.parameter_value !== null ? escapeHtml(String(r.parameter_value)) : "—"}</td>
               <td><span class="task-status-pill">${escapeHtml(r.status || "未计算")}</span></td>
               <td>${fmt(r.lcoe, 3)}</td>
@@ -515,8 +571,19 @@
     document.getElementById("sensValuesInput")?.addEventListener("input", (e) => {
       e.target.dataset.userEdited = "1";
     });
+    document.getElementById("sensParamKey2")?.addEventListener("change", (e) => {
+      const wrap = document.getElementById("sensValues2Wrap");
+      if (wrap) wrap.hidden = !e.target.value;
+    });
     document.getElementById("sensGenerateBtn")?.addEventListener("click", generateScenarios);
+    document.getElementById("sensRetryFailedBtn")?.addEventListener("click", retryFailedScenarios);
     document.getElementById("sensRefreshBtn")?.addEventListener("click", () => refreshSummary());
+    document.getElementById("sensExportPngBtn")?.addEventListener("click", () => {
+      window.PowerPlanUI?.exportSvgAsPng?.(document.getElementById("sensChartSvg"), `sensitivity_${state.viewMode}.png`);
+    });
+    document.getElementById("sensExportSvgBtn")?.addEventListener("click", () => {
+      window.PowerPlanUI?.exportSvgAsSvg?.(document.getElementById("sensChartSvg"), `sensitivity_${state.viewMode}.svg`);
+    });
     document.getElementById("sensExportCsvBtn")?.addEventListener("click", exportCsv);
     document.getElementById("sensCompareAllBtn")?.addEventListener("click", compareAllDone);
     document.getElementById("sensCleanupBtn")?.addEventListener("click", cleanupTrackedScenarios);
@@ -539,11 +606,14 @@
     });
     window.addEventListener("powerplan:themechange", renderChart);
     window.addEventListener("resize", renderChart);
+    window.PowerPlanEvents?.on?.("tasks", () => {
+      if (!document.hidden && state.trackedItems.length) refreshSummary().catch(() => null);
+    });
     loadSchemes().catch((err) => window.PowerPlanUI?.toast?.(err.message || "初始化失败", { level: "error" }));
     state.pollTimer = window.setInterval(() => {
       if (!document.hidden && state.rows.some((r) => r.status === "计算中" || r.status === "排队中")) {
         refreshSummary().catch(() => null);
       }
-    }, 5000);
+    }, 15000);
   });
 })();

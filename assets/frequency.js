@@ -477,6 +477,7 @@ function renderFrequencyResultWarnings() {
 
 async function refreshFrequencyStatus() {
   const data = await frequencyApi(frequencyStatusPath());
+  if (!data) return;
   frequencyState.status = data;
   renderFrequencyStatus(data);
   initializeFrequencyTimeControls(data.frequency_8760_table || []);
@@ -1001,10 +1002,18 @@ function terminalFrequencyAction() {
 function scheduleFrequencyPolling() {
   if (frequencyState.pollTimer) window.clearInterval(frequencyState.pollTimer);
   const data = frequencyState.status || {};
-  const delay = data.status === "运行中" || data.task_status === "排队中" ? 1000 : 4000;
+  const isActive = data.status === "运行中" || data.task_status === "排队中";
+  const delay = isActive ? 1500 : 15000;
   frequencyState.pollTimer = window.setInterval(() => {
+    if (document.hidden) return;
     refreshFrequencyStatus().catch(showFrequencyError);
   }, delay);
+  if (!frequencyState._sseSubscribed && window.PowerPlanEvents?.on) {
+    frequencyState._sseSubscribed = true;
+    window.PowerPlanEvents.on("tasks", () => {
+      if (!document.hidden) refreshFrequencyStatus().catch(() => {});
+    });
+  }
 }
 
 function renderFrequencyCurrentLabel() {

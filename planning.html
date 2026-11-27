@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>参数维护 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260817-modeling-interface">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v13">
-  <script src="assets/ui-kit.js?v=20261126-ui-v13"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v14">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v14">
+  <script src="assets/ui-kit.js?v=20261127-ui-v14"></script>
 </head>
 <body>
   <main class="planning-shell">
@@ -63,6 +63,8 @@
               <button class="tab" data-tab="limits" type="button">方案概览</button>
             </div>
             <div class="scheme-actions" aria-label="方案操作">
+              <button id="undoPlanningBtn" type="button" title="撤销 (Ctrl+Z)" disabled>撤销</button>
+              <button id="redoPlanningBtn" type="button" title="重做 (Ctrl+Y)" disabled>重做</button>
               <button id="importScheme" type="button">导入方案</button>
               <button id="exportScheme" type="button">导出方案</button>
               <button id="precheckScheme" type="button">求解预检</button>
@@ -279,9 +281,9 @@
       </aside>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20261126-ui-v13"></script>
-  <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/page_state.js?v=20261126-ui-v13"></script>
-  <script src="assets/planning.js?v=20261126-ui-v2"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v14"></script>
+  <script src="assets/auth.js?v=20261127-ui-v14"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v14"></script>
+  <script src="assets/planning.js?v=20261127-ui-v14"></script>
 </body>
 </html>

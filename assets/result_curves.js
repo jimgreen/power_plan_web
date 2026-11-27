@@ -92,6 +92,8 @@
       annualLegendBound: false,
       annualAxisBound: false,
       hoverIndex: null,
+      zoomRange: null,
+      lastRenderedSeries: [],
       emptyText: options.emptyText || "暂无小时级曲线",
       promptText: options.promptText || "请选择小时级曲线",
       loadingText: options.loadingText || "小时级曲线正在后台加载",
@@ -119,6 +121,7 @@
       });
       if (!groupHasData(state.activeGroup)) state.activeGroup = firstAvailableGroup();
       state.hoverIndex = null;
+      state.zoomRange = null;
       rememberResultCurveViewerState();
       render();
     }
@@ -308,6 +311,48 @@
       );
     }
 
+    function inferSeriesAxisGroup(item) {
+      const name = String(item?.curveName || item?.label || "");
+      if (/(soc|百分比|占比|弃电率|率|比例|%)/i.test(name)) return "ratio";
+      if (/(频率|hz)/i.test(name)) return "freq";
+      if (/(温度|℃|风速|m\/s|辐照)/i.test(name)) return "env";
+      if (/(储氢|nm3|kg)/i.test(name)) return "h2";
+      return "power";
+    }
+
+    function assignDualAxes(seriesList) {
+      if (seriesList.length <= 1) {
+        return { dual: false, assignments: seriesList.map(() => "left") };
+      }
+      const primaryGroup = inferSeriesAxisGroup(seriesList[0]);
+      const maxVals = seriesList.map((s) => {
+        const vals = (s.points || []).map((p) => Math.abs(Number(p.y))).filter(Number.isFinite);
+        return vals.length ? Math.max(...vals) : 0;
+      });
+      const primaryMax = Math.max(maxVals[0], 1e-6);
+      const assignments = seriesList.map((s, idx) => {
+        if (idx === 0) return "left";
+        const g = inferSeriesAxisGroup(s);
+        if (g !== primaryGroup) return "right";
+        const ratio = maxVals[idx] > 0 ? Math.max(primaryMax / maxVals[idx], maxVals[idx] / primaryMax) : 1;
+        return ratio >= 8 ? "right" : "left";
+      });
+      return { dual: assignments.includes("right"), assignments };
+    }
+
+    function sliceSeriesByZoom(seriesList) {
+      const zr = state.zoomRange;
+      if (!zr || !Number.isFinite(zr.start) || !Number.isFinite(zr.end)) return seriesList;
+      return seriesList.map((item) => {
+        const pts = item.points || [];
+        const total = pts.length;
+        if (total <= 2) return item;
+        const i0 = Math.max(0, Math.min(total - 2, Math.floor(zr.start * (total - 1))));
+        const i1 = Math.max(i0 + 1, Math.min(total - 1, Math.ceil(zr.end * (total - 1))));
+        return { ...item, points: pts.slice(i0, i1 + 1) };
+      });
+    }
+
     function renderCurveChart(message) {
       const target = document.getElementById(options.chartId);
       if (!target) return;
@@ -318,7 +363,9 @@
       }
       const curveNames = selectedCurveNames();
       const allSeries = selectedCurveSeries();
-      const visibleSeries = allSeries.filter((item) => !isSeriesHidden(item.seriesId));
+      const rawVisibleSeries = allSeries.filter((item) => !isSeriesHidden(item.seriesId));
+      const visibleSeries = sliceSeriesByZoom(rawVisibleSeries);
+      state.lastRenderedSeries = visibleSeries;
       const controls = renderRangeControls();
       if (!curveNames.length || !allSeries.length) {
         const emptyMessage = curveNames.length && !allSeries.length && state.activeGroup === "hourly"
@@ -328,54 +375,126 @@
         bindRangeControls(target);
         return;
       }
+
+      const { dual, assignments } = assignDualAxes(visibleSeries);
+      const annotatedSeries = visibleSeries.map((item, idx) => ({
+        ...item,
+        axisSide: assignments[idx] || "left",
+      }));
+
       const width = 1080;
       const height = 360;
-      const margin = { top: 18, right: 24, bottom: 28, left: 58 };
+      const margin = { top: 18, right: dual ? 62 : 24, bottom: 28, left: 60 };
       const plotWidth = width - margin.left - margin.right;
       const plotHeight = height - margin.top - margin.bottom;
-      const values = visibleSeries.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
-      const autoMinY = values.length ? Math.min(...values, 0) : 0;
-      const autoMaxY = values.length ? Math.max(...values, 1) : 1;
-      const axisRange = applyAxisRange(autoMinY, autoMaxY, state.axisRanges[state.activeGroup]);
+
+      const leftSeries = annotatedSeries.filter((s) => s.axisSide !== "right");
+      const rightSeries = annotatedSeries.filter((s) => s.axisSide === "right");
+      const leftValues = leftSeries.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
+      const rawAutoMinY = leftValues.length ? Math.min(...leftValues, 0) : 0;
+      const rawAutoMaxY = leftValues.length ? Math.max(...leftValues, 1) : 1;
+      const niceLeft = window.PowerPlanCharts?.niceTicks?.(rawAutoMinY, rawAutoMaxY, 5);
+      const axisRange = applyAxisRange(
+        niceLeft ? niceLeft.min : rawAutoMinY,
+        niceLeft ? niceLeft.max : rawAutoMaxY,
+        state.axisRanges[state.activeGroup],
+      );
       const minY = axisRange.min;
       const maxY = axisRange.max;
       const ySpan = Math.max(maxY - minY, 0.00001);
-      const maxPoints = Math.max(...visibleSeries.map((item) => item.points.length), 1);
+
+      let rightMinY = 0;
+      let rightMaxY = 1;
+      if (dual && rightSeries.length) {
+        const rightValues = rightSeries.flatMap((item) => item.points.map((point) => Number(point.y)).filter(Number.isFinite));
+        const rMin = rightValues.length ? Math.min(...rightValues, 0) : 0;
+        const rMax = rightValues.length ? Math.max(...rightValues, 1) : 1;
+        const niceRight = window.PowerPlanCharts?.niceTicks?.(rMin, rMax, 5);
+        rightMinY = niceRight ? niceRight.min : rMin;
+        rightMaxY = niceRight ? niceRight.max : rMax;
+      }
+      const rightSpan = Math.max(rightMaxY - rightMinY, 0.00001);
+
+      const maxPoints = Math.max(...annotatedSeries.map((item) => item.points.length), 1);
+      const totalPointCount = annotatedSeries.reduce((sum, item) => sum + item.points.length, 0);
+      const useCanvas = totalPointCount >= 1000 && typeof window.PowerPlanCharts?.drawHiDpiPolylines === "function";
+
       const xAt = (index, total) => margin.left + (total <= 1 ? plotWidth / 2 : (index / (total - 1)) * plotWidth);
-      const yAt = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
-      const yTicks = [0, 0.5, 1].map((ratio) => {
+      const yAtLeft = (value) => margin.top + plotHeight - ((value - minY) / ySpan) * plotHeight;
+      const yAtRight = (value) => margin.top + plotHeight - ((value - rightMinY) / rightSpan) * plotHeight;
+      const yTicks = [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
         const value = minY + ySpan * ratio;
-        return { ratio, value, y: yAt(value) };
+        return { ratio, value, y: yAtLeft(value), rightValue: rightMinY + rightSpan * ratio };
       });
 
+      const rightAxisLabels = dual
+        ? `<div class="curve-right-axis-labels" aria-hidden="true">${[yTicks[0], yTicks[2], yTicks[4]]
+            .map(
+              (tick) =>
+                `<span style="top:${((tick.y / height) * 100).toFixed(2)}%">${escapeHtml(
+                  window.PowerPlanCharts?.formatCompact?.(tick.rightValue) ?? formatAxis(tick.rightValue),
+                )}</span>`,
+            )
+            .join("")}</div>`
+        : "";
+
       target.innerHTML = `${controls}
-        <div class="comparison-chart-frame" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
+        <div class="comparison-chart-frame${dual ? " is-dual-axis" : ""}" style="--comparison-chart-left:${((margin.left / width) * 100).toFixed(3)}%; --comparison-chart-right:${((margin.right / width) * 100).toFixed(3)}%; --comparison-chart-top:${((margin.top / height) * 100).toFixed(3)}%; --comparison-chart-bottom:${((margin.bottom / height) * 100).toFixed(3)}%;">
+          ${useCanvas ? '<canvas class="result-curve-canvas" aria-hidden="true"></canvas>' : ""}
           <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(curveNames.join("、"))}曲线">
             <line class="comparison-chart-axis" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
             <line class="comparison-chart-axis" x1="${margin.left}" y1="${height - margin.bottom}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>
+            ${dual ? `<line class="comparison-chart-axis" x1="${width - margin.right}" y1="${margin.top}" x2="${width - margin.right}" y2="${height - margin.bottom}"></line>` : ""}
             ${yTicks.map((tick) => renderYAxisGrid(tick.y, margin.left, width - margin.right)).join("")}
-            ${visibleSeries.map((item) => renderSeriesPath(item.points, xAt, yAt, item)).join("")}
+            ${useCanvas ? "" : annotatedSeries.map((item) => renderSeriesPath(item.points, xAt, item.axisSide === "right" ? yAtRight : yAtLeft, item)).join("")}
+            <rect class="curve-brush-rect" x="0" y="${margin.top}" width="0" height="${plotHeight}" hidden></rect>
             <g class="comparison-chart-hover-group" hidden>
               <line class="comparison-chart-hover-line" x1="${margin.left}" y1="${margin.top}" x2="${margin.left}" y2="${height - margin.bottom}"></line>
             </g>
             <rect class="comparison-chart-hover-capture" x="${margin.left}" y="${margin.top}" width="${plotWidth}" height="${plotHeight}"></rect>
           </svg>
-          ${renderAxisLabels({ yTicks, series: visibleSeries, maxPoints })}
-          ${renderCurveLegend(allSeries, visibleSeries)}
-          ${visibleSeries.length ? "" : '<div class="result-curve-empty-overlay">暂无可显示曲线</div>'}
+          ${renderAxisLabels({ yTicks: [yTicks[0], yTicks[2], yTicks[4]], series: annotatedSeries, maxPoints })}
+          ${rightAxisLabels}
+          ${renderCurveLegend(allSeries, annotatedSeries)}
+          ${annotatedSeries.length ? "" : '<div class="result-curve-empty-overlay">暂无可显示曲线</div>'}
           <div class="comparison-chart-tooltip" data-result-curve-tooltip hidden></div>
           ${renderStatsContextMenu()}
         </div>`;
+
+      if (useCanvas) {
+        const canvas = target.querySelector(".result-curve-canvas");
+        window.PowerPlanCharts.drawHiDpiPolylines(canvas, {
+          width,
+          height,
+          margin,
+          seriesList: annotatedSeries.map((item) => ({ ...item, ...seriesLineStyle(item) })),
+          xAt,
+          yAtForSeries: (item) => (item.axisSide === "right" ? yAtRight : yAtLeft),
+        });
+      }
+
       bindRangeControls(target);
       bindCurveLegendToggles(target);
       bindStatsPanelInteractions(target);
-      if (visibleSeries.length) bindChartHover({ target, margin, plotWidth, series: visibleSeries });
+      if (annotatedSeries.length) {
+        bindChartHover({ target, margin, plotWidth, width, series: annotatedSeries });
+      }
     }
 
     function renderRangeControls() {
       if (state.activeGroup === "annual") return "";
       const axisControls = renderAxisRangeControls(state.activeGroup);
-      if (state.activeGroup !== "hourly" && state.activeGroup !== "daily") return axisControls;
+      const zoomed = Boolean(state.zoomRange);
+      const exportTools = `
+        <div class="curve-action-tools">
+          ${zoomed ? '<button type="button" class="curve-tool-btn is-accent" data-curve-zoom-reset title="双击图表也可重置">重置缩放</button>' : ""}
+          <button type="button" class="curve-tool-btn" data-curve-export-png title="导出高清 PNG 图片">PNG</button>
+          <button type="button" class="curve-tool-btn" data-curve-export-svg title="导出矢量 SVG">SVG</button>
+          <button type="button" class="curve-tool-btn" data-curve-export-csv title="导出当前区间数据 CSV">CSV</button>
+        </div>`;
+      if (state.activeGroup !== "hourly" && state.activeGroup !== "daily") {
+        return `<div class="curve-range-filter" aria-label="曲线配置与导出">${axisControls}${exportTools}</div>`;
+      }
       const filter = normalizeCurveRangeFilter(state.curveRangeFilter, state.activeGroup);
       const monthOptions = MONTH_RANGES.map(([label], index) => `<option value="${index}" ${index === filter.month ? "selected" : ""}>${label}</option>`).join("");
       const dayOptions = availableDaysInMonth(filter.month)
@@ -394,6 +513,7 @@
           <label>月份<select data-curve-range-month ${filter.scope === "year" ? "disabled" : ""}>${monthOptions}</select></label>
           <label>日期<select data-curve-range-day ${dayDisabled ? "disabled" : ""}>${dayOptions}</select></label>
           ${axisControls}
+          ${exportTools}
         </div>
         `;
     }
@@ -426,6 +546,35 @@
       if (!target || state.chartControlsBound) return;
       state.chartControlsBound = true;
       target.addEventListener("click", (event) => {
+        if (event.target.closest("[data-curve-zoom-reset]")) {
+          state.zoomRange = null;
+          state.hoverIndex = null;
+          render();
+          return;
+        }
+        if (event.target.closest("[data-curve-export-png]")) {
+          const svg = target.querySelector("svg");
+          const canvas = target.querySelector(".result-curve-canvas");
+          window.PowerPlanUI?.exportSvgAsPng?.(svg, `curve_${state.activeGroup}.png`, canvas);
+          return;
+        }
+        if (event.target.closest("[data-curve-export-svg]")) {
+          const svg = target.querySelector("svg");
+          window.PowerPlanUI?.exportSvgAsSvg?.(svg, `curve_${state.activeGroup}.svg`);
+          return;
+        }
+        if (event.target.closest("[data-curve-export-csv]")) {
+          const series = state.lastRenderedSeries || [];
+          if (!series.length) return;
+          const headers = ["时间/序号", ...series.map((s) => s.displayLabel || s.label || s.curveName)];
+          const maxLen = Math.max(...series.map((s) => s.points.length));
+          const rows = [];
+          for (let i = 0; i < maxLen; i += 1) {
+            rows.push([series[0]?.points[i]?.x ?? i + 1, ...series.map((s) => s.points[i]?.y ?? "")]);
+          }
+          window.PowerPlanUI?.exportRowsAsCsv?.(headers, rows, `curve_${state.activeGroup}.csv`);
+          return;
+        }
         const resetButton = event.target.closest("[data-curve-axis-reset]");
         if (resetButton && target.contains(resetButton)) {
           delete state.axisRanges[resetButton.dataset.curveAxisReset || state.activeGroup];
@@ -436,6 +585,7 @@
         const scopeButton = event.target.closest("[data-curve-range-scope]");
         if (!scopeButton || !target.contains(scopeButton) || scopeButton.disabled) return;
         state.curveRangeFilter = normalizeCurveRangeFilter({ ...state.curveRangeFilter, scope: scopeButton.dataset.curveRangeScope || "year" }, state.activeGroup);
+        state.zoomRange = null;
         state.hoverIndex = null;
         rememberResultCurveViewerState();
         render();
@@ -1214,6 +1364,93 @@
         state.hoverIndex = null;
         chart.target.querySelector(".comparison-chart-hover-group")?.setAttribute("hidden", "");
         tooltip.hidden = true;
+      });
+
+      // 双击复位缩放
+      capture.addEventListener("dblclick", () => {
+        if (!state.zoomRange) return;
+        state.zoomRange = null;
+        state.hoverIndex = null;
+        render();
+      });
+
+      // 滚轮缩放（以光标所在时间比例为中心）
+      capture.addEventListener(
+        "wheel",
+        (event) => {
+          if (maxPoints <= 4) return;
+          event.preventDefault();
+          const rect = capture.getBoundingClientRect();
+          const cursorRatio = Math.min(Math.max((event.clientX - rect.left) / Math.max(rect.width, 1), 0), 1);
+          const curStart = state.zoomRange ? state.zoomRange.start : 0;
+          const curEnd = state.zoomRange ? state.zoomRange.end : 1;
+          const curSpan = curEnd - curStart;
+          const factor = event.deltaY < 0 ? 0.72 : 1.38;
+          const nextSpan = Math.min(1, Math.max(12 / Math.max(maxPoints, 12), curSpan * factor));
+          if (nextSpan >= 0.995) {
+            state.zoomRange = null;
+          } else {
+            const anchor = curStart + curSpan * cursorRatio;
+            let nextStart = anchor - nextSpan * cursorRatio;
+            let nextEnd = nextStart + nextSpan;
+            if (nextStart < 0) {
+              nextEnd -= nextStart;
+              nextStart = 0;
+            }
+            if (nextEnd > 1) {
+              nextStart -= nextEnd - 1;
+              nextEnd = 1;
+            }
+            state.zoomRange = { start: Math.max(0, nextStart), end: Math.min(1, nextEnd) };
+          }
+          state.hoverIndex = null;
+          render();
+        },
+        { passive: false },
+      );
+
+      // 鼠标左键框选时间窗口放大（Brush Zoom）
+      const brushRect = chart.target.querySelector(".curve-brush-rect");
+      capture.addEventListener("pointerdown", (downEvent) => {
+        if (downEvent.button !== 0 || maxPoints <= 4) return;
+        const rect = capture.getBoundingClientRect();
+        const startRatio = Math.min(Math.max((downEvent.clientX - rect.left) / Math.max(rect.width, 1), 0), 1);
+        let endRatio = startRatio;
+        let dragging = false;
+
+        const onMove = (moveEv) => {
+          endRatio = Math.min(Math.max((moveEv.clientX - rect.left) / Math.max(rect.width, 1), 0), 1);
+          if (Math.abs(endRatio - startRatio) > 0.015) dragging = true;
+          if (dragging && brushRect) {
+            const r0 = Math.min(startRatio, endRatio);
+            const r1 = Math.max(startRatio, endRatio);
+            brushRect.removeAttribute("hidden");
+            brushRect.setAttribute("x", (chart.margin.left + r0 * chart.plotWidth).toFixed(2));
+            brushRect.setAttribute("width", Math.max(2, (r1 - r0) * chart.plotWidth).toFixed(2));
+          }
+        };
+        const onUp = () => {
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
+          if (brushRect) brushRect.setAttribute("hidden", "");
+          if (!dragging) return;
+          const curStart = state.zoomRange ? state.zoomRange.start : 0;
+          const curEnd = state.zoomRange ? state.zoomRange.end : 1;
+          const curSpan = curEnd - curStart;
+          const r0 = Math.min(startRatio, endRatio);
+          const r1 = Math.max(startRatio, endRatio);
+          if (r1 - r0 < 0.015) return;
+          state.zoomRange = {
+            start: Math.max(0, curStart + r0 * curSpan),
+            end: Math.min(1, curStart + r1 * curSpan),
+          };
+          state.hoverIndex = null;
+          render();
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
       });
     }
 

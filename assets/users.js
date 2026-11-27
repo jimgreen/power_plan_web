@@ -86,6 +86,7 @@
         ["CPU 核数", String(env.cpu_count ?? "—")],
         ["规划方案数", String(env.schemes_count ?? 0)],
         ["运行 / 排队任务", `${env.running_tasks ?? 0} / ${env.queued_tasks ?? 0}`],
+        ["SSE 实时连接", String(env.sse_subscribers ?? 0)],
         ["已缓存条目", String(env.total_cached_entries ?? 0)],
       ];
       kpiHost.innerHTML = kpis

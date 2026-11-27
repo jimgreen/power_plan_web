@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>批量扫参 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20260530-scheme-rail-divider-visible">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261126-ui-v13">
-  <script src="assets/ui-kit.js?v=20261126-ui-v13"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v14">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v14">
+  <script src="assets/ui-kit.js?v=20261127-ui-v14"></script>
 </head>
 <body>
   <main class="planning-shell">
@@ -60,6 +60,22 @@
             <input id="sensValuesInput" type="text" value="0.8, 0.9, 1.0, 1.1, 1.2">
           </label>
           <label class="sens-field">
+            <span>第二扫描参数（可选，启用二维矩阵扫参）</span>
+            <select id="sensParamKey2">
+              <option value="">不启用（单参数扫描）</option>
+              <option value="load_scale">负荷缩放系数 (倍)</option>
+              <option value="wind_scale">风速缩放系数 (倍)</option>
+              <option value="solar_scale">辐照缩放系数 (倍)</option>
+              <option value="diesel_price">柴油单价 (元/kg)</option>
+              <option value="green_power_ratio_lower">绿电占比下限 (0-1)</option>
+              <option value="storage_cost_scale">储能造价系数 (倍)</option>
+            </select>
+          </label>
+          <label class="sens-field" id="sensValues2Wrap" hidden>
+            <span>第二参数序列（最多 6 档，总组合 ≤ 24）</span>
+            <input id="sensValues2Input" type="text" value="0.8, 1.0, 1.2">
+          </label>
+          <label class="sens-field">
             <span>情景命名前缀</span>
             <input id="sensPrefixInput" type="text" placeholder="自动按基准方案生成">
           </label>
@@ -80,6 +96,7 @@
           </div>
           <div id="sensSchemePicker" class="sens-scheme-picker"></div>
           <div class="sens-actions">
+            <button id="sensRetryFailedBtn" type="button">重试待算/失败</button>
             <button id="sensCompareAllBtn" type="button">加入结果对比</button>
             <button id="sensCleanupBtn" class="danger" type="button">批量清理</button>
           </div>
@@ -93,6 +110,7 @@
             <div class="sens-chart-controls">
               <button type="button" class="active" data-sens-view="trend" aria-pressed="true">敏感性曲线</button>
               <button type="button" data-sens-view="pareto" aria-pressed="false">Pareto 前沿</button>
+              <button type="button" data-sens-view="tornado" aria-pressed="false">龙卷风图</button>
               <select id="sensMetricSelect" aria-label="曲线指标">
                 <option value="lcoe">度电成本 (元/kWh)</option>
                 <option value="annual_cost">年均总成本 (万元)</option>
@@ -100,6 +118,8 @@
                 <option value="diesel_fuel">柴发耗油量</option>
                 <option value="curtail_rate">弃电率 (%)</option>
               </select>
+              <button id="sensExportPngBtn" type="button">PNG</button>
+              <button id="sensExportSvgBtn" type="button">SVG</button>
               <button id="sensExportCsvBtn" type="button">导出 CSV</button>
             </div>
             <div class="optimization-status-grid">
@@ -123,9 +143,10 @@
     </section>
   </main>
 
-  <script src="assets/i18n.js?v=20261126-ui-v13"></script>
-  <script src="assets/auth.js?v=20260510-auth"></script>
-  <script src="assets/page_state.js?v=20261126-ui-v13"></script>
-  <script src="assets/sensitivity.js?v=20261126-ui-v3"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v14"></script>
+  <script src="assets/auth.js?v=20261127-ui-v14"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v14"></script>
+  <script src="assets/chart-enhancer.js?v=20261127-ui-v14"></script>
+  <script src="assets/sensitivity.js?v=20261127-ui-v14"></script>
 </body>
 </html>

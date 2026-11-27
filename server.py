@@ -84,6 +84,7 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 
+import analytics_engine
 import calculation_precheck
 import estimate
 import file_cache
@@ -92,6 +93,24 @@ import milp_solver
 import plan_optimizer
 import planning_store
 import reliability
+
+_SOLVER_CAPABILITIES_CACHE_LOCK = threading.Lock()
+_SOLVER_CAPABILITIES_CACHE: dict[str, object] = {"ts": 0.0, "value": None}
+
+
+def _cached_solver_capabilities(force_refresh: bool = False) -> dict:
+    """进程级缓存求解器探测结果，避免每次诊断请求重复加载 cvxpy（原耗时 ~4.8s）。"""
+    now = time.monotonic()
+    with _SOLVER_CAPABILITIES_CACHE_LOCK:
+        cached = _SOLVER_CAPABILITIES_CACHE.get("value")
+        ts = float(_SOLVER_CAPABILITIES_CACHE.get("ts") or 0.0)
+        if not force_refresh and cached is not None and (now - ts) < 300.0:
+            return cached  # type: ignore[return-value]
+    caps = milp_solver.solver_capabilities()
+    with _SOLVER_CAPABILITIES_CACHE_LOCK:
+        _SOLVER_CAPABILITIES_CACHE["value"] = caps
+        _SOLVER_CAPABILITIES_CACHE["ts"] = now
+    return caps
 
 
 WEB_ROOT = Path(__file__).resolve().parent
@@ -826,6 +845,7 @@ class OptimizationRuntime:
             self._append_log_unlocked("ok", f"优化结果已写入：{result_path.name}")
             self._join_finished_process_unlocked()
             self._close_event_queue_unlocked()
+            analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "optimization_done", "scheme": self.scheme, "result": result_path.name})
             return
         if event_type == "timeout" or (event_type == "error" and calculation_timeout_message(event.get("message"))):
             if self.status != "运行中":
@@ -1715,10 +1735,21 @@ def list_evaluation_result_files(scheme: str) -> list[dict]:
     folder = PLANNING_STORE.scheme_dir(scheme)
     if not folder.exists():
         raise FileNotFoundError(f"方案不存在: {scheme}")
+    scheme_input_mtime = analytics_engine.compute_scheme_input_mtime(folder)
     files = []
     for path in sorted(folder.glob("*_results.xlsx"), key=lambda item: item.name):
         if path.is_file() and RESULT_WORKBOOK_RE.fullmatch(path.name) and not is_reliability_export_workbook(path):
-            item = {"name": path.name, "modified_at": path.stat().st_mtime, "readable": True, "message": ""}
+            mtime = path.stat().st_mtime
+            stale_info = analytics_engine.build_stale_info(folder, path)
+            item = {
+                "name": path.name,
+                "modified_at": mtime,
+                "readable": True,
+                "message": "",
+                "stale": bool(stale_info.get("is_stale")),
+                "stale_info": stale_info,
+                "scheme_input_mtime": scheme_input_mtime,
+            }
             error_message = result_workbook_error_message(path)
             if error_message:
                 item["readable"] = False
@@ -1957,6 +1988,7 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
         result_display_name = result_display_name_from_filename(filename)
         label = f"{scheme} / {result_display_name}"
         workbook_data = read_comparison_workbook(result_path, include_hourly_curves=include_hourly_curves)
+        stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(scheme), result_path)
         selected_items.append(
             {
                 "id": f"item-{index + 1}",
@@ -1964,6 +1996,8 @@ def build_comparison_payload(items: list[dict], include_hourly_curves: bool = Tr
                 "filename": filename,
                 "result_display_name": result_display_name,
                 "label": label,
+                "stale": bool(stale_info.get("is_stale")),
+                "stale_info": stale_info,
             }
         )
         capacity_tables.append(workbook_data["capacity"])
@@ -9463,7 +9497,7 @@ def handle_planning_api_path(
     prefix = "/api/planning/schemes"
     try:
         if path == "/api/planning/solver-capabilities" and method == "GET":
-            return _json_response(milp_solver.solver_capabilities())
+            return _json_response(_cached_solver_capabilities())
         if path == "/api/planning/time-series/import" and method == "POST":
             payload = _read_json_body(body)
             filename = str(payload.get("filename", ""))
@@ -9775,6 +9809,8 @@ def handle_sensitivity_generate(body: bytes, current_user: dict | None = None) -
         base_scheme = str(req.get("base_scheme") or "").strip()
         parameter_key = str(req.get("parameter_key") or "").strip()
         raw_values = req.get("values")
+        parameter_key_2 = str(req.get("parameter_key_2") or "").strip()
+        raw_values_2 = req.get("values_2")
         prefix = str(req.get("prefix") or "").strip()
         auto_queue = bool(req.get("auto_queue", True))
         if not base_scheme:
@@ -9792,18 +9828,49 @@ def handle_sensitivity_generate(body: bytes, current_user: dict | None = None) -
                 values.append(num)
         if not values:
             raise ValueError("扫描参数值不能为空")
+
+        values_2: list[float] = []
+        if parameter_key_2:
+            if parameter_key_2 not in SENSITIVITY_PARAMETERS:
+                raise ValueError("不支持的第二扫描参数")
+            if parameter_key_2 == parameter_key:
+                raise ValueError("双参数扫描的两个参数不能相同")
+            if not isinstance(raw_values_2, list) or not raw_values_2:
+                raise ValueError("请提供第二参数的扫描数值序列")
+            for item in raw_values_2[:6]:
+                num = float(item)
+                if not math.isfinite(num):
+                    raise ValueError("第二参数扫描值必须为有效数字")
+                if num not in values_2:
+                    values_2.append(num)
+            if len(values) * len(values_2) > 24:
+                raise ValueError("双参数组合总数不能超过 24 组，请精简档位")
+
         base_scheme = ensure_planning_scheme_access(base_scheme, current_user)
         base_payload = PLANNING_STORE.read_scheme(base_scheme)
         param_meta = SENSITIVITY_PARAMETERS[parameter_key]
+        param_meta_2 = SENSITIVITY_PARAMETERS[parameter_key_2] if parameter_key_2 else None
         clean_prefix = re.sub(r"[^\w\u4e00-\u9fff-]+", "_", prefix or f"{base_scheme}_sweep")
         owner = str((current_user or {}).get("username") or "").strip()
         created_items: list[dict] = []
-        for val in values:
-            target_name = f"{clean_prefix}_{param_meta['short']}_{_sensitivity_value_tag(val)}"
+
+        combos: list[tuple[float, float | None]] = (
+            [(v1, v2) for v1 in values for v2 in values_2] if param_meta_2 else [(v1, None) for v1 in values]
+        )
+        for val, val2 in combos:
+            if param_meta_2 is not None and val2 is not None:
+                target_name = (
+                    f"{clean_prefix}_{param_meta['short']}_{_sensitivity_value_tag(val)}"
+                    f"_{param_meta_2['short']}_{_sensitivity_value_tag(val2)}"
+                )
+            else:
+                target_name = f"{clean_prefix}_{param_meta['short']}_{_sensitivity_value_tag(val)}"
             target_name = planning_store.validate_scheme_name(target_name)
             if target_name == base_scheme:
                 target_name = f"{target_name}_case"
             mutated = _apply_sensitivity_value(base_payload, parameter_key, val)
+            if param_meta_2 is not None and val2 is not None:
+                mutated = _apply_sensitivity_value(mutated, parameter_key_2, val2)
             mutated["scheme"] = target_name
             PLANNING_STORE.write_scheme(target_name, mutated)
             if owner and hasattr(USER_STORE, "set_scheme_owner"):
@@ -9815,29 +9882,76 @@ def handle_sensitivity_generate(body: bytes, current_user: dict | None = None) -
             if auto_queue:
                 TASK_SCHEDULER.enqueue("optimization", target_name, OPTIMIZATION_RESULT_WORKBOOK_NAME)
                 queued = True
-            created_items.append(
-                {
-                    "scheme": target_name,
-                    "parameter_key": parameter_key,
-                    "parameter_label": param_meta["label"],
-                    "parameter_value": val,
-                    "queued": queued,
-                }
-            )
+            item_info = {
+                "scheme": target_name,
+                "parameter_key": parameter_key,
+                "parameter_label": param_meta["label"],
+                "parameter_value": val,
+                "queued": queued,
+            }
+            if param_meta_2 is not None and val2 is not None:
+                item_info["parameter_key_2"] = parameter_key_2
+                item_info["parameter_label_2"] = param_meta_2["label"]
+                item_info["parameter_value_2"] = val2
+            created_items.append(item_info)
         if auto_queue:
             TASK_SCHEDULER.schedule_next_if_idle()
+            analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "sensitivity_generate", "count": len(created_items)})
         return _json_response(
             {
                 "ok": True,
                 "base_scheme": base_scheme,
                 "parameter_key": parameter_key,
                 "parameter_label": param_meta["label"],
+                "parameter_key_2": parameter_key_2,
+                "parameter_label_2": param_meta_2["label"] if param_meta_2 else "",
+                "is_2d": bool(param_meta_2),
                 "items": created_items,
                 "message": f"已生成 {len(created_items)} 个情景方案" + ("并加入求解队列" if auto_queue else ""),
             }
         )
     except FileNotFoundError as exc:
         return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+
+def handle_sensitivity_retry_failed(body: bytes, current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    """一键将未完成/失败/过期的扫参情景重新加入求解队列。"""
+    try:
+        req = json.loads(body.decode("utf-8") or "{}")
+        schemes = req.get("schemes")
+        if not isinstance(schemes, list) or not schemes:
+            raise ValueError("请提供要重试的情景方案列表")
+        requeued: list[str] = []
+        skipped: list[str] = []
+        for raw_name in schemes[:24]:
+            name = str(raw_name or "").strip()
+            if not name:
+                continue
+            try:
+                clean = ensure_planning_scheme_manage_access(name, current_user)
+            except Exception:
+                skipped.append(name)
+                continue
+            rt = OPTIMIZATION_RUNTIME.runtimes().get(clean)
+            rt_status = rt.status if rt else ""
+            if rt_status == "计算中" or TASK_SCHEDULER.is_queued("optimization", clean, OPTIMIZATION_RESULT_WORKBOOK_NAME):
+                skipped.append(clean)
+                continue
+            res_path = optimization_result_workbook_path(clean)
+            stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(clean), res_path)
+            needs_run = (not res_path.exists()) or rt_status in {"计算失败", "已停止"} or bool(stale_info.get("is_stale"))
+            if needs_run:
+                TASK_SCHEDULER.enqueue("optimization", clean, OPTIMIZATION_RESULT_WORKBOOK_NAME)
+                requeued.append(clean)
+            else:
+                skipped.append(clean)
+        if requeued:
+            TASK_SCHEDULER.schedule_next_if_idle()
+            analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "sensitivity_retry", "count": len(requeued)})
+        msg = f"已重新排队 {len(requeued)} 个待算/失败情景" if requeued else "当前所选情景均已完成且最新，无需重试"
+        return _json_response({"ok": True, "requeued": requeued, "skipped": skipped, "message": msg})
     except (ValueError, json.JSONDecodeError) as exc:
         return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
@@ -9969,8 +10083,63 @@ def handle_sensitivity_summary(query: str = "", current_user: dict | None = None
                 if rr.get("指标") == "供电可靠率":
                     row["reliability_pct"] = rr.get("数值")
                     break
+        stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(clean), res_path)
+        row["stale"] = bool(stale_info.get("is_stale"))
+        row["stale_info"] = stale_info
         rows.append(row)
-    return _json_response({"ok": True, "rows": rows})
+    tornado = {
+        metric: analytics_engine.build_tornado_summary(rows, metric)
+        for metric in ("lcoe", "annual_cost", "green_ratio", "curtail_rate")
+    }
+    return _json_response({"ok": True, "rows": rows, "tornado": tornado})
+
+
+def handle_analysis_insights(query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    """返回指定方案结果的 365x24 热力图、典型日 24h 堆叠、能量桑基图与 LCOE 瀑布拆解。"""
+    params = parse_qs(query)
+    scheme = str(params.get("scheme", [""])[0] or "").strip()
+    filename = str(params.get("filename", [""])[0] or "").strip()
+    if not scheme:
+        return _json_response({"error": "bad_request", "message": "请指定方案名称"}, HTTPStatus.BAD_REQUEST)
+    try:
+        clean = ensure_planning_scheme_access(scheme, current_user)
+        result_files = list_evaluation_result_files(clean)
+        selected_file = selected_evaluation_result_filename(clean, filename) if result_files else ""
+        if not selected_file:
+            return _json_response({"error": "not_found", "message": "该方案尚无可读的求解结果文件"}, HTTPStatus.NOT_FOUND)
+        res_path = evaluation_result_path(clean, selected_file)
+        if not res_path.exists():
+            return _json_response({"error": "not_found", "message": f"结果文件不存在: {selected_file}"}, HTTPStatus.NOT_FOUND)
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except ValueError as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(clean), res_path)
+    disp = read_result_workbook_display_payload(res_path, include_hourly_curves=False)
+    results = disp.get("results") if isinstance(disp.get("results"), dict) else {}
+    _, annual_rows = _extract_planning_and_annual_rows(results)
+    green_table = results.get("green_table") or []
+
+    def _load_hourly() -> list[dict]:
+        rows = read_result_curve_sqlite_rows(res_path, "hourly")
+        if rows:
+            return rows
+        full_disp = read_result_workbook_display_payload(res_path, include_hourly_curves=True)
+        full_curves = (full_disp.get("results") or {}).get("curves") or {}
+        return full_curves.get("green_hourly") or []
+
+    payload = analytics_engine.build_engineering_insights(
+        res_path,
+        _load_hourly,
+        green_table,
+        annual_rows,
+        stale_info=stale_info,
+    )
+    payload["scheme"] = clean
+    payload["filename"] = selected_file
+    cache_key = ("analysis_insights_v1", clean, selected_file, res_path.stat().st_mtime_ns, bool(stale_info.get("is_stale")))
+    return _cached_json_response(cache_key, lambda: payload)
 
 
 def handle_report_summary(query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
@@ -10008,11 +10177,15 @@ def handle_report_summary(query: str = "", current_user: dict | None = None) -> 
     safety_table: list[dict] = []
     monthly_curve: list[dict] = []
     reliability_rows: list[dict] = []
+    sankey: dict = {}
+    lcoe_waterfall: dict = {}
+    stale_info: dict = {"is_stale": False}
     has_result = False
     if selected_file:
         res_path = evaluation_result_path(clean, selected_file)
         if res_path.exists():
             has_result = True
+            stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(clean), res_path)
             disp = read_result_workbook_display_payload(res_path, include_hourly_curves=False)
             results = disp.get("results") if isinstance(disp.get("results"), dict) else {}
             planning_table, annual_rows = _extract_planning_and_annual_rows(results)
@@ -10028,14 +10201,28 @@ def handle_report_summary(query: str = "", current_user: dict | None = None) -> 
             curves = results.get("curves") if isinstance(results.get("curves"), dict) else {}
             monthly_curve = curves.get("green_monthly") or []
             reliability_rows = read_comparison_reliability_rows(clean, selected_file)
+            sankey, lcoe_waterfall = analytics_engine.build_sankey_and_waterfall(green_table, annual_rows)
+
+    conclusions = analytics_engine.build_diagnostic_conclusions(
+        green_table=green_table,
+        safety_table=safety_table,
+        reliability_rows=reliability_rows,
+        site_summary=site_summary,
+        stale_info=stale_info,
+    ) if has_result else []
 
     return _json_response(
         {
             "ok": True,
             "scheme": clean,
             "filename": selected_file,
-            "result_files": [{"name": item["name"], "readable": item.get("readable", True)} for item in result_files],
+            "result_files": [
+                {"name": item["name"], "readable": item.get("readable", True), "stale": bool(item.get("stale"))}
+                for item in result_files
+            ],
             "has_result": has_result,
+            "stale": bool(stale_info.get("is_stale")),
+            "stale_info": stale_info,
             "generated_at": _now_text(),
             "site_summary": site_summary,
             "planning_table": planning_table,
@@ -10043,6 +10230,9 @@ def handle_report_summary(query: str = "", current_user: dict | None = None) -> 
             "safety_table": safety_table,
             "monthly_curve": monthly_curve,
             "reliability_rows": reliability_rows,
+            "sankey": sankey,
+            "lcoe_waterfall": lcoe_waterfall,
+            "conclusions": conclusions,
         }
     )
 
@@ -10052,6 +10242,7 @@ def _admin_cache_registry() -> list[tuple[str, str, object]]:
         ("wire_json_response", "响应序列化/Gzip缓存", WIRE_JSON_RESPONSE_CACHE),
         ("static_file_bytes", "静态文件字节缓存", STATIC_FILE_BYTES_CACHE),
         ("result_display_payload", "结果展示缓存", RESULT_DISPLAY_PAYLOAD_CACHE),
+        ("analytics_insights", "工程洞察与热力图缓存", analytics_engine.INSIGHTS_MEMORY_CACHE),
         ("comparison_workbook", "对比工作簿缓存", COMPARISON_WORKBOOK_CACHE),
         ("comparison_curve_slice", "对比曲线切片缓存", COMPARISON_CURVE_SLICE_CACHE),
         ("evaluation_planning_result", "评估规划表缓存", EVALUATION_PLANNING_RESULT_CACHE),
@@ -10079,7 +10270,7 @@ def _cache_entry_count(cache_obj: object) -> tuple[int, int]:
 def handle_admin_system_status(current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
     if not current_user or current_user.get("role") != "admin":
         return _json_response({"error": "forbidden", "message": "仅管理员可访问系统诊断"}, HTTPStatus.FORBIDDEN)
-    caps = milp_solver.solver_capabilities()
+    caps = _cached_solver_capabilities()
     solvers_raw = caps.get("solvers") if isinstance(caps.get("solvers"), dict) else {}
     solver_rows = [
         {
@@ -10111,6 +10302,7 @@ def handle_admin_system_status(current_user: dict | None = None) -> tuple[int, d
                 "schemes_count": schemes_cnt,
                 "running_tasks": running_cnt,
                 "queued_tasks": queued_cnt,
+                "sse_subscribers": analytics_engine.EVENT_BROKER.subscriber_count(),
                 "total_cached_entries": total_cached,
                 "default_interface": caps.get("default_interface", ""),
                 "cvxpy_version": (caps.get("interfaces") or {}).get("cvxpy", {}).get("version", ""),
@@ -10131,6 +10323,9 @@ def handle_admin_clear_caches(current_user: dict | None = None) -> tuple[int, di
         clear_fn = getattr(obj, "clear", None)
         if callable(clear_fn):
             clear_fn()
+    with _SOLVER_CAPABILITIES_CACHE_LOCK:
+        _SOLVER_CAPABILITIES_CACHE["value"] = None
+        _SOLVER_CAPABILITIES_CACHE["ts"] = 0.0
     status_code, headers, body = handle_admin_system_status(current_user=current_user)
     payload = json.loads(body.decode("utf-8"))
     payload["cleared_entries"] = cleared_total
@@ -10162,7 +10357,17 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         payload = EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves)
+        if scheme:
+            try:
+                res_file = str(payload.get("result_filename") or filename or "").strip()
+                res_path = evaluation_result_path(scheme, res_file) if res_file else None
+                stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(scheme), res_path)
+                payload = {**payload, "stale": bool(stale_info.get("is_stale")), "stale_info": stale_info}
+            except Exception:
+                pass
         cache_key = _runtime_status_wire_cache_key("evaluation_status", scheme, filename, include_hourly_curves, payload)
+        if cache_key is not None:
+            cache_key = (*cache_key, bool(payload.get("stale")))
         return _cached_json_response(cache_key, lambda: payload)
     if path == "/api/frequency/status":
         scheme = query_params.get("scheme", [""])[0]
@@ -10174,7 +10379,17 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         payload = FREQUENCY_EVALUATION_RUNTIME.snapshot(scheme=scheme, filename=filename, include_hourly_curves=include_hourly_curves)
+        if scheme:
+            try:
+                res_file = str(payload.get("result_filename") or filename or "").strip()
+                res_path = evaluation_result_path(scheme, res_file) if res_file else None
+                stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(scheme), res_path)
+                payload = {**payload, "stale": bool(stale_info.get("is_stale")), "stale_info": stale_info}
+            except Exception:
+                pass
         cache_key = _runtime_status_wire_cache_key("frequency_status", scheme, filename, include_hourly_curves, payload)
+        if cache_key is not None:
+            cache_key = (*cache_key, bool(payload.get("stale")))
         return _cached_json_response(cache_key, lambda: payload)
     if path == "/api/frequency/time-curve":
         try:
@@ -10211,8 +10426,19 @@ def handle_api_path(path: str, query: str = "", current_user: dict | None = None
         light = truthy_json_value(query_params.get("light", ["0"])[0])
         include_hourly_curves = not light
         payload = OPTIMIZATION_RUNTIME.snapshot(scheme=scheme, include_hourly_curves=include_hourly_curves)
+        if scheme:
+            try:
+                res_path = optimization_result_workbook_path(scheme)
+                stale_info = analytics_engine.build_stale_info(PLANNING_STORE.scheme_dir(scheme), res_path)
+                payload = {**payload, "stale": bool(stale_info.get("is_stale")), "stale_info": stale_info}
+            except Exception:
+                pass
         cache_key = _runtime_status_wire_cache_key("optimization_status", scheme, "", include_hourly_curves, payload)
+        if cache_key is not None:
+            cache_key = (*cache_key, bool(payload.get("stale")))
         return _cached_json_response(cache_key, lambda: payload)
+    if path == "/api/analysis/insights":
+        return handle_analysis_insights(query, current_user=current_user)
     if path == "/api/admin/system-status":
         return handle_admin_system_status(current_user=current_user)
     if path == "/api/sensitivity/summary":
@@ -10271,6 +10497,7 @@ def handle_control_path(
             message = "可靠性评估已停止"
         elif action == "clear_logs":
             message = "可靠性日志已清空"
+        analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "reliability_control", "action": action, "scheme": scheme})
         return _json_response({"ok": True, "message": message, "state": state})
     if path == "/api/optimization/control":
         try:
@@ -10286,6 +10513,7 @@ def handle_control_path(
             return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "optimization_control", "action": action, "scheme": scheme})
         return _json_response({"ok": True, "state": state})
     if path == "/api/evaluation/control":
         try:
@@ -10302,6 +10530,7 @@ def handle_control_path(
             return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "evaluation_control", "action": action, "scheme": scheme, "filename": filename})
         return _json_response({"ok": True, "state": state})
     if path == "/api/frequency/control":
         try:
@@ -10318,11 +10547,14 @@ def handle_control_path(
             return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "frequency_control", "action": action, "scheme": scheme, "filename": filename})
         return _json_response({"ok": True, "state": state})
     if path == "/api/admin/clear-caches":
         return handle_admin_clear_caches(current_user=current_user)
     if path == "/api/sensitivity/generate":
         return handle_sensitivity_generate(body, current_user=current_user)
+    if path == "/api/sensitivity/retry-failed":
+        return handle_sensitivity_retry_failed(body, current_user=current_user)
     if path == "/api/sensitivity/cleanup":
         return handle_sensitivity_cleanup(body, current_user=current_user)
     if path == "/api/tasks/control":
@@ -10339,6 +10571,7 @@ def handle_control_path(
             return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError) as exc:
             return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
+        analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "tasks_control", "action": action, "task_type": task_type, "scheme": scheme})
         return _json_response(response)
     return _json_response({"error": "not_found", "path": path}, HTTPStatus.NOT_FOUND)
 
@@ -10408,6 +10641,34 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
         token = _session_token_from_cookie(self.headers.get("Cookie"))
         return _authenticated_user(token)
 
+    def _handle_sse_events(self) -> None:
+        """推送实时任务与计算状态变更事件（Server-Sent Events）。"""
+        self.close_connection = True
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        sub = analytics_engine.EVENT_BROKER.subscribe()
+        try:
+            init_payload = json.dumps({"ok": True, "ts": int(time.time() * 1000)}, ensure_ascii=False)
+            self.wfile.write(f"event: ready\ndata: {init_payload}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            while True:
+                try:
+                    event_name, data = sub.get(timeout=15.0)
+                    msg = f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                    self.wfile.write(msg.encode("utf-8"))
+                    self.wfile.flush()
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n")
+                    self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+            pass
+        finally:
+            analytics_engine.EVENT_BROKER.unsubscribe(sub)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path.startswith("/api/"):
@@ -10425,7 +10686,23 @@ class PowerPlanHandler(BaseHTTPRequestHandler):
                 status, headers, body = _unauthorized_response()
                 self._send(status, headers, body)
                 return
+            if parsed.path == "/api/events":
+                self._handle_sse_events()
+                return
             status, headers, body = safe_api_call(lambda: handle_api_path(parsed.path, parsed.query, current_user=current_user))
+            if (
+                int(status) == int(HTTPStatus.OK)
+                and body
+                and str(headers.get("Content-Type", "")).startswith("application/json")
+                and parsed.path != "/api/health"
+            ):
+                etag = f'W/"{hashlib.blake2b(body, digest_size=10).hexdigest()}"'
+                headers = dict(headers)
+                headers["ETag"] = etag
+                inm = str(self.headers.get("If-None-Match", "")).strip()
+                if inm and (inm == etag or inm == "*"):
+                    self._send(HTTPStatus.NOT_MODIFIED, headers, b"")
+                    return
             self._send(status, headers, body)
             return
 
