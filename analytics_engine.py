@@ -208,6 +208,9 @@ def _build_heatmaps_and_typical_days(hourly_rows: list[dict]) -> tuple[dict[str,
     h2_prod = col(("hydrogen_production_power", "制氢功率"))
     fc_power = col(("fuel_cell_power", "燃料电池功率"))
     unmet = col(("unmet_load", "缺电负荷"))
+    wind_speed = col(("wind_speed", "风速"))
+    solar_irr = col(("solar_irradiance", "辐照", "太阳辐照"))
+    temperature = col(("temperature", "温度", "环境温度"))
 
     # 若分项充放全为 0 但存在合并 storage_power，按正负拆分为放电/充电
     if float(np.max(np.abs(st_charge))) == 0.0 and float(np.max(np.abs(st_discharge))) == 0.0 and float(np.max(np.abs(st_power))) > 0.0:
@@ -296,6 +299,9 @@ def _build_heatmaps_and_typical_days(hourly_rows: list[dict]) -> tuple[dict[str,
                     "hydrogen_prod": np.round(h2_prod[s0:s1], 2).tolist(),
                     "curtailed": np.round(curtailed[s0:s1], 2).tolist(),
                     "load": np.round(load[s0:s1], 2).tolist(),
+                    "wind_speed": np.round(wind_speed[s0:s1], 2).tolist(),
+                    "solar_irradiance": np.round(solar_irr[s0:s1], 1).tolist(),
+                    "temperature": np.round(temperature[s0:s1], 1).tolist(),
                 },
             }
         )
@@ -438,7 +444,7 @@ def build_engineering_insights(
     def _compute(resolved: Path) -> dict[str, Any]:
         npz_file = insights_npz_path(resolved)
         src_stat = resolved.stat()
-        src_sig = f"{src_stat.st_mtime_ns}:{src_stat.st_size}"
+        src_sig = f"v2:{src_stat.st_mtime_ns}:{src_stat.st_size}"
 
         # 优先尝试读取 .npz 二进制旁路缓存
         if npz_file.exists():
@@ -495,7 +501,7 @@ def build_engineering_insights(
             "lcoe_waterfall": waterfall,
         }
 
-    data = INSIGHTS_MEMORY_CACHE.get(result_path, _compute, variant="insights_v1")
+    data = INSIGHTS_MEMORY_CACHE.get(result_path, _compute, variant="insights_v2")
     return {
         **data,
         "stale_info": stale_info or {"is_stale": False},

@@ -280,6 +280,8 @@ html[data-theme] .scada-topbar .scada-brand,
   border-radius: 4px;
   border: 1px solid var(--border);
   background: var(--bg-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .scada-mini-link:hover {
@@ -294,6 +296,8 @@ html[data-theme] .scada-topbar .scada-brand,
   background: var(--warn-soft, rgba(251, 191, 36, 0.16));
   color: var(--warn, #FBBF24);
   border: 1px solid rgba(251, 191, 36, 0.45);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* 左翼：仪表盘 + 遥测表 + 年度概览 */
@@ -977,6 +981,223 @@ html[data-theme] .scada-topbar .scada-brand,
 
 .scada-compare-green {
   color: var(--ok, #34D399);
+}
+
+/* 南极气象环境条与左翼极端工况输入卡 */
+.scada-env-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  margin-bottom: 5px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+
+.scada-env-bar.is-extreme {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: var(--warn-soft, rgba(251, 191, 36, 0.1));
+}
+
+.scada-env-metrics,
+.scada-env-impacts {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.scada-env-metric {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.scada-env-metric b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  margin-left: 2px;
+}
+
+.scada-env-pill {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+
+.scada-env-pill.is-warn {
+  color: var(--warn, #FBBF24);
+  border-color: rgba(251, 191, 36, 0.45);
+}
+
+.scada-env-pill.is-risk {
+  color: var(--danger, #FB7185);
+  border-color: rgba(251, 113, 133, 0.5);
+}
+
+.scada-subtabs {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.scada-subtab {
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.scada-subtab.active {
+  border-color: var(--border);
+  background: var(--bg-subtle);
+  color: var(--accent);
+}
+
+.scada-weather-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scada-weather-pane[hidden],
+.scada-cost-breakdown[hidden] {
+  display: none !important;
+}
+
+.scada-wx-preset-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.scada-wx-select {
+  flex: 1;
+  min-width: 0;
+  height: 25px;
+  padding: 0 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 11.5px;
+}
+
+.scada-wx-mini-btn {
+  height: 25px;
+  padding: 0 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.scada-wx-mini-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.scada-wx-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+}
+
+.scada-wx-ctrl {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+}
+
+.scada-wx-ctrl span {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.scada-wx-ctrl em {
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.scada-wx-ctrl input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.scada-wx-cutout {
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.scada-wx-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.scada-wx-impact {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scada-wx-apply-btn {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 5px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.scada-wx-apply-btn:hover {
+  background: var(--accent);
+  color: var(--text-on-accent, #082F49);
+}
+
+.scada-wx-apply-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 @media (max-width: 1180px) {

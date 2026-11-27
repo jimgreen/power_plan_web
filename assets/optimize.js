@@ -592,6 +592,19 @@ function loadOptimizationInsights() {
   });
 }
 
+function loadOptimizationTopology() {
+  const panel = document.getElementById("optimizationTopologyPanel");
+  if (!panel || !window.PowerPlanCharts?.loadAndRenderTopologyPanel) return;
+  const key = `${state.currentScheme}/${state.optimization?.end_time || ""}`;
+  if (state.topologyKey === key && panel.querySelector(".topo-view-shell")) return;
+  state.topologyKey = key;
+  window.PowerPlanCharts.loadAndRenderTopologyPanel(panel, {
+    scheme: state.currentScheme,
+    filename: "opt_results.xlsx",
+    slot: "opt-topology",
+  });
+}
+
 function bindResultTabs() {
   document.querySelectorAll("[data-result-tab]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -619,6 +632,7 @@ function activateOptimizationResultTab(target, options = {}) {
   if (options.remember !== false) rememberOptimizationPageState({ activeResultTab: activeTarget });
   if (activeTarget === "curves" && options.load !== false) loadOptimizationCurveData().catch(showError);
   if (activeTarget === "insights" && options.load !== false) loadOptimizationInsights();
+  if (activeTarget === "topology" && options.load !== false) loadOptimizationTopology();
   window.requestAnimationFrame(refreshAdaptiveResultCharts);
 }
 
@@ -649,6 +663,7 @@ function renderOptimization(data) {
   renderOptimizationLogs(data.logs || []);
   if (state.activeResultTab === "curves" && !state.isSwitchingScheme) loadOptimizationCurveData().catch(showError);
   if (state.activeResultTab === "insights" && !state.isSwitchingScheme) loadOptimizationInsights();
+  if (state.activeResultTab === "topology" && !state.isSwitchingScheme) loadOptimizationTopology();
 }
 
 async function loadOptimizationCurveData() {

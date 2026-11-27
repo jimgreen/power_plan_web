@@ -5149,6 +5149,220 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     background: var(--accent);
   }
 
+  /* 规划求解 / 方案评估「潮流接线图」分页视图样式（100% 满面板多主题自洽） */
+  .topology-result-panel {
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .topology-result-panel.active {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .topo-view-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .topo-toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .topo-toolbar-left,
+  .topo-toolbar-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .topo-mode-switch {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+  }
+
+  .topo-mode-btn {
+    height: 24px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+
+  .topo-mode-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .topo-typical-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .topo-typical-controls[hidden] {
+    display: none !important;
+  }
+
+  .topo-select,
+  .topo-btn {
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    color: var(--text-primary);
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+
+  .topo-typical-controls input[type="range"] {
+    width: 112px;
+    accent-color: var(--accent);
+  }
+
+  .topo-hour-readout {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    min-width: 38px;
+  }
+
+  .topo-stage {
+    flex: 1 1 auto;
+    min-height: 320px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background-color: var(--bg-input, var(--bg-canvas));
+    background-image:
+      linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+    background-size: 24px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  [data-theme="minimalist-light"] .topo-stage {
+    background-color: #F8FAFC;
+    background-image:
+      linear-gradient(to right, rgba(15, 23, 42, 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(15, 23, 42, 0.05) 1px, transparent 1px);
+  }
+
+  .topo-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .topo-flow-base {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .topo-flow-dash {
+    fill: none;
+    stroke-dasharray: 7 11;
+    stroke-linecap: round;
+    animation: topoFlowFwd var(--topo-speed, 1.5s) linear infinite;
+  }
+
+  .topo-flow-dash.is-rev {
+    animation-name: topoFlowRev;
+  }
+
+  .topo-flow-dash.is-idle {
+    animation: none;
+    opacity: 0;
+  }
+
+  @keyframes topoFlowFwd {
+    from { stroke-dashoffset: 36; }
+    to { stroke-dashoffset: 0; }
+  }
+
+  @keyframes topoFlowRev {
+    from { stroke-dashoffset: 0; }
+    to { stroke-dashoffset: 36; }
+  }
+
+  .topo-rotor {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: topoSpin 4s linear infinite;
+  }
+
+  .topo-rotor.is-idle {
+    animation-play-state: paused;
+  }
+
+  @keyframes topoSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+
+  .topo-node {
+    cursor: pointer;
+  }
+
+  .topo-node:hover .topo-node-box {
+    stroke: var(--accent);
+    stroke-width: 1.8;
+  }
+
+  .topo-detail-bar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-subtle);
+    font-size: 12px;
+  }
+
+  .topo-detail-name {
+    color: var(--accent);
+    font-weight: 700;
+    margin-right: 4px;
+  }
+
+  .topo-detail-chip {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    padding: 1px 8px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+  }
+
   @media (max-width: 1024px) {
     .insights-grid,
     .comparison-radar-layout,

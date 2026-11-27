@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>联合规划总览大屏 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v17">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v17">
-  <link rel="stylesheet" href="assets/scada.css?v=20261127-ui-v17">
-  <script src="assets/ui-kit.js?v=20261127-ui-v17"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v20">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v20">
+  <link rel="stylesheet" href="assets/scada.css?v=20261127-ui-v20">
+  <script src="assets/ui-kit.js?v=20261127-ui-v20"></script>
 </head>
 <body class="scada-body">
   <div class="scada-shell">
@@ -105,12 +105,56 @@
           <div id="scadaTelemetryTable" class="scada-telemetry-table"></div>
         </section>
 
-        <section class="scada-panel scada-annual-panel">
+        <section class="scada-panel scada-annual-panel scada-wx-panel">
           <div class="scada-panel-head">
-            <h2>年化经济性构成</h2>
+            <div class="scada-subtabs" role="tablist" aria-label="气象工况与经济性切换">
+              <button type="button" class="scada-subtab active" data-left-tab="weather" aria-selected="true">南极气象</button>
+              <button type="button" class="scada-subtab" data-left-tab="cost" aria-selected="false">经济性</button>
+            </div>
+            <span class="scada-tag" id="scadaWxActiveTag" hidden>耦合推演</span>
             <a class="scada-mini-link" id="scadaLinkReport" href="report.html">简报</a>
           </div>
-          <div id="scadaCostBreakdown" class="scada-cost-breakdown"></div>
+          <div id="scadaWeatherPane" class="scada-weather-pane" data-left-pane="weather">
+            <div class="scada-wx-preset-row">
+              <select id="scadaWxPreset" class="scada-wx-select" aria-label="南极典型气象工况预设">
+                <option value="baseline">基准实测工况</option>
+                <option value="polar_night">极夜严寒无风</option>
+                <option value="katabatic_blizzard">下降风暴雪切出</option>
+                <option value="polar_day">极昼高辐照满发</option>
+                <option value="extreme_cold">极寒低温电池衰减</option>
+                <option value="custom">自定义南极工况</option>
+              </select>
+              <button type="button" id="scadaWxResetBtn" class="scada-wx-mini-btn">重置</button>
+            </div>
+            <div class="scada-wx-controls">
+              <label class="scada-wx-ctrl">
+                <span>气温偏移 <em id="wxTempVal">0°C</em></span>
+                <input id="wxTempSlider" type="range" min="-30" max="15" step="1" value="0">
+              </label>
+              <label class="scada-wx-ctrl">
+                <span>风速倍率 <em id="wxWindVal">1.0×</em></span>
+                <input id="wxWindSlider" type="range" min="0.2" max="2.2" step="0.05" value="1.0">
+              </label>
+              <label class="scada-wx-ctrl">
+                <span>覆雪衰减 <em id="wxSnowVal">0%</em></span>
+                <input id="wxSnowSlider" type="range" min="0" max="95" step="5" value="0">
+              </label>
+              <label class="scada-wx-ctrl">
+                <span>切出风速</span>
+                <select id="wxCutoutSelect" class="scada-wx-cutout">
+                  <option value="20">20 m/s</option>
+                  <option value="22">22 m/s</option>
+                  <option value="25" selected>25 m/s</option>
+                  <option value="30">30 m/s</option>
+                </select>
+              </label>
+            </div>
+            <div class="scada-wx-footer">
+              <span id="scadaWxCouplingSummary" class="scada-wx-impact">实测基准</span>
+              <button type="button" id="scadaWxGenerateBtn" class="scada-wx-apply-btn">生成工况方案</button>
+            </div>
+          </div>
+          <div id="scadaCostBreakdown" class="scada-cost-breakdown" data-left-pane="cost" hidden></div>
         </section>
       </aside>
 
@@ -138,6 +182,8 @@
               <span><i style="background:#FB7185"></i>柴发</span>
             </div>
           </div>
+
+          <div class="scada-env-bar" id="scadaEnvBar" aria-label="南极气象环境与能源耦合状态"></div>
 
           <div class="scada-mimic-stage" id="scadaMimicStage">
             <svg id="scadaMimicSvg" class="scada-mimic-svg" viewBox="0 0 920 420" preserveAspectRatio="xMidYMid meet" role="img" aria-label="微电网联合规划拓扑图"></svg>
@@ -185,10 +231,10 @@
     </main>
   </div>
 
-  <script src="assets/i18n.js?v=20261127-ui-v17"></script>
-  <script src="assets/auth.js?v=20261127-ui-v17"></script>
-  <script src="assets/page_state.js?v=20261127-ui-v17"></script>
-  <script src="assets/chart-enhancer.js?v=20261127-ui-v17"></script>
-  <script src="assets/scada.js?v=20261127-ui-v17"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v20"></script>
+  <script src="assets/auth.js?v=20261127-ui-v20"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v20"></script>
+  <script src="assets/chart-enhancer.js?v=20261127-ui-v20"></script>
+  <script src="assets/scada.js?v=20261127-ui-v20"></script>
 </body>
 </html>

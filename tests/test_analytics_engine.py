@@ -52,6 +52,9 @@ class AnalyticsEngineTests(unittest.TestCase):
                         "hydrogen_production_power": 4.0,
                         "fuel_cell_power": 2.0,
                         "unmet_load": 0.0,
+                        "wind_speed": 12.5 + (h % 6),
+                        "solar_irradiance": 280.0 if 8 <= (h % 24) <= 16 else 0.0,
+                        "temperature": -28.0 + (h % 12) * 0.5,
                     }
                 )
             green_table = [
@@ -69,6 +72,10 @@ class AnalyticsEngineTests(unittest.TestCase):
             self.assertIn("net_load", first["heatmaps"])
             self.assertEqual(len(first["heatmaps"]["net_load"]["matrix"]), 2)
             self.assertGreaterEqual(len(first["typical_days"]), 2)
+            first_day_series = first["typical_days"][0]["series"]
+            self.assertEqual(len(first_day_series.get("wind_speed", [])), 24)
+            self.assertEqual(len(first_day_series.get("solar_irradiance", [])), 24)
+            self.assertEqual(len(first_day_series.get("temperature", [])), 24)
             self.assertTrue(first["sankey"]["links"])
             self.assertTrue(first["lcoe_waterfall"]["items"])
             self.assertTrue(analytics_engine.insights_npz_path(res_path).exists())
@@ -153,6 +160,27 @@ class AnalyticsEngineTests(unittest.TestCase):
         # 3. 验证 /api/sensitivity/retry-failed 参数校验
         st_rf, _, _ = server.handle_control_path("/api/sensitivity/retry-failed", b"{}", current_user=admin)
         self.assertEqual(st_rf, 400)
+
+        # 4. 验证 /api/planning/apply-weather-scenario 参数校验
+        st_wx, _, _ = server.handle_control_path("/api/planning/apply-weather-scenario", b"{}", current_user=admin)
+        self.assertEqual(st_wx, 400)
+
+        # 5. 验证 /api/report/summary 的 site_summary 包含南极气象扩展字段
+        st_ls, _, ls_body = server.handle_api_path("/api/planning/schemes", "", current_user=admin)
+        self.assertEqual(st_ls, 200)
+        schemes = (json.loads(ls_body.decode("utf-8")) or {}).get("schemes") or []
+        if schemes:
+            sample = schemes[0]["name"]
+            st_rep, _, rep_body = server.handle_api_path(
+                "/api/report/summary",
+                f"scheme={sample}",
+                current_user=admin,
+            )
+            self.assertEqual(st_rep, 200)
+            rep_data = json.loads(rep_body.decode("utf-8"))
+            site = rep_data.get("site_summary") or {}
+            for key in ("min_temp_c", "avg_temp_c", "max_wind_ms", "polar_night_days", "gale_hours", "extreme_cold_hours"):
+                self.assertIn(key, site)
 
 
 if __name__ == "__main__":

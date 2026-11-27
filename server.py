@@ -10138,8 +10138,99 @@ def handle_analysis_insights(query: str = "", current_user: dict | None = None) 
     )
     payload["scheme"] = clean
     payload["filename"] = selected_file
-    cache_key = ("analysis_insights_v1", clean, selected_file, res_path.stat().st_mtime_ns, bool(stale_info.get("is_stale")))
+    cache_key = ("analysis_insights_v2", clean, selected_file, res_path.stat().st_mtime_ns, bool(stale_info.get("is_stale")))
     return _cached_json_response(cache_key, lambda: payload)
+
+
+def handle_apply_weather_scenario(body: bytes, current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
+    """依据大屏输入的南极气象与环境工况参数，派生新的极端工况规划方案并可选入队求解。"""
+    try:
+        req = json.loads(body.decode("utf-8") or "{}")
+        base_scheme = str(req.get("base_scheme") or "").strip()
+        scenario_tag = str(req.get("scenario_tag") or "extreme_wx").strip()
+        temp_offset_c = float(req.get("temp_offset_c") or 0.0)
+        wind_scale = max(0.05, min(3.0, float(req.get("wind_scale") if req.get("wind_scale") is not None else 1.0)))
+        snow_attenuation_pct = max(0.0, min(98.0, float(req.get("snow_attenuation_pct") or 0.0)))
+        cutout_wind_ms = max(12.0, min(45.0, float(req.get("cutout_wind_ms") or 25.0)))
+        enable_heating_coupling = bool(req.get("enable_heating_coupling", True))
+        auto_queue = bool(req.get("auto_queue", True))
+        if not base_scheme:
+            raise ValueError("请指定基准规划方案")
+        if not all(math.isfinite(v) for v in (temp_offset_c, wind_scale, snow_attenuation_pct, cutout_wind_ms)):
+            raise ValueError("气象工况参数必须为有效数值")
+        base_scheme = ensure_planning_scheme_access(base_scheme, current_user)
+        base_payload = PLANNING_STORE.read_scheme(base_scheme)
+
+        clean_tag = re.sub(r"[^\w\u4e00-\u9fff-]+", "_", scenario_tag)[:28] or "extreme_wx"
+        target_name = planning_store.validate_scheme_name(f"{base_scheme}_{clean_tag}")
+        if target_name == base_scheme:
+            target_name = planning_store.validate_scheme_name(f"{base_scheme}_wx")
+
+        mutated = deepcopy(base_payload)
+        solar_keep = max(0.0, 1.0 - snow_attenuation_pct / 100.0)
+        # 极寒采暖伴热负荷耦合：当气温低于基线（temp_offset_c < 0）时，每降 10°C 增加 ~6.5% 站区采暖负荷
+        cold_load_mult = 1.0 + (abs(min(0.0, temp_offset_c)) / 10.0) * 0.065 if enable_heating_coupling else 1.0
+
+        cutout_hours = 0
+        for row in mutated.get("time_series") or []:
+            if not isinstance(row, dict):
+                continue
+            if row.get("temperature") not in ("", None):
+                try:
+                    t_new = max(-75.0, min(30.0, float(row["temperature"]) + temp_offset_c))
+                    row["temperature"] = round(t_new, 2)
+                except (TypeError, ValueError):
+                    pass
+            if row.get("wind_speed") not in ("", None):
+                try:
+                    w_new = max(0.0, float(row["wind_speed"]) * wind_scale)
+                    if w_new > cutout_wind_ms:
+                        cutout_hours += 1
+                    row["wind_speed"] = round(w_new, 3)
+                except (TypeError, ValueError):
+                    pass
+            if row.get("solar_irradiance") not in ("", None):
+                try:
+                    s_new = max(0.0, float(row["solar_irradiance"]) * solar_keep)
+                    row["solar_irradiance"] = round(s_new, 2)
+                except (TypeError, ValueError):
+                    pass
+            if cold_load_mult > 1.0001 and row.get("load") not in ("", None):
+                try:
+                    l_new = max(0.0, float(row["load"]) * cold_load_mult)
+                    row["load"] = round(l_new, 3)
+                except (TypeError, ValueError):
+                    pass
+
+        mutated["scheme"] = target_name
+        PLANNING_STORE.write_scheme(target_name, mutated)
+        owner = str((current_user or {}).get("username") or "").strip()
+        if owner and hasattr(USER_STORE, "set_scheme_owner"):
+            try:
+                USER_STORE.set_scheme_owner(target_name, owner)
+            except Exception:
+                pass
+        queued = False
+        if auto_queue:
+            TASK_SCHEDULER.enqueue("optimization", target_name, OPTIMIZATION_RESULT_WORKBOOK_NAME)
+            TASK_SCHEDULER.schedule_next_if_idle()
+            queued = True
+            analytics_engine.EVENT_BROKER.publish("tasks", {"reason": "weather_scenario_generate", "scheme": target_name})
+        return _json_response(
+            {
+                "ok": True,
+                "scheme": target_name,
+                "base_scheme": base_scheme,
+                "queued": queued,
+                "cutout_hours": cutout_hours,
+                "cold_load_mult": round(cold_load_mult, 4),
+                "message": f"已生成南极气象工况方案「{target_name}」" + ("并加入规划求解队列" if queued else ""),
+            }
+        )
+    except FileNotFoundError as exc:
+        return _json_response({"error": "not_found", "message": str(exc)}, HTTPStatus.NOT_FOUND)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response({"error": "bad_request", "message": str(exc)}, HTTPStatus.BAD_REQUEST)
 
 
 def handle_report_summary(query: str = "", current_user: dict | None = None) -> tuple[int, dict[str, str], bytes]:
@@ -10162,6 +10253,23 @@ def handle_report_summary(query: str = "", current_user: dict | None = None) -> 
     loads = [float(r.get("load") or 0.0) for r in ts_rows if isinstance(r, dict)]
     winds = [float(r.get("wind_speed") or 0.0) for r in ts_rows if isinstance(r, dict)]
     solars = [float(r.get("solar_irradiance") or 0.0) for r in ts_rows if isinstance(r, dict)]
+    temps = [
+        float(r.get("temperature"))
+        for r in ts_rows
+        if isinstance(r, dict) and r.get("temperature") not in ("", None)
+    ]
+    days_cnt = len(solars) // 24
+    polar_night_days = 0
+    polar_day_days = 0
+    for d_i in range(days_cnt):
+        day_sol = solars[d_i * 24 : (d_i + 1) * 24]
+        if day_sol:
+            if max(day_sol) < 10.0:
+                polar_night_days += 1
+            elif sum(1 for v in day_sol if v >= 10.0) >= 20:
+                polar_day_days += 1
+    gale_hours = sum(1 for w in winds if w >= 20.0)
+    extreme_cold_hours = sum(1 for t in temps if t <= -30.0)
     site_summary = {
         "scheme": clean,
         "hours": len(ts_rows),
@@ -10169,7 +10277,16 @@ def handle_report_summary(query: str = "", current_user: dict | None = None) -> 
         "avg_load_kw": round(sum(loads) / len(loads), 2) if loads else 0.0,
         "annual_load_mwh": round(sum(loads) / 1000.0, 2) if loads else 0.0,
         "avg_wind_ms": round(sum(winds) / len(winds), 2) if winds else 0.0,
+        "max_wind_ms": round(max(winds), 2) if winds else 0.0,
         "avg_solar_wm2": round(sum(solars) / len(solars), 2) if solars else 0.0,
+        "max_solar_wm2": round(max(solars), 1) if solars else 0.0,
+        "min_temp_c": round(min(temps), 1) if temps else None,
+        "avg_temp_c": round(sum(temps) / len(temps), 1) if temps else None,
+        "max_temp_c": round(max(temps), 1) if temps else None,
+        "polar_night_days": polar_night_days,
+        "polar_day_days": polar_day_days,
+        "gale_hours": gale_hours,
+        "extreme_cold_hours": extreme_cold_hours,
     }
 
     planning_table: list[dict] = []
@@ -10553,6 +10670,8 @@ def handle_control_path(
         return handle_admin_clear_caches(current_user=current_user)
     if path == "/api/sensitivity/generate":
         return handle_sensitivity_generate(body, current_user=current_user)
+    if path == "/api/planning/apply-weather-scenario":
+        return handle_apply_weather_scenario(body, current_user=current_user)
     if path == "/api/sensitivity/retry-failed":
         return handle_sensitivity_retry_failed(body, current_user=current_user)
     if path == "/api/sensitivity/cleanup":

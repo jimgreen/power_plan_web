@@ -9,6 +9,14 @@
 
   const PAGE_STATE_KEY = "planning_dashboard";
 
+  const WEATHER_PRESETS = {
+    baseline: { label: "基准实测工况", tag: "baseline", tempOffset: 0, windScale: 1.0, snowPct: 0, cutoutWind: 25 },
+    polar_night: { label: "极夜严寒无风", tag: "polar_night", tempOffset: -25, windScale: 0.4, snowPct: 95, cutoutWind: 25 },
+    katabatic_blizzard: { label: "下降风暴雪切出", tag: "blizzard", tempOffset: -18, windScale: 1.9, snowPct: 75, cutoutWind: 22 },
+    polar_day: { label: "极昼高辐照满发", tag: "polar_day", tempOffset: 8, windScale: 1.15, snowPct: 0, cutoutWind: 28 },
+    extreme_cold: { label: "极寒低温电池衰减", tag: "extreme_cold", tempOffset: -30, windScale: 0.85, snowPct: 30, cutoutWind: 25 },
+  };
+
   const state = {
     schemes: [],
     currentScheme: "",
@@ -17,12 +25,19 @@
     insights: null,
     compareRows: [],
     mode: "annual", // "annual" | "typical"
+    leftTab: "weather", // "weather" | "cost"
     dayIndex: 0,
     hour: 12,
     playing: false,
     playTimer: 0,
     selectedNode: "pv",
+    weather: { ...WEATHER_PRESETS.baseline, preset: "baseline" },
   };
+
+  function isCustomWeather() {
+    const w = state.weather;
+    return Math.abs(w.tempOffset) > 0.01 || Math.abs(w.windScale - 1.0) > 0.01 || w.snowPct > 0.1 || w.cutoutWind !== 25;
+  }
 
   function escapeHtml(val) {
     return String(val ?? "")
@@ -123,11 +138,22 @@
     const caps = {
       wtg: findCapacity(planTable, ["风机", "风电"]),
       pv: findCapacity(planTable, ["光伏"]),
-      bess: findCapacity(planTable, ["电池", "电储能", "储能"]),
-      h2: findCapacity(planTable, ["电解", "氢", "燃料电池"]),
+      bessPcs: findCapacity(planTable, ["PCS", "pcs", "变流"]),
+      bessBat: findCapacity(planTable, ["电池组", "电池", "电储能"]),
+      bess: findCapacity(planTable, ["电池组", "电池", "电储能"]),
+      h2: findCapacity(planTable, ["电解", "电制氢", "燃料电池"]),
       diesel: findCapacity(planTable, ["柴发", "柴油"]),
       load: { total: num(site.peak_load_kw, 0), count: 1, unit: "kW" },
     };
+    if (caps.bessPcs.total > 0 && caps.bessBat.total > 0) {
+      caps.bess.displayText = `${caps.bessPcs.total} kW / ${caps.bessBat.total} kWh`;
+    } else if (caps.bessBat.total > 0) {
+      caps.bess.displayText = `${caps.bessBat.total} ${caps.bessBat.unit}`;
+    } else if (caps.bessPcs.total > 0) {
+      caps.bess.displayText = `${caps.bessPcs.total} ${caps.bessPcs.unit}`;
+    } else {
+      caps.bess.displayText = "0 kW";
+    }
 
     const totalPowerCap = caps.wtg.total + caps.pv.total + caps.diesel.total;
     const loadMwh = num(site.annual_load_mwh, toMwh(findMetric(greenTable, ["负荷总电量", "负荷用电量"])));
@@ -164,30 +190,132 @@
     const fMin = findMetric(safetyTable, ["最低频率"]).val;
     const fMax = findMetric(safetyTable, ["最高频率"]).val;
     const rel = findMetric(relRows, ["供电可靠率", "ESR"]).val;
-    const conclusions = Array.isArray(rep.conclusions) ? rep.conclusions : [];
+    const baseConclusions = Array.isArray(rep.conclusions) ? rep.conclusions : [];
+
+    // ------------------------------------------------------------------
+    // 南极极端气象与能源系统物理耦合推演
+    // ------------------------------------------------------------------
+    const wx = state.weather;
+    const wxActive = isCustomWeather();
+    const baseMinTemp = site.min_temp_c != null ? num(site.min_temp_c, -22) : -22;
+    const baseAvgTemp = site.avg_temp_c != null ? num(site.avg_temp_c, -10) : -10;
+    const baseMaxWind = num(site.max_wind_ms, num(site.avg_wind_ms, 6) * 2.4);
+    const effMinTemp = Math.max(-75, baseMinTemp + wx.tempOffset);
+    const effAvgTemp = Math.max(-65, baseAvgTemp + wx.tempOffset);
+    const effAvgWind = num(site.avg_wind_ms, 0) * wx.windScale;
+    const effMaxWind = baseMaxWind * wx.windScale;
+    const effAvgSolar = num(site.avg_solar_wm2, 0) * Math.max(0, 1 - wx.snowPct / 100);
+
+    // 1) 极寒低温导致锂电池可用容量与充放效率折损（<-10°C 起每降 10°C 衰减 ~8%，下限 55%）
+    const coldDepth = Math.max(0, -10 - effMinTemp);
+    const battHealthFactor = wxActive ? Math.max(0.55, 1.0 - (coldDepth / 10) * 0.08) : 1.0;
+    const battDeratePct = Math.round((1 - battHealthFactor) * 100);
+
+    // 2) 极寒采暖与防冻伴热附加负荷（气温偏低每 10°C 增荷 ~6.5%）
+    const heatingLoadMult = wxActive && wx.tempOffset < 0 ? 1.0 + (Math.abs(wx.tempOffset) / 10) * 0.065 : 1.0;
+    const heatingAddPct = Math.round((heatingLoadMult - 1) * 100);
+
+    // 3) 下降风超切出风速保护损失（高风速段触发防飞车停机）
+    const cutoutRatio = wxActive && effMaxWind > wx.cutoutWind
+      ? Math.min(0.65, ((effMaxWind - wx.cutoutWind) / Math.max(8, wx.cutoutWind)) * 0.55)
+      : 0;
+    const windPowerMult = wxActive ? Math.min(1.65, Math.pow(wx.windScale, 1.35)) * (1 - cutoutRatio) : 1.0;
+    const solarKeep = wxActive ? Math.max(0, 1 - wx.snowPct / 100) : 1.0;
+
+    let effLoadMwh = loadMwh * heatingLoadMult;
+    let effWindMwh = windMwh * windPowerMult;
+    let effPvMwh = pvMwh * solarKeep;
+    let effStDisMwh = stDisMwh * battHealthFactor;
+    let effStChgMwh = stChgMwh * battHealthFactor;
+    let effDieselMwh = dieselMwh;
+    let effCurtMwh = curtMwh;
+    let effLcoe = lcoe.val;
+    let effGreenPct = greenPct;
+    let effCurtPct = curtPct;
+    let deficitMwh = 0;
+
+    if (wxActive && rep.has_result) {
+      // 弃电量首先随风光可用出力同比例缩放，避免风光锐减时弃电率反向虚高
+      const baseRen = windMwh + pvMwh;
+      const renScale = baseRen > 0.01 ? (effWindMwh + effPvMwh) / baseRen : 1.0;
+      effCurtMwh = curtMwh * Math.max(0, Math.min(2.2, renScale));
+
+      const renDelta = (effWindMwh + effPvMwh) - baseRen;
+      const loadDelta = effLoadMwh - loadMwh;
+      const netShift = renDelta - loadDelta; // >0 绿电富余, <0 需柴发兜底
+      if (netShift < 0) {
+        const need = Math.abs(netShift);
+        const fromCurt = Math.min(effCurtMwh * 0.6, need * 0.35);
+        effCurtMwh = Math.max(0, effCurtMwh - fromCurt);
+        const needDiesel = Math.max(0, need - fromCurt);
+        const dieselCapAnnualMax = caps.diesel.total > 0 ? (caps.diesel.total * 8760 * 0.72) / 1000 : needDiesel + effDieselMwh;
+        const nextDiesel = effDieselMwh + needDiesel;
+        if (nextDiesel > dieselCapAnnualMax) {
+          deficitMwh = nextDiesel - dieselCapAnnualMax;
+          effDieselMwh = dieselCapAnnualMax;
+        } else {
+          effDieselMwh = nextDiesel;
+        }
+      } else {
+        const reduceDiesel = Math.min(effDieselMwh * 0.55, netShift * 0.45);
+        effDieselMwh = Math.max(0, effDieselMwh - reduceDiesel);
+        effCurtMwh = effCurtMwh + Math.max(0, netShift - reduceDiesel);
+      }
+      effGreenPct = effLoadMwh > 0 ? Math.max(0, Math.min(100, (1 - effDieselMwh / effLoadMwh) * 100)) : 0;
+      const totalRenPot = effWindMwh + effPvMwh + effCurtMwh;
+      effCurtPct = totalRenPot > 0 ? Math.max(0, Math.min(100, (effCurtMwh / totalRenPot) * 100)) : 0;
+      if (Number.isFinite(lcoe.val)) {
+        const dieselDeltaRatio = loadMwh > 0 ? (effDieselMwh - dieselMwh) / loadMwh : 0;
+        effLcoe = Math.max(0.2, lcoe.val * (1 + dieselDeltaRatio * 0.48 + (1 - battHealthFactor) * 0.12));
+      }
+    }
+
+    const conclusions = [...baseConclusions];
+    if (wxActive) {
+      if (deficitMwh > 0.5) {
+        conclusions.unshift({
+          level: "risk",
+          category: "极端工况耦合",
+          title: `极端气象下预计存在 ${deficitMwh.toFixed(1)} MWh 保供缺口`,
+          detail: "建议点击左侧「生成工况方案」进入 MILP 求解，增配长时储氢或柴发备用容量。",
+        });
+      } else {
+        conclusions.unshift({
+          level: battDeratePct >= 20 || cutoutRatio > 0.1 ? "warn" : "pass",
+          category: "极端工况耦合",
+          title: `耦合推演：绿电 ${effGreenPct.toFixed(1)}% · 电池低温折损 ${battDeratePct}% · 采暖增荷 +${heatingAddPct}%`,
+          detail: cutoutRatio > 0.05
+            ? `强风超过 ${wx.cutoutWind} m/s 切出阈值触发防飞车停机，柴发年需增发 ${Math.max(0, effDieselMwh - dieselMwh).toFixed(1)} MWh。`
+            : "点击「生成工况方案」即可将该南极极端气象工况写入新方案并严格 MILP 求解。",
+        });
+      }
+    }
+
     const riskCnt = conclusions.filter((c) => c.level === "risk").length;
     const warnCnt = conclusions.filter((c) => c.level === "warn").length;
 
     return {
       caps,
       totalPowerCap,
-      loadMwh,
-      windMwh,
-      pvMwh,
-      dieselMwh,
-      stChgMwh,
-      stDisMwh,
-      stEffPct: stChgMwh > 0.01 ? Math.min(100, (stDisMwh / stChgMwh) * 100) : 0,
+      loadMwh: effLoadMwh,
+      windMwh: effWindMwh,
+      pvMwh: effPvMwh,
+      dieselMwh: effDieselMwh,
+      stChgMwh: effStChgMwh,
+      stDisMwh: effStDisMwh,
+      stEffPct: effStChgMwh > 0.01 ? Math.min(100, (effStDisMwh / effStChgMwh) * 100) : 0,
       h2InMwh,
       fcOutMwh,
-      curtMwh,
-      pcsAnnualMwh: pvMwh + stDisMwh + fcOutMwh,
-      lcoe: lcoe.val,
+      curtMwh: effCurtMwh,
+      pcsAnnualMwh: effPvMwh + effStDisMwh + fcOutMwh,
+      lcoe: effLcoe,
+      baseLcoe: lcoe.val,
       annualCost: annualCost.val,
       annualCostUnit: annualCost.unit || "万元",
-      greenPct,
-      curtPct,
-      absorbPct: Math.max(0, Math.min(100, 100 - curtPct)),
+      greenPct: effGreenPct,
+      baseGreenPct: greenPct,
+      curtPct: effCurtPct,
+      absorbPct: Math.max(0, Math.min(100, 100 - effCurtPct)),
       fMin: Number.isFinite(fMin) ? fMin : NaN,
       fMax: Number.isFinite(fMax) ? fMax : NaN,
       relPct: Number.isFinite(rel) ? rel : NaN,
@@ -197,6 +325,21 @@
       site,
       hasResult: Boolean(rep.has_result),
       stale: Boolean(rep.stale),
+      wx: {
+        active: wxActive,
+        effMinTemp,
+        effAvgTemp,
+        effAvgWind,
+        effMaxWind,
+        effAvgSolar,
+        battHealthFactor,
+        battDeratePct,
+        heatingLoadMult,
+        heatingAddPct,
+        cutoutRatio,
+        cutoutTriggered: cutoutRatio > 0.02,
+        deficitMwh,
+      },
     };
   }
 
@@ -210,22 +353,34 @@
     const day = currentTypicalDay();
     const h = Math.min(23, Math.max(0, state.hour));
     const s = day?.series || {};
-    const wind = Math.max(0, num(s.wind?.[h], 0));
-    const pv = Math.max(0, num(s.pv?.[h], 0));
-    const diesel = Math.max(0, num(s.diesel?.[h], 0));
-    const stDis = Math.max(0, num(s.storage_discharge?.[h], 0));
-    const stChg = Math.max(0, num(s.storage_charge?.[h], 0));
+    const wx = state.weather;
+    const wxActive = isCustomWeather();
+    const rawWindSpeed = num(s.wind_speed?.[h], num(plan.site.avg_wind_ms, 6));
+    const rawSolarIrr = num(s.solar_irradiance?.[h], num(plan.site.avg_solar_wm2, 120));
+    const rawTemp = s.temperature?.[h] != null ? num(s.temperature[h], -15) : num(plan.site.avg_temp_c, -15);
+    const effWindSpeed = rawWindSpeed * wx.windScale;
+    const effTemp = Math.max(-75, rawTemp + wx.tempOffset);
+    const effSolarIrr = rawSolarIrr * Math.max(0, 1 - wx.snowPct / 100);
+    const hourCutout = wxActive && effWindSpeed > wx.cutoutWind;
+
+    const wind = hourCutout ? 0 : Math.max(0, num(s.wind?.[h], 0) * (wxActive ? Math.min(1.65, Math.pow(wx.windScale, 1.35)) : 1));
+    const pv = Math.max(0, num(s.pv?.[h], 0) * (wxActive ? Math.max(0, 1 - wx.snowPct / 100) : 1));
+    const load = Math.max(0, num(s.load?.[h], 0) * plan.wx.heatingLoadMult);
+    const stDis = Math.max(0, num(s.storage_discharge?.[h], 0) * plan.wx.battHealthFactor);
+    const stChg = Math.max(0, num(s.storage_charge?.[h], 0) * plan.wx.battHealthFactor);
     const fc = Math.max(0, num(s.fuel_cell?.[h], 0));
     const h2Prod = Math.max(0, num(s.hydrogen_prod?.[h], 0));
-    const curtailed = Math.max(0, num(s.curtailed?.[h], 0));
-    const load = Math.max(0, num(s.load?.[h], 0));
+    const baseDiesel = Math.max(0, num(s.diesel?.[h], 0));
+    const supplyGap = Math.max(0, load - (wind + pv + stDis + fc + baseDiesel));
+    const diesel = wxActive ? baseDiesel + supplyGap : baseDiesel;
+    const curtailed = Math.max(0, num(s.curtailed?.[h], 0) * (wxActive ? Math.max(0, 1 - wx.snowPct / 100) : 1));
 
     let soc = 55;
     const socMat = state.insights?.heatmaps?.soc?.matrix;
     if (Array.isArray(socMat) && socMat.length) {
       const dIdx = Math.min(socMat.length - 1, Math.max(0, (day?.day_index || 1) - 1));
       const v = num(socMat[dIdx]?.[h], NaN);
-      if (Number.isFinite(v)) soc = Math.max(0, Math.min(100, v));
+      if (Number.isFinite(v)) soc = Math.max(0, Math.min(100, v * plan.wx.battHealthFactor));
     }
     return {
       hour: h,
@@ -247,6 +402,10 @@
       pcsNet: pv + stDis + fc - stChg - h2Prod,
       caps: plan.caps,
       daySummary: day?.summary || {},
+      effTemp,
+      effWindSpeed,
+      effSolarIrr,
+      hourCutout,
     };
   }
 
@@ -575,10 +734,12 @@
         w: 188,
         h: 86,
         title: tr("风电规划配置"),
-        code: plan.caps.wtg.count > 0 ? `${plan.caps.wtg.count} ${tr("台")} · AC ${tr("接入")}` : "WTG · AC",
+        code: ((isTypical && snap.hourCutout) || (!isTypical && plan.wx.cutoutTriggered))
+          ? `${tr("超切出保护")} >${state.weather.cutoutWind}m/s`
+          : (plan.caps.wtg.count > 0 ? `${plan.caps.wtg.count} ${tr("台")} · AC ${tr("接入")}` : "WTG · AC"),
         valueText: isTypical ? `${snap.wind.toFixed(1)} kW` : `${plan.caps.wtg.total} ${plan.caps.wtg.unit}`,
         subText: isTypical ? `${tr("规划装机")} ${plan.caps.wtg.total} kW` : `${tr("年发电")} ${plan.windMwh.toFixed(1)} MWh`,
-        accent: pal.wind,
+        accent: ((isTypical && snap.hourCutout) || (!isTypical && plan.wx.cutoutTriggered)) ? pal.warn : pal.wind,
         iconSvg: windIcon,
         active: windActive,
       })}
@@ -605,7 +766,9 @@
         w: 188,
         h: 86,
         title: tr("考察站规划负荷"),
-        code: `${tr("峰值")} ${plan.caps.load.total.toFixed(0)} kW · 8760h`,
+        code: plan.wx.heatingAddPct > 0
+          ? `${tr("采暖增荷")} +${plan.wx.heatingAddPct}% · 8760h`
+          : `${tr("峰值")} ${plan.caps.load.total.toFixed(0)} kW · 8760h`,
         valueText: isTypical ? `${snap.load.toFixed(1)} kW` : `${plan.loadMwh.toFixed(1)} MWh`,
         subText: isTypical ? `${tr("典型日")} ${num(snap.daySummary.load_kwh, 0).toFixed(0)} kWh` : `${tr("均荷")} ${num(plan.site.avg_load_kw, 0).toFixed(1)} kW`,
         accent: pal.load,
@@ -620,7 +783,9 @@
         w: 188,
         h: 86,
         title: tr("光伏规划配置"),
-        code: plan.caps.pv.count > 0 ? `${plan.caps.pv.count} ${tr("组")} · DC ${tr("接入")}` : "PV · DC",
+        code: state.weather.snowPct > 0
+          ? `${tr("光伏覆雪")} -${state.weather.snowPct}% · DC`
+          : (plan.caps.pv.count > 0 ? `${plan.caps.pv.count} ${tr("组")} · DC ${tr("接入")}` : "PV · DC"),
         valueText: isTypical ? `${snap.pv.toFixed(1)} kW` : `${plan.caps.pv.total} ${plan.caps.pv.unit}`,
         subText: isTypical ? `${tr("规划装机")} ${plan.caps.pv.total} kW` : `${tr("年发电")} ${plan.pvMwh.toFixed(1)} MWh`,
         accent: pal.solar,
@@ -635,12 +800,14 @@
         w: 188,
         h: 86,
         title: tr("电化学储能配置"),
-        code: isTypical ? `BESS · SOC ${snap.soc.toFixed(1)}%` : `BESS · ${tr("效率")} ${plan.stEffPct > 0 ? `${plan.stEffPct.toFixed(0)}%` : "—"}`,
+        code: plan.wx.battDeratePct > 0
+          ? `BESS · ${tr("低温可用")} ${Math.round(plan.wx.battHealthFactor * 100)}%`
+          : (isTypical ? `BESS · SOC ${snap.soc.toFixed(1)}%` : `BESS · ${tr("效率")} ${plan.stEffPct > 0 ? `${plan.stEffPct.toFixed(0)}%` : "—"}`),
         valueText: isTypical
           ? (snap.bessNet >= 0 ? `${tr("放")} +${snap.bessNet.toFixed(1)} kW` : `${tr("充")} ${snap.bessNet.toFixed(1)} kW`)
-          : `${plan.caps.bess.total} ${plan.caps.bess.unit}`,
+          : (plan.caps.bess.displayText || `${plan.caps.bess.total} ${plan.caps.bess.unit}`),
         subText: isTypical ? `${tr("规划容量")} ${plan.caps.bess.total} ${plan.caps.bess.unit}` : `${tr("年充/放")} ${plan.stChgMwh.toFixed(1)}/${plan.stDisMwh.toFixed(1)} MWh`,
-        accent: pal.bess,
+        accent: plan.wx.battDeratePct >= 20 ? pal.warn : pal.bess,
         iconSvg: bessIcon,
         active: isTypical ? Math.abs(snap.bessNet) > 0.05 : plan.caps.bess.total > 0,
       })}
@@ -986,9 +1153,110 @@
     if (timeEl) timeEl.textContent = `${String(state.hour).padStart(2, "0")}:00`;
   }
 
+  /** 渲染中央顶部单行「南极气象环境与能源耦合状态条」 */
+  function renderEnvBar(plan) {
+    const bar = document.getElementById("scadaEnvBar");
+    if (!bar) return;
+    const isTyp = state.mode === "typical";
+    const snap = isTyp ? currentTypicalSnapshot(plan) : null;
+    const w = plan.wx;
+    const site = plan.site || {};
+
+    bar.classList.toggle("is-extreme", w.active);
+    const wxTag = document.getElementById("scadaWxActiveTag");
+    if (wxTag) wxTag.hidden = !w.active;
+
+    const metricsHtml = isTyp
+      ? `
+        <span class="scada-env-metric">${tr("气温")}<b>${snap.effTemp.toFixed(1)}°C</b></span>
+        <span class="scada-env-metric">${tr("风速")}<b>${snap.effWindSpeed.toFixed(1)} m/s</b></span>
+        <span class="scada-env-metric">${tr("辐照")}<b>${snap.effSolarIrr.toFixed(0)} W/m²</b></span>
+        <span class="scada-env-metric">${tr("覆雪衰减")}<b>${state.weather.snowPct}%</b></span>
+      `
+      : `
+        <span class="scada-env-metric">${tr("极低/均温")}<b>${w.effMinTemp.toFixed(0)} / ${w.effAvgTemp.toFixed(1)}°C</b></span>
+        <span class="scada-env-metric">${tr("均/最大风速")}<b>${w.effAvgWind.toFixed(1)} / ${w.effMaxWind.toFixed(1)} m/s</b></span>
+        <span class="scada-env-metric">${tr("年均辐照")}<b>${w.effAvgSolar.toFixed(0)} W/m²</b></span>
+        <span class="scada-env-metric">${tr("极夜")}<b>${site.polar_night_days ?? 0} d</b></span>
+        <span class="scada-env-metric">${tr("强风")}<b>${site.gale_hours ?? 0} h</b></span>
+      `;
+
+    const impacts = [];
+    if (w.active) {
+      if (w.battDeratePct > 0) impacts.push(`<span class="scada-env-pill is-warn">${tr("电池低温折损")} -${w.battDeratePct}%</span>`);
+      if (w.heatingAddPct > 0) impacts.push(`<span class="scada-env-pill is-warn">${tr("采暖增荷")} +${w.heatingAddPct}%</span>`);
+      if ((isTyp && snap.hourCutout) || w.cutoutTriggered) impacts.push(`<span class="scada-env-pill is-risk">${tr("超切出风速停机")}</span>`);
+      if (state.weather.snowPct > 0) impacts.push(`<span class="scada-env-pill is-warn">${tr("光伏覆雪")} -${state.weather.snowPct}%</span>`);
+      if (w.deficitMwh > 0.5) impacts.push(`<span class="scada-env-pill is-risk">${tr("缺口")} ${w.deficitMwh.toFixed(1)} MWh</span>`);
+    } else {
+      impacts.push(`<span class="scada-env-pill">${tr("南极实测气象基准")}</span>`);
+    }
+
+    bar.innerHTML = `<div class="scada-env-metrics">${metricsHtml}</div><div class="scada-env-impacts">${impacts.join("")}</div>`;
+
+    const summaryEl = document.getElementById("scadaWxCouplingSummary");
+    if (summaryEl) {
+      summaryEl.textContent = w.active
+        ? `${tr("电池")} ${Math.round(w.battHealthFactor * 100)}% · ${tr("采暖")} +${w.heatingAddPct}%`
+        : `${tr("实测基准")} (${w.effMinTemp.toFixed(0)}°C)`;
+    }
+  }
+
+  function syncWeatherInputs() {
+    const w = state.weather;
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    setVal("scadaWxPreset", w.preset || "baseline");
+    setVal("wxTempSlider", w.tempOffset);
+    setVal("wxWindSlider", w.windScale);
+    setVal("wxSnowSlider", w.snowPct);
+    setVal("wxCutoutSelect", w.cutoutWind);
+    setTxt("wxTempVal", `${w.tempOffset > 0 ? "+" : ""}${w.tempOffset}°C`);
+    setTxt("wxWindVal", `${Number(w.windScale).toFixed(2).replace(/0$/, "")}×`);
+    setTxt("wxSnowVal", `${w.snowPct}%`);
+  }
+
+  async function generateWeatherScenarioScheme() {
+    if (!state.currentScheme) return;
+    const w = state.weather;
+    const presetMeta = WEATHER_PRESETS[w.preset] || { label: "自定义南极工况", tag: "custom_wx" };
+    const ok = window.PowerPlanUI?.confirm
+      ? await window.PowerPlanUI.confirm(
+          `基于「${state.currentScheme}」生成南极气象工况方案（${presetMeta.label}：气温 ${w.tempOffset >= 0 ? "+" : ""}${w.tempOffset}°C，风速 ${w.windScale}×，覆雪 ${w.snowPct}%）并加入规划求解队列？`,
+          { title: "生成极端气象工况方案", confirmText: "生成并求解" },
+        )
+      : true;
+    if (!ok) return;
+    const btn = document.getElementById("scadaWxGenerateBtn");
+    if (btn) btn.disabled = true;
+    try {
+      const res = await window.PowerPlanUI.fetchJson("/api/planning/apply-weather-scenario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          base_scheme: state.currentScheme,
+          scenario_tag: presetMeta.tag || "extreme_wx",
+          temp_offset_c: w.tempOffset,
+          wind_scale: w.windScale,
+          snow_attenuation_pct: w.snowPct,
+          cutout_wind_ms: w.cutoutWind,
+          enable_heating_coupling: true,
+          auto_queue: true,
+        }),
+      });
+      window.PowerPlanUI?.toast?.(res.message || "已生成极端气象工况方案", { level: "success" });
+    } catch (err) {
+      window.PowerPlanUI?.toast?.(err.message || "生成工况方案失败", { level: "error" });
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function renderMainView() {
     const plan = buildPlanSummary();
     syncModeHeader();
+    syncWeatherInputs();
+    renderEnvBar(plan);
     renderKpiStrip(plan);
     renderGauges(plan);
     renderPlanConfigTable(plan);
@@ -1150,6 +1418,46 @@
       state.hour = Number(e.target.value) || 0;
       renderMainView();
     });
+
+    document.querySelectorAll("[data-left-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.leftTab = btn.dataset.leftTab || "weather";
+        document.querySelectorAll("[data-left-tab]").forEach((b) => {
+          const act = b.dataset.leftTab === state.leftTab;
+          b.classList.toggle("active", act);
+          b.setAttribute("aria-selected", String(act));
+        });
+        document.querySelectorAll("[data-left-pane]").forEach((p) => {
+          p.hidden = p.dataset.leftPane !== state.leftTab;
+        });
+      });
+    });
+
+    document.getElementById("scadaWxPreset")?.addEventListener("change", (e) => {
+      const key = e.target.value || "baseline";
+      if (key === "custom") {
+        state.weather = { ...state.weather, preset: "custom" };
+        renderMainView();
+        return;
+      }
+      const preset = WEATHER_PRESETS[key] || WEATHER_PRESETS.baseline;
+      state.weather = { ...preset, preset: key };
+      renderMainView();
+    });
+    document.getElementById("scadaWxResetBtn")?.addEventListener("click", () => {
+      state.weather = { ...WEATHER_PRESETS.baseline, preset: "baseline" };
+      renderMainView();
+    });
+    const onWxCustomChange = (patch) => {
+      state.weather = { ...state.weather, ...patch };
+      state.weather.preset = isCustomWeather() ? "custom" : "baseline";
+      renderMainView();
+    };
+    document.getElementById("wxTempSlider")?.addEventListener("input", (e) => onWxCustomChange({ tempOffset: Number(e.target.value) || 0 }));
+    document.getElementById("wxWindSlider")?.addEventListener("input", (e) => onWxCustomChange({ windScale: Number(e.target.value) || 1 }));
+    document.getElementById("wxSnowSlider")?.addEventListener("input", (e) => onWxCustomChange({ snowPct: Number(e.target.value) || 0 }));
+    document.getElementById("wxCutoutSelect")?.addEventListener("change", (e) => onWxCustomChange({ cutoutWind: Number(e.target.value) || 25 }));
+    document.getElementById("scadaWxGenerateBtn")?.addEventListener("click", generateWeatherScenarioScheme);
 
     document.getElementById("scadaFullscreenBtn")?.addEventListener("click", () => {
       if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});

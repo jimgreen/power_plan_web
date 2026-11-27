@@ -1122,6 +1122,403 @@
     }
   }
 
+  /**
+   * 渲染「潮流接线图」分页视图（规划求解 / 方案评估共用）
+   * 支持「年度能量流 (MWh/a)」与「典型日 24h 校核 (kW)」双模式、节点点击详情条与 PNG/SVG 导出。
+   */
+  async function loadAndRenderTopologyPanel(container, { scheme, filename = "", slot = "topology-panel" } = {}) {
+    if (!container) return;
+    if (!scheme) {
+      container.innerHTML = `<div class="empty-summary">${escapeHtml(tr("请先选择已有求解结果的方案"))}</div>`;
+      return;
+    }
+    window.PowerPlanUI?.renderSkeleton?.(container, "chart");
+
+    const qs = new URLSearchParams({ scheme, ...(filename ? { filename } : {}) }).toString();
+    let rep = null;
+    let ins = null;
+    try {
+      [rep, ins] = await Promise.all([
+        window.PowerPlanUI.fetchJson(`/api/report/summary?${qs}`, { slot: `${slot}-rep`, ttlMs: 10000 }),
+        window.PowerPlanUI.fetchJson(`/api/analysis/insights?${qs}`, { slot: `${slot}-ins`, ttlMs: 20000 }).catch(() => null),
+      ]);
+    } catch (err) {
+      if (err && err.name === "AbortError") return;
+      container.innerHTML = `<div class="empty-summary">${escapeHtml(err?.message || tr("加载潮流接线图数据失败"))}</div>`;
+      return;
+    }
+
+    if (!rep || !rep.has_result) {
+      container.innerHTML = `<div class="empty-summary">${escapeHtml(tr("当前方案尚未生成求解结果，请先执行规划求解或方案评估"))}</div>`;
+      return;
+    }
+
+    const toNum = (v, fb = 0) => {
+      if (v === null || v === undefined || v === "") return fb;
+      const n = parseFloat(String(v).replace(/,/g, "").replace(/%/g, "").trim());
+      return Number.isFinite(n) ? n : fb;
+    };
+    const findMet = (rows, kws) => {
+      for (const kw of kws) {
+        const hit = (rows || []).find((r) => String(r["指标"] || r.label || "").includes(kw));
+        if (hit) {
+          const val = toNum(hit["数值"] ?? hit.value, NaN);
+          return { val, unit: String(hit["单位"] ?? hit.unit ?? "").trim() };
+        }
+      }
+      return { val: NaN, unit: "" };
+    };
+    const toMwh = (m) => {
+      if (!Number.isFinite(m.val)) return 0;
+      const u = m.unit.toLowerCase();
+      if (u.includes("mwh")) return m.val;
+      if (u.includes("万kwh")) return m.val * 10;
+      return m.val / 1000;
+    };
+    const findCapByUnit = (rows, kws, unitFilter = "") => {
+      let total = 0;
+      let count = 0;
+      let unit = "";
+      (rows || []).forEach((r) => {
+        const name = String(r["设备类型"] || r["名称"] || "");
+        const u = String(r["单位"] || "").trim();
+        if (!kws.some((kw) => name.includes(kw))) return;
+        if (unitFilter && u.toLowerCase() !== unitFilter.toLowerCase()) return;
+        total += toNum(r["总容量"], 0);
+        count += toNum(r["设计台数"], 0);
+        if (u && !unit) unit = u;
+      });
+      return { total: Math.round(total * 10) / 10, count: Math.round(count), unit: unit || unitFilter || "kW" };
+    };
+
+    const planRows = rep.planning_table || [];
+    const greenRows = rep.green_table || [];
+    const safetyRows = rep.safety_table || [];
+    const site = rep.site_summary || {};
+
+    const wtgCap = findCapByUnit(planRows, ["风机", "风电"]);
+    const pvCap = findCapByUnit(planRows, ["光伏"]);
+    const dieselCap = findCapByUnit(planRows, ["柴发", "柴油"]);
+    const bessPcs = findCapByUnit(planRows, ["PCS", "pcs", "变流"]);
+    const bessBat = findCapByUnit(planRows, ["电池组", "电池", "电储能"]);
+    const elzCap = findCapByUnit(planRows, ["电制氢", "电解"]);
+    const tankCap = findCapByUnit(planRows, ["储氢"]);
+    const fcCap = findCapByUnit(planRows, ["燃料电池"]);
+
+    const loadMwh = toNum(site.annual_load_mwh, toMwh(findMet(greenRows, ["负荷总电量", "负荷用电量"])));
+    const windMwh = toMwh(findMet(greenRows, ["风机总发电量", "风电总发电量", "风电发电量"]));
+    const pvMwh = toMwh(findMet(greenRows, ["光伏总发电量", "光伏发电量"]));
+    const dieselMwh = toMwh(findMet(greenRows, ["柴发总发电量", "柴油发电量", "柴发电量"]));
+    const stChgMwh = toMwh(findMet(greenRows, ["电储能总储电量", "储能充电量"]));
+    const stDisMwh = toMwh(findMet(greenRows, ["电储能总放电量", "储能放电量", "储能发电量"]));
+    const h2InMwh = toMwh(findMet(greenRows, ["电制氢总用电量", "制氢用电量"]));
+    const fcOutMwh = toMwh(findMet(greenRows, ["燃料电池总发电量", "燃料电池发电量"]));
+    const windMax = toMwh(findMet(greenRows, ["风力最大可发电量", "风电最大可发"]));
+    const pvMax = toMwh(findMet(greenRows, ["光伏最大可发电量", "光伏最大可发"]));
+    let curtMwh = toMwh(findMet(greenRows, ["弃电量", "新能源弃电量", "总弃电量"]));
+    if (curtMwh <= 0 && windMax + pvMax > windMwh + pvMwh) {
+      curtMwh = Math.max(0, windMax + pvMax - (windMwh + pvMwh));
+    }
+    const fMin = findMet(safetyRows, ["最低频率"]).val;
+    const fMax = findMet(safetyRows, ["最高频率"]).val;
+    const stEffPct = stChgMwh > 0.01 ? Math.min(100, (stDisMwh / stChgMwh) * 100) : 0;
+
+    const typicalDays = Array.isArray(ins?.typical_days) ? ins.typical_days : [];
+    const localState = {
+      mode: "annual",
+      dayIdx: 0,
+      hour: 12,
+      selectedNode: "pv",
+      playing: false,
+      timer: 0,
+    };
+
+    container.innerHTML = `
+      <div class="topo-view-shell">
+        <div class="topo-toolbar">
+          <div class="topo-toolbar-left">
+            <div class="topo-mode-switch" role="group" aria-label="潮流接线图模式">
+              <button type="button" class="topo-mode-btn active" data-topo-mode="annual" aria-pressed="true">${escapeHtml(tr("年度能量流 (MWh/a)"))}</button>
+              <button type="button" class="topo-mode-btn" data-topo-mode="typical" aria-pressed="false" ${typicalDays.length ? "" : "disabled"}>${escapeHtml(tr("典型日校核 (kW)"))}</button>
+            </div>
+            <div class="topo-typical-controls" data-topo-typical-bar hidden>
+              <select class="topo-select" data-topo-day>
+                ${typicalDays.map((d, i) => `<option value="${i}">${escapeHtml(tr(d.title))} (${escapeHtml(d.date)})</option>`).join("")}
+              </select>
+              <button type="button" class="topo-btn" data-topo-play aria-pressed="false">${escapeHtml(tr("播放"))}</button>
+              <input type="range" min="0" max="23" step="1" value="12" data-topo-hour>
+              <span class="topo-hour-readout" data-topo-hour-text>12:00</span>
+            </div>
+          </div>
+          <div class="topo-toolbar-right">
+            <button type="button" class="insight-export-btn" data-topo-png>PNG</button>
+            <button type="button" class="insight-export-btn" data-topo-svg>SVG</button>
+          </div>
+        </div>
+        <div class="topo-stage">
+          <svg class="topo-svg" viewBox="0 0 920 420" preserveAspectRatio="xMidYMid meet" role="img" aria-label="规划结果潮流接线图"></svg>
+        </div>
+        <div class="topo-detail-bar" data-topo-detail></div>
+      </div>
+    `;
+
+    const svg = container.querySelector(".topo-svg");
+    const detailBar = container.querySelector("[data-topo-detail]");
+    const typicalBar = container.querySelector("[data-topo-typical-bar]");
+
+    const speedOf = (val, ref) => {
+      const a = Math.abs(val);
+      if (a < 0.05) return "0s";
+      return `${(2.3 - Math.min(1, a / Math.max(10, ref)) * 1.45).toFixed(2)}s`;
+    };
+
+    const draw = () => {
+      const dark = window.PowerPlanUI?.isDarkTheme?.() ?? true;
+      const p = getPalette();
+      const pal = {
+        wind: p.wind || (dark ? "#38BDF8" : "#0284C7"),
+        solar: p.solar || (dark ? "#FBBF24" : "#D97706"),
+        bess: p.storage || (dark ? "#2DD4BF" : "#0D9488"),
+        h2: p.hydrogen || (dark ? "#A78BFA" : "#7C3AED"),
+        diesel: p.diesel || (dark ? "#FB7185" : "#DC2626"),
+        load: p.load || (dark ? "#34D399" : "#059669"),
+        warn: dark ? "#FBBF24" : "#D97706",
+        busAc: dark ? "#38BDF8" : "#2563EB",
+        busDc: dark ? "#A78BFA" : "#7C3AED",
+        nodeFill: dark ? "#111827" : "#FFFFFF",
+        nodeFillAlt: dark ? "#162032" : "#F1F5F9",
+        nodeBorder: dark ? "rgba(148,163,184,0.32)" : "#CBD5E1",
+        pillBg: dark ? "rgba(15,23,42,0.92)" : "rgba(255,255,255,0.95)",
+        text: dark ? "#F8FAFC" : "#0F172A",
+        muted: dark ? "#94A3B8" : "#64748B",
+      };
+
+      const isTyp = localState.mode === "typical" && typicalDays.length > 0;
+      const day = isTyp ? typicalDays[Math.min(localState.dayIdx, typicalDays.length - 1)] : null;
+      const h = localState.hour;
+      const s = day?.series || {};
+
+      const typWind = toNum(s.wind?.[h], 0);
+      const typPv = toNum(s.pv?.[h], 0);
+      const typDiesel = toNum(s.diesel?.[h], 0);
+      const typDis = toNum(s.storage_discharge?.[h], 0);
+      const typChg = toNum(s.storage_charge?.[h], 0);
+      const typBessNet = typDis - typChg;
+      const typFc = toNum(s.fuel_cell?.[h], 0);
+      const typH2 = toNum(s.hydrogen_prod?.[h], 0);
+      const typH2Net = typFc - typH2;
+      const typCurt = toNum(s.curtailed?.[h], 0);
+      const typLoad = toNum(s.load?.[h], 0);
+      const typPcs = typPv + typDis + typFc - typChg - typH2;
+
+      let typSoc = 55;
+      const socMat = ins?.heatmaps?.soc?.matrix;
+      if (isTyp && Array.isArray(socMat) && socMat.length) {
+        const dIdx = Math.min(socMat.length - 1, Math.max(0, (day?.day_index || 1) - 1));
+        const sv = toNum(socMat[dIdx]?.[h], NaN);
+        if (Number.isFinite(sv)) typSoc = Math.max(0, Math.min(100, sv));
+      }
+
+      const refVal = isTyp ? Math.max(typLoad, 80) : Math.max(loadMwh, 100);
+      const unitFlow = isTyp ? "kW" : "MWh";
+      const fWind = isTyp ? typWind : windMwh;
+      const fDiesel = isTyp ? typDiesel : dieselMwh;
+      const fLoad = isTyp ? typLoad : loadMwh;
+      const fCurt = isTyp ? typCurt : curtMwh;
+      const fPv = isTyp ? typPv : pvMwh;
+      const fBess = isTyp ? typBessNet : stDisMwh;
+      const fH2 = isTyp ? typH2Net : fcOutMwh - h2InMwh;
+      const fPcs = isTyp ? typPcs : pvMwh + stDisMwh + fcOutMwh;
+
+      const bessCapText = bessPcs.total > 0 && bessBat.total > 0
+        ? `${bessPcs.total} kW / ${bessBat.total} kWh`
+        : bessBat.total > 0
+          ? `${bessBat.total} ${bessBat.unit}`
+          : bessPcs.total > 0
+            ? `${bessPcs.total} ${bessPcs.unit}`
+            : "0 kW";
+      const h2CapText = (elzCap.total > 0 || fcCap.total > 0 || tankCap.total > 0)
+        ? `${elzCap.total}/${fcCap.total} kW`
+        : "0 kW";
+
+      const branch = ({ d, val, color, rev = false, lx, ly, txt }) => {
+        const act = Math.abs(val) >= 0.05;
+        const st = act ? color : pal.nodeBorder;
+        const sp = speedOf(val, refVal);
+        return `
+          <path class="topo-flow-base" d="${d}" stroke="${st}" stroke-width="${act ? 3.2 : 1.8}" stroke-opacity="${act ? 0.36 : 0.45}"/>
+          <path class="topo-flow-dash${rev ? " is-rev" : ""}${act ? "" : " is-idle"}" d="${d}" stroke="${color}" stroke-width="2.6" style="--topo-speed:${sp}"/>
+          <g transform="translate(${lx}, ${ly})">
+            <rect x="-46" y="-10" width="92" height="19" rx="9.5" fill="${pal.pillBg}" stroke="${act ? color : pal.nodeBorder}" stroke-width="1"/>
+            <text x="0" y="3.5" text-anchor="middle" fill="${act ? pal.text : pal.muted}" font-size="10" font-weight="600" font-family="var(--font-mono)">${escapeHtml(txt)}</text>
+          </g>`;
+      };
+
+      const card = ({ id, x, y, w, h: ch, title, code, main, sub, accent, icon, active }) => {
+        const sel = localState.selectedNode === id;
+        return `
+          <g class="topo-node${sel ? " is-selected" : ""}" data-topo-node="${id}" transform="translate(${x}, ${y})">
+            <rect class="topo-node-box" width="${w}" height="${ch}" rx="8" fill="${pal.nodeFill}" stroke="${sel ? accent : pal.nodeBorder}" stroke-width="${sel ? 2.2 : 1.2}"/>
+            <rect x="0" y="0" width="${w}" height="4" rx="2" fill="${active ? accent : pal.nodeBorder}"/>
+            <circle cx="${w - 13}" cy="17" r="3.8" fill="${active ? accent : pal.muted}"/>
+            <g transform="translate(10, 12)">${icon}</g>
+            <text x="42" y="21" fill="${pal.text}" font-size="12.5" font-weight="700">${escapeHtml(title)}</text>
+            <text x="42" y="34" fill="${pal.muted}" font-size="9.5" font-family="var(--font-mono)">${escapeHtml(code)}</text>
+            <text x="12" y="${ch - 24}" fill="${active ? accent : pal.muted}" font-size="${main.length > 13 ? "13.5" : "15.5"}" font-weight="700" font-family="var(--font-mono)">${escapeHtml(main)}</text>
+            <text x="12" y="${ch - 9}" fill="${pal.muted}" font-size="10" font-family="var(--font-mono)">${escapeHtml(sub)}</text>
+          </g>`;
+      };
+
+      const wAct = isTyp ? typWind > 0.05 : wtgCap.total > 0 || windMwh > 0.05;
+      const windIcon = `<g stroke="${pal.wind}" fill="none" stroke-width="1.8"><line x1="13" y1="14" x2="13" y2="26"/><g class="topo-rotor${wAct ? "" : " is-idle"}"><circle cx="13" cy="12" r="2" fill="${pal.wind}"/><line x1="13" y1="10" x2="13" y2="2"/><line x1="14.7" y1="13" x2="21.5" y2="17"/><line x1="11.3" y1="13" x2="4.5" y2="17"/></g></g>`;
+      const dieselIcon = `<g stroke="${pal.diesel}" fill="none" stroke-width="1.8"><rect x="3" y="6" width="20" height="14" rx="3"/><path d="M8 13h3l1.5-3 2 6 1.5-3h2"/></g>`;
+      const loadIcon = `<g stroke="${pal.load}" fill="none" stroke-width="1.8"><polygon points="13 3 3 11 6 11 6 22 20 22 20 11 23 11 13 3"/><line x1="11" y1="15" x2="15" y2="15"/></g>`;
+      const pvIcon = `<g stroke="${pal.solar}" fill="none" stroke-width="1.7"><rect x="3" y="6" width="20" height="14" rx="2"/><line x1="3" y1="13" x2="23" y2="13"/><line x1="10" y1="6" x2="10" y2="20"/><line x1="16" y1="6" x2="16" y2="20"/></g>`;
+      const socH = Math.max(2, Math.round((isTyp ? typSoc / 100 : (bessBat.total > 0 || bessPcs.total > 0 ? 0.72 : 0.12)) * 14));
+      const bessIcon = `<g stroke="${pal.bess}" fill="none" stroke-width="1.7"><rect x="5" y="5" width="16" height="18" rx="2"/><rect x="10" y="2" width="6" height="3" fill="${pal.bess}"/><rect x="7.5" y="${21 - socH}" width="11" height="${socH}" rx="1" fill="${pal.bess}" stroke="none" opacity="0.8"/></g>`;
+      const h2Icon = `<g stroke="${pal.h2}" fill="none" stroke-width="1.7"><rect x="6" y="4" width="14" height="18" rx="6"/><text x="13" y="16" text-anchor="middle" fill="${pal.h2}" stroke="none" font-size="9" font-weight="700" font-family="var(--font-mono)">H2</text></g>`;
+
+      const acTitle = isTyp
+        ? `AC 交流母线 · ${day.date} ${String(h).padStart(2, "0")}:00`
+        : `AC 交流汇流母线 · ${tr("年度能量平衡")} · ${Number.isFinite(fMin) ? `${fMin.toFixed(2)}–${fMax.toFixed(2)} Hz` : "50 Hz"}`;
+
+      svg.innerHTML = `
+        ${branch({ d: "M150,104 L150,162", val: fWind, color: pal.wind, lx: 150, ly: 132, txt: `${fWind.toFixed(1)} ${unitFlow}` })}
+        ${branch({ d: "M460,104 L460,162", val: fDiesel, color: pal.diesel, lx: 460, ly: 132, txt: `${fDiesel.toFixed(1)} ${unitFlow}` })}
+        ${branch({ d: "M770,162 L770,104", val: fLoad, color: pal.load, lx: 770, ly: 132, txt: `${fLoad.toFixed(1)} ${unitFlow}` })}
+        ${branch({ d: "M840,162 L878,162 L878,242", val: fCurt, color: pal.warn, lx: 854, ly: 204, txt: `${tr("弃电")} ${fCurt.toFixed(1)}` })}
+        ${branch({ d: "M460,278 L460,162", val: fPcs, color: fPcs >= 0 ? pal.bess : pal.busAc, rev: fPcs < 0, lx: 556, ly: 220, txt: `PCS ${fPcs >= 0 ? "↑" : "↓"} ${Math.abs(fPcs).toFixed(1)} ${unitFlow}` })}
+        ${branch({ d: "M190,322 L190,278", val: fPv, color: pal.solar, lx: 190, ly: 300, txt: `${fPv.toFixed(1)} ${unitFlow}` })}
+        ${branch({ d: "M460,322 L460,278", val: fBess, color: fBess >= 0 ? pal.bess : pal.busAc, rev: fBess < 0, lx: 460, ly: 300, txt: isTyp ? `${fBess >= 0 ? "+" : ""}${fBess.toFixed(1)} kW` : `${stDisMwh.toFixed(1)} MWh` })}
+        ${branch({ d: "M730,322 L730,278", val: fH2, color: pal.h2, rev: fH2 < 0, lx: 730, ly: 300, txt: isTyp ? `${fH2 >= 0 ? "+" : ""}${fH2.toFixed(1)} kW` : `${(fcOutMwh + h2InMwh).toFixed(1)} MWh` })}
+
+        <rect x="64" y="158" width="780" height="8" rx="4" fill="${pal.busAc}" opacity="0.86"/>
+        <text x="72" y="152" fill="${pal.busAc}" font-size="10.5" font-weight="700" font-family="var(--font-mono)">${escapeHtml(acTitle)}</text>
+        <rect x="128" y="274" width="664" height="7" rx="3.5" fill="${pal.busDc}" opacity="0.84"/>
+        <text x="134" y="268" fill="${pal.busDc}" font-size="10.5" font-weight="700" font-family="var(--font-mono)">DC ${escapeHtml(tr("直流汇流母线"))} · 750V DC</text>
+
+        <g transform="translate(422, 198)">
+          <rect width="76" height="44" rx="6" fill="${pal.nodeFillAlt}" stroke="${pal.busAc}" stroke-width="1.6"/>
+          <line x1="6" y1="38" x2="70" y2="6" stroke="${pal.nodeBorder}" stroke-width="1"/>
+          <text x="14" y="18" fill="${pal.busAc}" font-size="10" font-weight="700" font-family="var(--font-mono)">AC</text>
+          <text x="48" y="34" fill="${pal.busDc}" font-size="10" font-weight="700" font-family="var(--font-mono)">DC</text>
+          <text x="38" y="56" text-anchor="middle" fill="${pal.muted}" font-size="9.5" font-family="var(--font-mono)">PCS</text>
+        </g>
+
+        <g transform="translate(838, 242)">
+          <rect width="76" height="34" rx="5" fill="${pal.nodeFillAlt}" stroke="${fCurt > 0.05 ? pal.warn : pal.nodeBorder}"/>
+          <text x="38" y="14" text-anchor="middle" fill="${pal.muted}" font-size="9.5">${escapeHtml(isTyp ? tr("时段弃电") : tr("年度弃电"))}</text>
+          <text x="38" y="27" text-anchor="middle" fill="${fCurt > 0.05 ? pal.warn : pal.muted}" font-size="10.5" font-weight="700" font-family="var(--font-mono)">${fCurt.toFixed(1)} ${unitFlow}</text>
+        </g>
+
+        ${card({ id: "wtg", x: 56, y: 18, w: 188, h: 86, title: tr("风电规划配置"), code: wtgCap.count > 0 ? `${wtgCap.count} ${tr("台")} · AC ${tr("接入")}` : "WTG · AC", main: isTyp ? `${typWind.toFixed(1)} kW` : `${wtgCap.total} ${wtgCap.unit}`, sub: isTyp ? `${tr("规划装机")} ${wtgCap.total} kW` : `${tr("年发电")} ${windMwh.toFixed(1)} MWh`, accent: pal.wind, icon: windIcon, active: wAct })}
+        ${card({ id: "diesel", x: 366, y: 18, w: 188, h: 86, title: tr("柴发备用配置"), code: dieselCap.count > 0 ? `${dieselCap.count} ${tr("台")} · ${tr("保底电源")}` : "DG · AC", main: isTyp ? `${typDiesel.toFixed(1)} kW` : `${dieselCap.total} ${dieselCap.unit}`, sub: isTyp ? `${tr("规划装机")} ${dieselCap.total} kW` : `${tr("年发电")} ${dieselMwh.toFixed(1)} MWh`, accent: pal.diesel, icon: dieselIcon, active: isTyp ? typDiesel > 0.05 : dieselCap.total > 0 })}
+        ${card({ id: "load", x: 676, y: 18, w: 188, h: 86, title: tr("考察站规划负荷"), code: `${tr("峰值")} ${toNum(site.peak_load_kw, 0).toFixed(0)} kW · 8760h`, main: isTyp ? `${typLoad.toFixed(1)} kW` : `${loadMwh.toFixed(1)} MWh`, sub: isTyp ? `${tr("典型日")} ${toNum(day?.summary?.load_kwh, 0).toFixed(0)} kWh` : `${tr("均荷")} ${toNum(site.avg_load_kw, 0).toFixed(1)} kW`, accent: pal.load, icon: loadIcon, active: true })}
+        ${card({ id: "pv", x: 96, y: 322, w: 188, h: 86, title: tr("光伏规划配置"), code: pvCap.count > 0 ? `${pvCap.count} ${tr("组")} · DC ${tr("接入")}` : "PV · DC", main: isTyp ? `${typPv.toFixed(1)} kW` : `${pvCap.total} ${pvCap.unit}`, sub: isTyp ? `${tr("规划装机")} ${pvCap.total} kW` : `${tr("年发电")} ${pvMwh.toFixed(1)} MWh`, accent: pal.solar, icon: pvIcon, active: isTyp ? typPv > 0.05 : pvCap.total > 0 })}
+        ${card({ id: "bess", x: 366, y: 322, w: 188, h: 86, title: tr("电化学储能配置"), code: isTyp ? `BESS · SOC ${typSoc.toFixed(1)}%` : `BESS · ${tr("效率")} ${stEffPct > 0 ? `${stEffPct.toFixed(0)}%` : "—"}`, main: isTyp ? (typBessNet >= 0 ? `${tr("放")} +${typBessNet.toFixed(1)} kW` : `${tr("充")} ${typBessNet.toFixed(1)} kW`) : bessCapText, sub: isTyp ? `${tr("配置")} ${bessCapText}` : `${tr("年充/放")} ${stChgMwh.toFixed(1)}/${stDisMwh.toFixed(1)} MWh`, accent: pal.bess, icon: bessIcon, active: isTyp ? Math.abs(typBessNet) > 0.05 : (bessPcs.total > 0 || bessBat.total > 0) })}
+        ${card({ id: "h2", x: 636, y: 322, w: 188, h: 86, title: tr("绿氢储能配置"), code: tankCap.total > 0 ? `${tr("储氢")} ${tankCap.total} ${tankCap.unit}` : "ELZ / H2 / FC · DC", main: isTyp ? (typFc > 0.05 ? `FC +${typFc.toFixed(1)} kW` : typH2 > 0.05 ? `ELZ -${typH2.toFixed(1)} kW` : "0.0 kW") : h2CapText, sub: `${tr("制氢/发电")} ${h2InMwh.toFixed(1)}/${fcOutMwh.toFixed(1)} MWh`, accent: pal.h2, icon: h2Icon, active: isTyp ? Math.abs(typH2Net) > 0.05 : (elzCap.total > 0 || fcCap.total > 0 || tankCap.total > 0) })}
+      `;
+
+      // 底部紧凑选中子系统规划详情条
+      const share = (mwh) => (loadMwh > 0 ? `${((mwh / loadMwh) * 100).toFixed(1)}%` : "—");
+      const details = {
+        wtg: [tr("风电规划配置"), `${tr("装机")}: ${wtgCap.total} ${wtgCap.unit}`, `${tr("台数")}: ${wtgCap.count}`, `${tr("年发电量")}: ${windMwh.toFixed(1)} MWh`, `${tr("负荷贡献")}: ${share(windMwh)}`],
+        pv: [tr("光伏规划配置"), `${tr("装机")}: ${pvCap.total} ${pvCap.unit}`, `${tr("组数")}: ${pvCap.count}`, `${tr("年发电量")}: ${pvMwh.toFixed(1)} MWh`, `${tr("负荷贡献")}: ${share(pvMwh)}`],
+        bess: [tr("电化学储能配置"), `PCS: ${bessPcs.total} kW`, `${tr("电池容量")}: ${bessBat.total} kWh`, `${tr("年充/放")}: ${stChgMwh.toFixed(1)} / ${stDisMwh.toFixed(1)} MWh`, `${tr("效率")}: ${stEffPct > 0 ? `${stEffPct.toFixed(1)}%` : "—"}`],
+        h2: [tr("绿氢储能配置"), `${tr("电制氢")}: ${elzCap.total} kW`, `${tr("储氢罐")}: ${tankCap.total} ${tankCap.unit}`, `${tr("燃料电池")}: ${fcCap.total} kW`, `${tr("制氢/发电")}: ${h2InMwh.toFixed(1)} / ${fcOutMwh.toFixed(1)} MWh`],
+        diesel: [tr("柴发备用配置"), `${tr("装机")}: ${dieselCap.total} ${dieselCap.unit}`, `${tr("台数")}: ${dieselCap.count}`, `${tr("年发电量")}: ${dieselMwh.toFixed(1)} MWh`, `${tr("柴发占比")}: ${share(dieselMwh)}`],
+        load: [tr("考察站规划负荷"), `${tr("年总用电")}: ${loadMwh.toFixed(1)} MWh`, `${tr("峰值负荷")}: ${toNum(site.peak_load_kw, 0).toFixed(1)} kW`, `${tr("均荷")}: ${toNum(site.avg_load_kw, 0).toFixed(1)} kW`, `${tr("年度弃电")}: ${curtMwh.toFixed(1)} MWh`],
+      };
+      const row = details[localState.selectedNode] || details.pv;
+      if (detailBar) {
+        detailBar.innerHTML = `<strong class="topo-detail-name">${escapeHtml(row[0])}</strong>${row.slice(1).map((txt) => `<span class="topo-detail-chip">${escapeHtml(txt)}</span>`).join("")}`;
+      }
+    };
+
+    const stopPlay = () => {
+      localState.playing = false;
+      if (localState.timer) {
+        window.clearInterval(localState.timer);
+        localState.timer = 0;
+      }
+      const btn = container.querySelector("[data-topo-play]");
+      if (btn) {
+        btn.setAttribute("aria-pressed", "false");
+        btn.textContent = tr("播放");
+      }
+    };
+
+    svg.addEventListener("pointerdown", (e) => {
+      const node = e.target?.closest?.("[data-topo-node]");
+      if (!node) return;
+      localState.selectedNode = node.dataset.topoNode;
+      draw();
+    });
+
+    container.querySelectorAll("[data-topo-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (btn.disabled) return;
+        localState.mode = btn.dataset.topoMode === "typical" ? "typical" : "annual";
+        if (localState.mode !== "typical") stopPlay();
+        container.querySelectorAll("[data-topo-mode]").forEach((b) => {
+          const act = b.dataset.topoMode === localState.mode;
+          b.classList.toggle("active", act);
+          b.setAttribute("aria-pressed", String(act));
+        });
+        if (typicalBar) typicalBar.hidden = localState.mode !== "typical";
+        draw();
+      });
+    });
+
+    container.querySelector("[data-topo-day]")?.addEventListener("change", (e) => {
+      localState.dayIdx = Number(e.target.value) || 0;
+      draw();
+    });
+    container.querySelector("[data-topo-hour]")?.addEventListener("input", (e) => {
+      localState.hour = Number(e.target.value) || 0;
+      const t = container.querySelector("[data-topo-hour-text]");
+      if (t) t.textContent = `${String(localState.hour).padStart(2, "0")}:00`;
+      draw();
+    });
+    container.querySelector("[data-topo-play]")?.addEventListener("click", (e) => {
+      if (localState.playing) {
+        stopPlay();
+      } else {
+        localState.playing = true;
+        e.currentTarget.setAttribute("aria-pressed", "true");
+        e.currentTarget.textContent = tr("暂停");
+        localState.timer = window.setInterval(() => {
+          if (document.hidden || localState.mode !== "typical" || !document.body.contains(container)) {
+            stopPlay();
+            return;
+          }
+          localState.hour = (localState.hour + 1) % 24;
+          const sl = container.querySelector("[data-topo-hour]");
+          const t = container.querySelector("[data-topo-hour-text]");
+          if (sl) sl.value = String(localState.hour);
+          if (t) t.textContent = `${String(localState.hour).padStart(2, "0")}:00`;
+          draw();
+        }, 800);
+      }
+    });
+    container.querySelector("[data-topo-png]")?.addEventListener("click", () => {
+      window.PowerPlanUI?.exportSvgAsPng?.(svg, `planning_topology_${scheme}.png`);
+    });
+    container.querySelector("[data-topo-svg]")?.addEventListener("click", () => {
+      window.PowerPlanUI?.exportSvgAsSvg?.(svg, `planning_topology_${scheme}.svg`);
+    });
+
+    draw();
+    if (container._topoRedrawHandler) {
+      window.removeEventListener("powerplan:themechange", container._topoRedrawHandler);
+    }
+    container._topoRedrawHandler = draw;
+    window.addEventListener("powerplan:themechange", draw);
+    if (window.PowerPlanI18n) {
+      window.PowerPlanI18n.translate(container, window.PowerPlanI18n.currentLanguage());
+    }
+  }
+
   window.PowerPlanCharts = {
     niceTicks,
     formatCompact,
@@ -1133,5 +1530,6 @@
     renderComparisonRadar,
     renderTornadoChart,
     loadAndRenderInsightsPanel,
+    loadAndRenderTopologyPanel,
   };
 })();

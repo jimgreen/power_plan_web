@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>规划求解 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v17">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v17">
-  <script src="assets/ui-kit.js?v=20261127-ui-v17"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v20">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v20">
+  <script src="assets/ui-kit.js?v=20261127-ui-v20"></script>
 </head>
 <body>
   <main class="planning-shell">
@@ -60,12 +60,14 @@
           <div class="result-tabs" role="tablist" aria-label="规划求解结果切换">
             <button id="optimizationLogViewToggle" class="result-tab" data-result-tab="logs" type="button" aria-selected="false">运行日志</button>
             <button class="result-tab active" data-result-tab="overview" type="button" aria-selected="true">结果概览</button>
+            <button id="optimizationTopologyToggle" class="result-tab" data-result-tab="topology" type="button" aria-selected="false">潮流接线图</button>
             <button class="result-tab" data-result-tab="green" type="button" aria-selected="false">经济性指标</button>
             <button class="result-tab" data-result-tab="safety" type="button" aria-selected="false">安全性指标</button>
             <button id="optimizationCurveViewToggle" class="result-tab" data-result-tab="curves" type="button" aria-selected="false">曲线展示</button>
             <button id="optimizationInsightsToggle" class="result-tab" data-result-tab="insights" type="button" aria-selected="false">工程洞察</button>
           </div>
           <div id="overviewResult" class="result-panel active" data-result-panel="overview" role="tabpanel"></div>
+          <div id="optimizationTopologyPanel" class="result-panel topology-result-panel" data-result-panel="topology" role="tabpanel" hidden></div>
           <div id="greenResult" class="result-panel" data-result-panel="green" role="tabpanel" hidden></div>
           <div id="safetyResult" class="result-panel" data-result-panel="safety" role="tabpanel" hidden></div>
           <div id="optimizationLogPanel" class="result-panel optimization-log-result-panel" data-result-panel="logs" role="tabpanel" hidden>
@@ -80,11 +82,11 @@
       </section>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20261127-ui-v17"></script>
-  <script src="assets/auth.js?v=20261127-ui-v17"></script>
-  <script src="assets/page_state.js?v=20261127-ui-v17"></script>
-  <script src="assets/chart-enhancer.js?v=20261127-ui-v17"></script>
-  <script src="assets/result_curves.js?v=20261127-ui-v17"></script>
-  <script src="assets/optimize.js?v=20261127-ui-v17"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v20"></script>
+  <script src="assets/auth.js?v=20261127-ui-v20"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v20"></script>
+  <script src="assets/chart-enhancer.js?v=20261127-ui-v20"></script>
+  <script src="assets/result_curves.js?v=20261127-ui-v20"></script>
+  <script src="assets/optimize.js?v=20261127-ui-v20"></script>
 </body>
 </html>

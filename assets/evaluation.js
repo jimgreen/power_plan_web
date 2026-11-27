@@ -984,6 +984,19 @@ function loadEvaluationInsights() {
   });
 }
 
+function loadEvaluationTopology() {
+  const panel = document.getElementById("evaluationTopologyPanel");
+  if (!panel || !window.PowerPlanCharts?.loadAndRenderTopologyPanel) return;
+  const key = `${state.currentScheme}/${state.selectedResultFile}/${state.optimization?.end_time || ""}`;
+  if (state.topologyKey === key && panel.querySelector(".topo-view-shell")) return;
+  state.topologyKey = key;
+  window.PowerPlanCharts.loadAndRenderTopologyPanel(panel, {
+    scheme: state.currentScheme,
+    filename: state.selectedResultFile,
+    slot: "eval-topology",
+  });
+}
+
 function bindResultTabs() {
   document.querySelectorAll("[data-result-tab]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1011,6 +1024,7 @@ function activateEvaluationResultTab(target, options = {}) {
   if (options.remember !== false) rememberEvaluationPageState({ activeResultTab: activeTarget });
   if (activeTarget === "curves" && options.load !== false) loadEvaluationCurveData().catch(showError);
   if (activeTarget === "insights" && options.load !== false) loadEvaluationInsights();
+  if (activeTarget === "topology" && options.load !== false) loadEvaluationTopology();
   window.requestAnimationFrame(refreshAdaptiveResultCharts);
 }
 
@@ -1041,6 +1055,7 @@ function renderOptimization(data) {
   renderOptimizationLogs(data.logs || []);
   if (state.activeResultTab === "curves" && !state.isSwitchingResult) loadEvaluationCurveData().catch(showError);
   if (state.activeResultTab === "insights" && !state.isSwitchingResult) loadEvaluationInsights();
+  if (state.activeResultTab === "topology" && !state.isSwitchingResult) loadEvaluationTopology();
 }
 
 async function loadEvaluationCurveData() {
