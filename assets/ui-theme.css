@@ -4907,6 +4907,248 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     margin-top: 8px;
   }
 
+  /* 全局网页目录树左栏（默认隐藏满屏 · 悬浮/内嵌双模式） */
+  :root {
+    --nav-tree-width: 212px;
+  }
+
+  html[data-theme] body {
+    transition: padding-left 180ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  html[data-theme] body.has-nav-tree-docked,
+  body.scada-body.has-nav-tree-docked {
+    box-sizing: border-box;
+    padding-left: var(--nav-tree-width);
+  }
+
+  .nav-tree-edge-cue {
+    position: fixed;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 4px;
+    height: 64px;
+    border-radius: 0 4px 4px 0;
+    background: var(--accent);
+    opacity: 0.34;
+    pointer-events: none;
+    z-index: 9490;
+    transition: opacity 160ms ease, width 160ms ease;
+  }
+
+  .nav-tree-edge-cue.is-hidden {
+    opacity: 0;
+  }
+
+  .global-nav-tree {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: var(--nav-tree-width);
+    z-index: 9500;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    transform: translateX(-104%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 180ms cubic-bezier(0.2, 0, 0, 1), opacity 160ms ease, box-shadow 180ms ease;
+  }
+
+  .global-nav-tree.is-visible {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .global-nav-tree.is-floating {
+    background: var(--bg-elevated, var(--bg-surface));
+    box-shadow: 12px 0 32px rgba(2, 6, 23, 0.42);
+  }
+
+  [data-theme="minimalist-light"] .global-nav-tree.is-floating {
+    box-shadow: 8px 0 24px rgba(15, 23, 42, 0.14);
+  }
+
+  .global-nav-tree.is-docked {
+    box-shadow: none;
+  }
+
+  .nav-tree-head {
+    flex: 0 0 auto;
+    height: 40px;
+    padding: 0 8px 0 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-subtle);
+  }
+
+  .nav-tree-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .nav-tree-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  .nav-tree-mode-switch {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+  }
+
+  .nav-tree-mode-btn {
+    height: 20px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 10.5px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .nav-tree-mode-btn.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .nav-tree-hide-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .nav-tree-hide-btn:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+  }
+
+  .nav-tree-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 6px 6px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .nav-tree-group-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 6px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 11.5px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .nav-tree-group-head:hover {
+    background: var(--table-hover);
+    color: var(--text-primary);
+  }
+
+  .nav-tree-chevron {
+    display: inline-block;
+    width: 12px;
+    text-align: center;
+    font-size: 10px;
+    transition: transform 140ms ease;
+  }
+
+  .nav-tree-group.is-collapsed .nav-tree-chevron {
+    transform: rotate(-90deg);
+  }
+
+  .nav-tree-list {
+    list-style: none;
+    margin: 2px 0 4px;
+    padding: 0 0 0 10px;
+    border-left: 1px solid var(--border);
+    margin-left: 11px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .nav-tree-list[hidden] {
+    display: none;
+  }
+
+  .nav-tree-link {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    color: var(--text-primary);
+    text-decoration: none;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+
+  .nav-tree-link:hover {
+    background: var(--table-hover);
+  }
+
+  .nav-tree-link.is-active {
+    background: var(--bg-selected);
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .nav-tree-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .nav-tree-link.is-active .nav-tree-dot {
+    background: var(--accent);
+  }
+
   @media (max-width: 1024px) {
     .insights-grid,
     .comparison-radar-layout,
@@ -4914,6 +5156,14 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
       grid-template-columns: 1fr;
     }
   }
+}
+
+/* 内嵌模式推开主内容（须置于 @layer 之外，确保压过 unlayered 的 body { padding: 0 }） */
+html[data-theme] body.has-nav-tree-docked,
+body.scada-body.has-nav-tree-docked,
+body.has-nav-tree-docked {
+  box-sizing: border-box !important;
+  padding-left: var(--nav-tree-width, 212px) !important;
 }
 
 @media print {
@@ -4930,6 +5180,8 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   .no-print,
   .global-task-drawer,
   .global-task-drawer-backdrop,
+  .global-nav-tree,
+  .nav-tree-edge-cue,
   .cmd-palette-backdrop,
   .ui-toast-stack {
     display: none !important;

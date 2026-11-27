@@ -367,10 +367,24 @@
     });
   }
 
-  /** 在全站顶栏注入统一的主题切换器与工具容器 */
+  /** 在全站顶栏注入统一的主题切换器、监控大屏导航与工具容器 */
   function mountTopbarUtilities() {
     const topbar = document.querySelector(".topbar");
     if (!topbar) return;
+
+    // 自动在全站子页主导航中注入「规划大屏」入口
+    const mainNav = topbar.querySelector(".main-nav");
+    if (mainNav && !mainNav.querySelector('a[href="scada.html"]')) {
+      const scadaLink = document.createElement("a");
+      scadaLink.href = "scada.html";
+      scadaLink.textContent = "规划大屏";
+      const firstLink = mainNav.querySelector('a[href="index.html"]');
+      if (firstLink && firstLink.nextSibling) {
+        mainNav.insertBefore(scadaLink, firstLink.nextSibling);
+      } else {
+        mainNav.appendChild(scadaLink);
+      }
+    }
 
     let utilities = topbar.querySelector(".topbar-utilities");
     if (!utilities) {
@@ -811,6 +825,7 @@
     hostCard.appendChild(strip);
 
     const linksDef = [
+      { page: "scada.html", label: "规划大屏", needFile: true },
       { page: "planning.html", label: "参数维护", needFile: false },
       { page: "optimize.html", label: "规划求解", needFile: false },
       { page: "evaluation.html", label: "方案评估", needFile: true },
@@ -1534,6 +1549,7 @@
     let activeIdx = 0;
 
     const STATIC_COMMANDS = [
+      { group: "导航", label: "联合规划总览大屏", sub: "scada.html", run: () => { window.location.href = "scada.html"; } },
       { group: "导航", label: "系统首页", sub: "index.html", run: () => { window.location.href = "index.html"; } },
       { group: "导航", label: "参数维护", sub: "planning.html", run: () => { window.location.href = "planning.html"; } },
       { group: "导航", label: "规划求解", sub: "optimize.html", run: () => { window.location.href = "optimize.html"; } },
@@ -1677,6 +1693,294 @@
     });
   }
 
+  // =========================================================================
+  // 全局网页目录树左栏（默认隐藏满屏 · 左边缘触发悬浮 · 支持悬浮/内嵌切换 · 双模式均可隐藏）
+  // =========================================================================
+  function mountGlobalNavTree() {
+    const curFile = (window.location.pathname.split("/").pop() || "index.html").toLowerCase();
+    if (["login.html", "register.html"].includes(curFile)) return;
+    if (document.getElementById("globalNavTree")) return;
+
+    const STORAGE_KEY = "powerPlanNavTreeState_v1";
+    const readPrefs = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        const parsed = raw ? JSON.parse(raw) : {};
+        return {
+          mode: parsed.mode === "dock" ? "dock" : "float",
+          dockVisible: Boolean(parsed.dockVisible),
+          collapsedGroups: Array.isArray(parsed.collapsedGroups) ? parsed.collapsedGroups : [],
+        };
+      } catch (_) {
+        return { mode: "float", dockVisible: false, collapsedGroups: [] };
+      }
+    };
+    const writePrefs = (next) => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch (_) {}
+    };
+
+    const prefs = readPrefs();
+    let mode = prefs.mode; // "float" | "dock"
+    let dockVisible = mode === "dock" ? prefs.dockVisible : false;
+    let floatVisible = false;
+    let suppressHoverUntil = 0;
+    let hideTimer = 0;
+    const collapsedGroups = new Set(prefs.collapsedGroups || []);
+
+    const TREE_GROUPS = [
+      {
+        id: "overview",
+        label: "总览与驾驶舱",
+        items: [
+          { page: "index.html", label: "系统首页" },
+          { page: "scada.html", label: "规划大屏", withContext: true },
+        ],
+      },
+      {
+        id: "modeling",
+        label: "规划建模与求解",
+        items: [
+          { page: "planning.html", label: "参数维护", withScheme: true },
+          { page: "optimize.html", label: "规划求解", withScheme: true },
+          { page: "sensitivity.html", label: "批量扫参", withScheme: true },
+        ],
+      },
+      {
+        id: "evaluation",
+        label: "评估校核与决策",
+        items: [
+          { page: "evaluation.html", label: "方案评估", withContext: true },
+          { page: "reliability.html", label: "供电可靠性", withContext: true },
+          { page: "frequency.html", label: "频率计算", withContext: true },
+          { page: "comparison.html", label: "结果对比" },
+          { page: "report.html", label: "综合简报", withContext: true },
+        ],
+      },
+      {
+        id: "system",
+        label: "运行与系统管理",
+        items: [
+          { page: "tasks.html", label: "任务并发" },
+          { page: "users.html", label: "用户与诊断", adminOnly: true },
+        ],
+      },
+    ];
+
+    // 左边缘极简视觉提示柄（不拦截页面点击，仅提示左侧可呼出目录树）
+    const edgeCue = document.createElement("div");
+    edgeCue.id = "globalNavTreeEdgeCue";
+    edgeCue.className = "nav-tree-edge-cue";
+    edgeCue.setAttribute("aria-hidden", "true");
+
+    const aside = document.createElement("aside");
+    aside.id = "globalNavTree";
+    aside.className = "global-nav-tree";
+    aside.setAttribute("aria-label", tr("网页目录树"));
+
+    const buildHref = (item) => {
+      const ctx = window.PowerPlanPageState?.getActiveContext?.() || {};
+      if (item.withContext && ctx.scheme) {
+        const qs = new URLSearchParams({ scheme: ctx.scheme, ...(ctx.filename ? { file: ctx.filename } : {}) }).toString();
+        return `${item.page}?${qs}`;
+      }
+      if (item.withScheme && ctx.scheme) {
+        return `${item.page}?scheme=${encodeURIComponent(ctx.scheme)}`;
+      }
+      return item.page;
+    };
+
+    const renderTreeContent = () => {
+      const treeBody = aside.querySelector("#globalNavTreeBody");
+      if (!treeBody) return;
+      const isAdmin = Boolean(document.querySelector('[data-admin-only]:not([hidden])')) || window.PowerPlanAuth?.currentUser?.role === "admin";
+      treeBody.innerHTML = TREE_GROUPS.map((group) => {
+        const visibleItems = group.items.filter((it) => !it.adminOnly || isAdmin);
+        if (!visibleItems.length) return "";
+        const isCollapsed = collapsedGroups.has(group.id);
+        return `
+          <div class="nav-tree-group${isCollapsed ? " is-collapsed" : ""}" data-nav-group="${group.id}">
+            <button type="button" class="nav-tree-group-head" data-nav-group-toggle="${group.id}" aria-expanded="${!isCollapsed}">
+              <span class="nav-tree-chevron" aria-hidden="true">▾</span>
+              <span class="nav-tree-group-label">${tr(group.label)}</span>
+            </button>
+            <ul class="nav-tree-list" ${isCollapsed ? "hidden" : ""}>
+              ${visibleItems
+                .map((it) => {
+                  const active = it.page === curFile;
+                  return `<li><a class="nav-tree-link${active ? " is-active" : ""}" href="${buildHref(it)}"${active ? ' aria-current="page"' : ""} title="${tr(it.label)}"><span class="nav-tree-dot" aria-hidden="true"></span><span>${tr(it.label)}</span></a></li>`;
+                })
+                .join("")}
+            </ul>
+          </div>`;
+      }).join("");
+      if (window.PowerPlanI18n) {
+        window.PowerPlanI18n.translate(aside, window.PowerPlanI18n.currentLanguage());
+      }
+    };
+
+    aside.innerHTML = `
+      <div class="nav-tree-head">
+        <span class="nav-tree-title">${tr("网页目录")}</span>
+        <div class="nav-tree-controls">
+          <div class="nav-tree-mode-switch" role="group" aria-label="目录栏显示模式">
+            <button type="button" class="nav-tree-mode-btn" data-nav-mode="float" aria-pressed="true">${tr("悬浮")}</button>
+            <button type="button" class="nav-tree-mode-btn" data-nav-mode="dock" aria-pressed="false">${tr("内嵌")}</button>
+          </div>
+          <button type="button" id="globalNavTreeHideBtn" class="nav-tree-hide-btn" title="${tr("隐藏目录栏")}" aria-label="${tr("隐藏目录栏")}">×</button>
+        </div>
+      </div>
+      <nav id="globalNavTreeBody" class="nav-tree-body"></nav>
+    `;
+
+    document.body.append(edgeCue, aside);
+
+    const triggerLayoutResize = () => {
+      window.setTimeout(() => window.dispatchEvent(new Event("resize")), 210);
+    };
+
+    const syncUi = (persist = false) => {
+      const isDockedOpen = mode === "dock" && dockVisible;
+      const isFloatingOpen = floatVisible && !isDockedOpen;
+      const isVisible = isDockedOpen || isFloatingOpen;
+
+      aside.classList.toggle("is-visible", isVisible);
+      aside.classList.toggle("is-docked", isDockedOpen);
+      aside.classList.toggle("is-floating", isFloatingOpen);
+      edgeCue.classList.toggle("is-hidden", isVisible);
+
+      const prevDocked = document.body.classList.contains("has-nav-tree-docked");
+      document.body.classList.toggle("has-nav-tree-docked", isDockedOpen);
+      if (prevDocked !== isDockedOpen) {
+        triggerLayoutResize();
+      }
+
+      aside.querySelectorAll("[data-nav-mode]").forEach((btn) => {
+        const active = btn.dataset.navMode === mode;
+        btn.classList.toggle("active", active);
+        btn.setAttribute("aria-pressed", String(active));
+      });
+
+      if (persist) {
+        writePrefs({
+          mode,
+          dockVisible,
+          collapsedGroups: Array.from(collapsedGroups),
+        });
+      }
+    };
+
+    const cancelHide = () => {
+      if (hideTimer) {
+        window.clearTimeout(hideTimer);
+        hideTimer = 0;
+      }
+    };
+
+    const scheduleAutoHide = () => {
+      cancelHide();
+      // 悬浮展示态（包括内嵌隐藏后鼠标移至左边缘临时唤出）离开后自动隐藏
+      if (mode === "dock" && dockVisible) return;
+      hideTimer = window.setTimeout(() => {
+        floatVisible = false;
+        syncUi(false);
+      }, 240);
+    };
+
+    const showFloating = () => {
+      if (Date.now() < suppressHoverUntil) return;
+      if (mode === "dock" && dockVisible) return;
+      cancelHide();
+      if (!floatVisible) {
+        floatVisible = true;
+        renderTreeContent();
+        syncUi(false);
+      }
+    };
+
+    const hideNavTree = () => {
+      cancelHide();
+      floatVisible = false;
+      if (mode === "dock") dockVisible = false;
+      // 点击隐藏后短暂抑制 600ms 边缘悬浮触发，防止鼠标尚未移出左栏立刻又弹回
+      suppressHoverUntil = Date.now() + 600;
+      syncUi(true);
+    };
+
+    // 鼠标移到左边框或附近（<= 14px）自动悬浮呼出
+    document.addEventListener("mousemove", (event) => {
+      if (event.clientX <= 14) {
+        showFloating();
+      } else if (floatVisible && event.clientX > 228 && !aside.matches(":hover")) {
+        scheduleAutoHide();
+      }
+    });
+
+    aside.addEventListener("mouseenter", cancelHide);
+    aside.addEventListener("mouseleave", scheduleAutoHide);
+
+    aside.addEventListener("click", (event) => {
+      const modeBtn = event.target.closest("[data-nav-mode]");
+      if (modeBtn) {
+        const nextMode = modeBtn.dataset.navMode === "dock" ? "dock" : "float";
+        mode = nextMode;
+        if (mode === "dock") {
+          dockVisible = true;
+          floatVisible = false;
+        } else {
+          dockVisible = false;
+          floatVisible = true;
+        }
+        syncUi(true);
+        return;
+      }
+      if (event.target.closest("#globalNavTreeHideBtn")) {
+        hideNavTree();
+        return;
+      }
+      const groupBtn = event.target.closest("[data-nav-group-toggle]");
+      if (groupBtn) {
+        const gid = groupBtn.dataset.navGroupToggle;
+        if (collapsedGroups.has(gid)) collapsedGroups.delete(gid);
+        else collapsedGroups.add(gid);
+        renderTreeContent();
+        syncUi(true);
+      }
+    });
+
+    // 语言切换或权限更新后刷新目录树文案
+    document.getElementById("languageSelect")?.addEventListener("change", () => {
+      window.setTimeout(renderTreeContent, 30);
+    });
+    window.setTimeout(renderTreeContent, 600);
+
+    renderTreeContent();
+    syncUi(false);
+
+    window.PowerPlanNavTree = {
+      show: () => {
+        if (mode === "dock") dockVisible = true;
+        else floatVisible = true;
+        renderTreeContent();
+        syncUi(true);
+      },
+      hide: hideNavTree,
+      setMode: (nextMode) => {
+        mode = nextMode === "dock" ? "dock" : "float";
+        if (mode === "dock") {
+          dockVisible = true;
+          floatVisible = false;
+        } else {
+          dockVisible = false;
+          floatVisible = true;
+        }
+        syncUi(true);
+      },
+      getState: () => ({ mode, dockVisible, floatVisible, visible: (mode === "dock" && dockVisible) || floatVisible }),
+    };
+  }
+
   /** 立即在脚本加载时预设主题，消除首屏闪烁 */
   setTheme(getTheme(), { silent: true });
 
@@ -1685,6 +1989,7 @@
     mountTopbarUtilities();
     mountGlobalTaskDrawer();
     mountCommandPalette();
+    mountGlobalNavTree();
     mountWorkflowNextStrip();
     mountSidebarSplitter();
     enhanceSchemeRail();

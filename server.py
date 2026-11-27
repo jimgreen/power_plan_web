@@ -10603,6 +10603,7 @@ def safe_api_call(handler) -> tuple[int, dict[str, str], bytes]:
 ALLOWED_ROOT_HTML_PAGES = frozenset(
     {
         "index.html",
+        "scada.html",
         "planning.html",
         "optimize.html",
         "evaluation.html",
