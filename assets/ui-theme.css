@@ -2514,11 +2514,12 @@ html[data-theme] body .topbar {
 }
 
 html[data-theme] body .brand {
-  flex: 0 1 auto !important;
-  max-width: clamp(108px, 14vw, 220px) !important;
-  min-width: 0 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  max-width: none !important;
+  min-width: auto !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
 }
 
 html[data-theme] body .main-nav {
@@ -3912,8 +3913,8 @@ body .user-menu-actions button[data-logout]:hover {
   body .brand,
   body[data-home-theme] .brand,
   .reliability-page .brand {
-    font-size: 13px !important;
-    max-width: clamp(132px, 16vw, 224px);
+    font-size: 13.5px !important;
+    max-width: none !important;
   }
   body .main-nav,
   body[data-home-theme] .main-nav,
