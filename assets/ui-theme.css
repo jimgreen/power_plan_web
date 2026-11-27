@@ -456,7 +456,8 @@ body[data-home-theme] .topbar {
   box-shadow: none !important;
   backdrop-filter: none !important;
   overflow: visible !important;
-  z-index: 40;
+  position: relative !important;
+  z-index: 9600 !important;
 }
 
 body .brand,
@@ -2614,11 +2615,62 @@ html[data-theme] .status-tile.is-mirrored-status {
 
 html[data-theme] .editor-panel .planning-command-card {
   display: flex !important;
-  flex-wrap: wrap !important;
+  flex-wrap: nowrap !important;
   align-items: center !important;
   gap: 6px !important;
   width: 100% !important;
   max-width: 100% !important;
+  min-width: 0 !important;
+  overflow: visible !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .current-scheme-panel {
+  flex: 0 1 165px !important;
+  min-width: 82px !important;
+  overflow: hidden !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .current-scheme {
+  max-width: 100% !important;
+  font-size: 12.5px !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .tabs {
+  display: inline-flex !important;
+  flex-wrap: nowrap !important;
+  flex: 0 0 auto !important;
+  gap: 3px !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .tabs .tab {
+  padding: 0 8px !important;
+  height: 27px !important;
+  font-size: 12px !important;
+  white-space: nowrap !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .scheme-actions {
+  display: inline-flex !important;
+  flex-wrap: nowrap !important;
+  align-items: center !important;
+  gap: 4px !important;
+  margin-left: auto !important;
+  flex: 0 0 auto !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .scheme-actions button {
+  height: 27px !important;
+  min-height: 27px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+  white-space: nowrap !important;
+}
+
+html[data-theme] .editor-panel .planning-command-card .scheme-actions button.ui-icon-only {
+  width: 27px !important;
+  min-width: 27px !important;
+  padding: 0 !important;
+  justify-content: center !important;
 }
 
 html[data-theme] .time-chart-toolbar {
@@ -3692,8 +3744,78 @@ body .workspace.sensitivity-workspace {
 .sens-chart-controls {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+}
+
+.sens-chart-controls > button,
+.sens-chart-controls > select,
+.sens-export-trigger {
+  height: 27px !important;
+  min-height: 27px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+  white-space: nowrap !important;
+}
+
+.sens-chart-controls > select {
+  min-width: 96px;
+  max-width: 128px;
+}
+
+.sens-export-hub {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  z-index: 60;
+}
+
+.sens-export-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  padding: 5px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated, var(--bg-surface));
+  backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+  box-shadow: var(--shadow-popover);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px) scale(0.97);
+  pointer-events: none;
+  transition: opacity 150ms ease, transform 150ms cubic-bezier(0.22, 1, 0.36, 1), visibility 150ms;
+  z-index: 9700;
+}
+
+.sens-export-popover::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  height: 10px;
+}
+
+.sens-export-hub:hover .sens-export-popover,
+.sens-export-hub:focus-within .sens-export-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.sens-export-popover button {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 8px !important;
+  font-size: 11.5px !important;
+  white-space: nowrap !important;
 }
 
 .sens-chart-controls button.active {
@@ -5956,6 +6078,215 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
       grid-template-columns: 1fr;
     }
   }
+}
+
+/* 全站单行紧凑头部整合（任务并发 / 用户诊断 / 结果对比 / 批量扫参导出悬浮） */
+.task-toolbar-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  flex-wrap: nowrap !important;
+  min-height: 32px;
+}
+
+.task-toolbar-row .task-type-tabs {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  flex-wrap: nowrap !important;
+  margin: 0 !important;
+}
+
+.task-toolbar-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.task-toolbar-filters select {
+  height: 28px !important;
+  min-height: 28px !important;
+  min-width: 140px;
+  font-size: 12px !important;
+}
+
+.task-toolbar-filters select[hidden],
+.sys-diag-header-tools[hidden] {
+  display: none !important;
+}
+
+.admin-header-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 10px !important;
+  flex-wrap: nowrap !important;
+}
+
+.admin-header-right,
+.sys-diag-header-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* 结果对比顶部胶囊与决策工具整合为 1 行 */
+body .comparison-panel > .comparison-tab-bar {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  flex-wrap: nowrap !important;
+  padding: 5px 8px !important;
+}
+
+body .comparison-tab-bar .comparison-tabs-row {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  overflow-x: auto !important;
+  scrollbar-width: none;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+body .comparison-tab-bar .comparison-tabs-row::-webkit-scrollbar {
+  display: none;
+}
+
+body .comparison-tab-bar .comparison-decision-bar {
+  flex: 0 0 auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-wrap: nowrap !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+body .comparison-tab-bar .comparison-decision-left,
+body .comparison-tab-bar .comparison-decision-right {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  flex-wrap: nowrap !important;
+}
+
+/* 参数维护「规划参数」子 Tab 已高亮分类名，隐藏表格组上方重复的一级标题 */
+#planningParametersTable .planning-group-head,
+#planningParametersTable > .planning-group > h3,
+#planningParametersTable .planning-group-title {
+  display: none !important;
+}
+
+.sens-export-popover {
+  position: absolute !important;
+  top: calc(100% + 6px) !important;
+  left: 0 !important;
+  padding: 5px !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--border-strong) !important;
+  background: var(--bg-elevated, var(--bg-surface)) !important;
+  backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+  box-shadow: var(--shadow-popover) !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+  transform: translateY(-4px) scale(0.97) !important;
+  pointer-events: none !important;
+  transition: opacity 150ms ease, transform 150ms cubic-bezier(0.22, 1, 0.36, 1), visibility 150ms !important;
+  z-index: 9700 !important;
+}
+
+.sens-export-hub:hover .sens-export-popover,
+.sens-export-hub:focus-within .sens-export-popover {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: translateY(0) scale(1) !important;
+  pointer-events: auto !important;
+}
+
+/* 全站表格单元格内容统一垂直居中 */
+table th,
+table td {
+  vertical-align: middle !important;
+}
+
+/* 彻底消除未绑定主题变量的按钮原生灰底穿帮：全站次级/工具按钮统一跟随当前主题切换 */
+.sens-chart-controls > button,
+.sens-export-trigger,
+.sens-export-popover button,
+.sens-actions button:not(.primary):not(.danger),
+.comparison-decision-bar button:not(.primary):not(.danger),
+.sys-diag-header-tools button:not(.primary):not(.danger),
+.insight-export-btn,
+.report-head-right button:not(.primary):not(.danger) {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 4px !important;
+  background: var(--bg-subtle) !important;
+  border: 1px solid var(--border-color) !important;
+  color: var(--text-secondary) !important;
+  border-radius: var(--radius-btn) !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast) !important;
+}
+
+.sens-chart-controls > button:hover,
+.sens-export-trigger:hover,
+.sens-export-hub:hover .sens-export-trigger,
+.sens-export-popover button:hover,
+.sens-actions button:not(.primary):not(.danger):hover,
+.comparison-decision-bar button:not(.primary):not(.danger):hover,
+.sys-diag-header-tools button:not(.primary):not(.danger):hover,
+.insight-export-btn:hover {
+  background: var(--accent-soft) !important;
+  border-color: var(--accent-border) !important;
+  color: var(--accent) !important;
+}
+
+.sens-chart-controls > button.active,
+.sens-chart-controls > button[aria-pressed="true"],
+.comparison-decision-bar button[aria-pressed="true"] {
+  background: linear-gradient(135deg, var(--accent-soft), rgba(196, 181, 253, 0.14)) !important;
+  border-color: var(--accent-border) !important;
+  color: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px var(--accent-border), var(--accent-glow, none) !important;
+}
+
+.sens-actions button.primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover)) !important;
+  border: 1px solid var(--accent) !important;
+  color: var(--text-on-accent) !important;
+  font-weight: 700 !important;
+}
+
+.sens-actions button.danger,
+.sys-diag-header-tools button.danger {
+  background: var(--danger-soft) !important;
+  border: 1px solid rgba(253, 164, 175, 0.45) !important;
+  color: var(--danger) !important;
+}
+
+.sens-actions button.danger:hover,
+.sys-diag-header-tools button.danger:hover {
+  background: var(--danger) !important;
+  color: #FFFFFF !important;
 }
 
 /* 内嵌模式仅推开顶栏下方的主内容区，顶栏始终 100% 从左到右通栏不受左栏影响（须置于 @layer 之外） */

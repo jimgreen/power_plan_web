@@ -1731,6 +1731,10 @@
     ["外观与语言", "Theme & Language", "Тема и язык"],
     ["悬停展开操作栏", "Hover to open actions", "Наведите для действий"],
     ["任务操作", "Task Actions", "Действия"],
+    ["预检", "Check", "Проверка"],
+    ["龙卷风", "Tornado", "Торнадо"],
+    ["情景", "Cases", "Сцен."],
+    ["柴发耗油", "Diesel Fuel", "Топливо"],
   ];
   EXTRA_I18N_ENTRIES.forEach(([zh, en, ru]) => {
     if (!enTranslations.has(zh)) enTranslations.set(zh, en);

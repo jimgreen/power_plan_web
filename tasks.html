@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>任务并发 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v26">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v26">
-  <script src="assets/ui-kit.js?v=20261127-ui-v26"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v28">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v28">
+  <script src="assets/ui-kit.js?v=20261127-ui-v28"></script>
 </head>
 <body>
   <main class="planning-shell">
@@ -32,60 +32,43 @@
     <section class="workspace tasks-workspace">
       <section class="tasks-panel">
         <div id="taskError" class="status-error" hidden></div>
-        <div class="task-type-tabs" role="tablist" aria-label="任务类型切换">
-          <button class="task-type-tab active" type="button" data-task-page="optimization" role="tab" aria-selected="true" aria-controls="optimizationTaskSection">规划计算任务</button>
-          <button class="task-type-tab" type="button" data-task-page="evaluation" role="tab" aria-selected="false" aria-controls="evaluationTaskSection">方案评估任务</button>
-          <button class="task-type-tab" type="button" data-task-page="frequency" role="tab" aria-selected="false" aria-controls="frequencyTaskSection">频率计算任务</button>
-          <button class="task-type-tab" type="button" data-task-page="reliability" role="tab" aria-selected="false" aria-controls="reliabilityTaskSection">供电可靠性任务</button>
+        <div class="task-toolbar-row">
+          <div class="task-type-tabs" role="tablist" aria-label="任务类型切换">
+            <button class="task-type-tab active" type="button" data-task-page="optimization" role="tab" aria-selected="true" aria-controls="optimizationTaskSection">规划计算任务</button>
+            <button class="task-type-tab" type="button" data-task-page="evaluation" role="tab" aria-selected="false" aria-controls="evaluationTaskSection">方案评估任务</button>
+            <button class="task-type-tab" type="button" data-task-page="frequency" role="tab" aria-selected="false" aria-controls="frequencyTaskSection">频率计算任务</button>
+            <button class="task-type-tab" type="button" data-task-page="reliability" role="tab" aria-selected="false" aria-controls="reliabilityTaskSection">供电可靠性任务</button>
+          </div>
+          <div class="task-toolbar-filters">
+            <select id="evaluationSchemeFilter" data-task-filter="evaluation" aria-label="按方案名称筛选方案评估任务" hidden>
+              <option value="">全部方案</option>
+            </select>
+            <select id="frequencySchemeFilter" data-task-filter="frequency" aria-label="按方案名称筛选频率计算任务" hidden>
+              <option value="">全部方案</option>
+            </select>
+            <select id="reliabilitySchemeFilter" data-task-filter="reliability" aria-label="按方案名称筛选供电可靠性任务" hidden>
+              <option value="">全部方案</option>
+            </select>
+          </div>
         </div>
         <section id="optimizationTaskSection" class="task-section task-section-optimization active" data-task-section="optimization" aria-label="规划计算任务" role="tabpanel">
-          <div class="task-section-head">
-            <h2>规划计算任务</h2>
-          </div>
           <div id="optimizationTaskTable" class="data-table task-table" aria-label="规划计算任务"></div>
         </section>
         <section id="evaluationTaskSection" class="task-section task-section-evaluation" data-task-section="evaluation" aria-label="方案评估任务" role="tabpanel" hidden>
-          <div class="task-section-head">
-            <h2>方案评估任务</h2>
-            <label class="task-scheme-filter" for="evaluationSchemeFilter">
-              <span>方案名称</span>
-              <select id="evaluationSchemeFilter" aria-label="按方案名称筛选方案评估任务">
-                <option value="">全部方案</option>
-              </select>
-            </label>
-          </div>
           <div id="evaluationTaskTable" class="data-table task-table" aria-label="方案评估任务"></div>
         </section>
         <section id="frequencyTaskSection" class="task-section task-section-frequency" data-task-section="frequency" aria-label="频率计算任务" role="tabpanel" hidden>
-          <div class="task-section-head">
-            <h2>频率计算任务</h2>
-            <label class="task-scheme-filter" for="frequencySchemeFilter">
-              <span>方案名称</span>
-              <select id="frequencySchemeFilter" aria-label="按方案名称筛选频率计算任务">
-                <option value="">全部方案</option>
-              </select>
-            </label>
-          </div>
           <div id="frequencyTaskTable" class="data-table task-table" aria-label="频率计算任务"></div>
         </section>
         <section id="reliabilityTaskSection" class="task-section task-section-reliability" data-task-section="reliability" aria-label="供电可靠性任务" role="tabpanel" hidden>
-          <div class="task-section-head">
-            <h2>供电可靠性任务</h2>
-            <label class="task-scheme-filter" for="reliabilitySchemeFilter">
-              <span>方案名称</span>
-              <select id="reliabilitySchemeFilter" aria-label="按方案名称筛选供电可靠性任务">
-                <option value="">全部方案</option>
-              </select>
-            </label>
-          </div>
           <div id="reliabilityTaskTable" class="data-table task-table" aria-label="供电可靠性任务"></div>
         </section>
       </section>
     </section>
   </main>
-  <script src="assets/i18n.js?v=20261127-ui-v26"></script>
-  <script src="assets/auth.js?v=20261127-ui-v26"></script>
-  <script src="assets/page_state.js?v=20261127-ui-v26"></script>
-  <script src="assets/tasks.js?v=20261127-ui-v26"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v28"></script>
+  <script src="assets/auth.js?v=20261127-ui-v28"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v28"></script>
+  <script src="assets/tasks.js?v=20261127-ui-v28"></script>
 </body>
 </html>

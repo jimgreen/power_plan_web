@@ -215,6 +215,9 @@ function updateTaskPageVisibility() {
     section.classList.toggle("active", active);
     section.hidden = !active;
   });
+  document.querySelectorAll("[data-task-filter]").forEach((sel) => {
+    sel.hidden = sel.dataset.taskFilter !== taskState.activeTaskType;
+  });
 }
 
 function taskTargetHref(task) {

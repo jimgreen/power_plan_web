@@ -151,6 +151,9 @@
         p.hidden = !active;
         p.classList.toggle("active", active);
       });
+      const diagTools = document.getElementById("sysDiagHeaderTools");
+      if (diagTools) diagTools.hidden = key !== "system";
+      if (status) status.hidden = key === "system";
       if (key === "system") {
         loadSystemStatus().catch((error) => {
           if (status) status.textContent = error.message;
