@@ -206,9 +206,12 @@
   function renderReport() {
     const d = state.data;
     if (!d) return;
-    document.getElementById("reportTitle").textContent = `${d.scheme} · 综合评审简报`;
-    document.getElementById("reportSubtitle").textContent = d.filename ? `结果文件：${d.filename}` : "尚未生成求解结果文件";
-    document.getElementById("reportGeneratedAt").textContent = `生成时间：${d.generated_at || "—"}`;
+    const titleEl = document.getElementById("reportTitle");
+    const subEl = document.getElementById("reportSubtitle");
+    const timeEl = document.getElementById("reportGeneratedAt");
+    if (titleEl) titleEl.textContent = `${d.scheme} · 综合评审简报`;
+    if (subEl) subEl.textContent = d.filename ? `结果文件：${d.filename}` : "尚未生成求解结果文件";
+    if (timeEl) timeEl.textContent = d.generated_at || "—";
 
     const fileSelect = document.getElementById("reportFileSelect");
     if (fileSelect) {
@@ -217,11 +220,6 @@
         ? files.map((f) => `<option value="${escapeHtml(f.name)}"${f.name === d.filename ? " selected" : ""}>${escapeHtml(f.name)}</option>`).join("")
         : `<option value="">暂无结果文件</option>`;
     }
-
-    const q = new URLSearchParams({ scheme: d.scheme, ...(d.filename ? { file: d.filename } : {}) }).toString();
-    document.getElementById("reportLinkSensitivity").href = `sensitivity.html?scheme=${encodeURIComponent(d.scheme)}`;
-    document.getElementById("reportLinkReliability").href = `reliability.html?${q}`;
-    document.getElementById("reportLinkEvaluation").href = `evaluation.html?${q}`;
 
     const lcoe = findMetric(d.green_table, ["综合度电成本", "度电成本"]);
     const annualCost = findMetric(d.green_table, ["年均总成本", "年总成本", "年化总成本", "总年化成本"]);

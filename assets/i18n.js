@@ -1729,6 +1729,8 @@
     ["覆雪", "Snow", "Снег"],
     ["切出", "Cut-out", "Откл."],
     ["外观与语言", "Theme & Language", "Тема и язык"],
+    ["悬停展开操作栏", "Hover to open actions", "Наведите для действий"],
+    ["任务操作", "Task Actions", "Действия"],
   ];
   EXTRA_I18N_ENTRIES.forEach(([zh, en, ru]) => {
     if (!enTranslations.has(zh)) enTranslations.set(zh, en);

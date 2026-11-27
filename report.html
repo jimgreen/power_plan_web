@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>综合简报 - 考察站风-光-氢-储-柴联合规划系统</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v24">
-  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v24">
-  <script src="assets/ui-kit.js?v=20261127-ui-v24"></script>
+  <link rel="stylesheet" href="assets/planning.css?v=20261127-ui-v26">
+  <link rel="stylesheet" href="assets/ui-theme.css?v=20261127-ui-v26">
+  <script src="assets/ui-kit.js?v=20261127-ui-v26"></script>
 </head>
 <body>
   <main class="planning-shell report-shell">
@@ -29,92 +29,82 @@
       </div>
     </header>
 
-    <section class="report-toolbar no-print">
-      <div class="report-selectors">
-        <label>
-          <span>方案</span>
-          <select id="reportSchemeSelect"></select>
-        </label>
-        <label>
-          <span>结果文件</span>
-          <select id="reportFileSelect"></select>
-        </label>
-      </div>
-      <div class="report-actions">
-        <a id="reportLinkSensitivity" class="task-view-link" href="sensitivity.html">批量扫参</a>
-        <a id="reportLinkReliability" class="task-view-link" href="reliability.html">可靠性校核</a>
-        <a id="reportLinkEvaluation" class="task-view-link" href="evaluation.html">返回评估</a>
-        <button id="reportPrintBtn" class="primary" type="button">打印 / 导出 PDF</button>
-      </div>
-    </section>
-
-    <article id="reportCanvas" class="report-canvas">
-      <header class="report-doc-head">
-        <div>
-          <h1 id="reportTitle">方案综合评审简报</h1>
-          <div id="reportSubtitle" class="report-doc-meta">—</div>
-        </div>
-        <div id="reportGeneratedAt" class="report-doc-time">—</div>
-      </header>
-
-      <div id="reportStaleHost"></div>
-      <section id="reportKpiStrip" class="report-kpi-strip"></section>
-      <section id="reportConclusionsCard" class="report-card report-conclusions-card" hidden>
-        <h2>工程诊断结论与改进建议</h2>
-        <div id="reportConclusionsList" class="report-conclusions-list"></div>
-      </section>
-
-      <section class="report-grid-two">
-        <div class="report-card">
-          <h2>站点负荷与资源概况</h2>
-          <div id="reportSiteTable" class="data-table"></div>
-        </div>
-        <div class="report-card">
-          <h2>规划装机容量配置</h2>
-          <div id="reportCapacityTable" class="data-table"></div>
-        </div>
-      </section>
-
-      <section class="report-card">
-        <div class="insight-card-head">
-          <h2>月度供能结构与电量平衡</h2>
-          <div class="insight-card-controls no-print">
-            <button id="reportMonthlyPng" type="button" class="insight-export-btn">PNG</button>
-            <button id="reportMonthlySvg" type="button" class="insight-export-btn">SVG</button>
+    <div class="report-scroll-body">
+      <article id="reportCanvas" class="report-canvas">
+        <header class="report-doc-head">
+          <div class="report-head-left no-print">
+            <select id="reportSchemeSelect" aria-label="选择规划方案"></select>
+            <select id="reportFileSelect" aria-label="选择求解结果文件"></select>
           </div>
-        </div>
-        <div class="insight-svg-stage">
-          <svg id="reportMonthlyChart" class="report-monthly-chart" role="img" aria-label="月度供能结构图"></svg>
-          <div id="reportMonthlyTip" class="insight-tooltip" hidden></div>
-        </div>
-      </section>
+          <div class="report-print-head print-only">
+            <h1 id="reportTitle">方案综合评审简报</h1>
+            <div id="reportSubtitle" class="report-doc-meta">—</div>
+          </div>
+          <div class="report-head-right">
+            <span id="reportGeneratedAt" class="report-doc-time">—</span>
+            <button id="reportPrintBtn" class="primary no-print" type="button">打印 / 导出 PDF</button>
+          </div>
+        </header>
 
-      <section class="report-grid-two report-insights-row">
-        <div id="reportSankeyCard" class="report-card"></div>
-        <div id="reportWaterfallCard" class="report-card"></div>
-      </section>
+        <div id="reportStaleHost"></div>
+        <section id="reportKpiStrip" class="report-kpi-strip"></section>
+        <section id="reportConclusionsCard" class="report-card report-conclusions-card" hidden>
+          <h2>工程诊断结论与改进建议</h2>
+          <div id="reportConclusionsList" class="report-conclusions-list"></div>
+        </section>
 
-      <section class="report-grid-three">
-        <div class="report-card">
-          <h2>经济性与绿电指标</h2>
-          <div id="reportGreenTable" class="data-table"></div>
-        </div>
-        <div class="report-card">
-          <h2>频率与运行安全指标</h2>
-          <div id="reportSafetyTable" class="data-table"></div>
-        </div>
-        <div class="report-card">
-          <h2>供电可靠性校核结论</h2>
-          <div id="reportReliabilityTable" class="data-table"></div>
-        </div>
-      </section>
-    </article>
+        <section class="report-grid-two">
+          <div class="report-card">
+            <h2>站点负荷与资源概况</h2>
+            <div id="reportSiteTable" class="data-table"></div>
+          </div>
+          <div class="report-card">
+            <h2>规划装机容量配置</h2>
+            <div id="reportCapacityTable" class="data-table"></div>
+          </div>
+        </section>
+
+        <section class="report-card">
+          <div class="insight-card-head">
+            <h2>月度供能结构与电量平衡</h2>
+            <div class="insight-card-controls no-print">
+              <button id="reportMonthlyPng" type="button" class="insight-export-btn">PNG</button>
+              <button id="reportMonthlySvg" type="button" class="insight-export-btn">SVG</button>
+            </div>
+          </div>
+          <div class="insight-svg-stage">
+            <svg id="reportMonthlyChart" class="report-monthly-chart" role="img" aria-label="月度供能结构图"></svg>
+            <div id="reportMonthlyTip" class="insight-tooltip" hidden></div>
+          </div>
+        </section>
+
+        <section class="report-grid-two report-insights-row">
+          <div id="reportSankeyCard" class="report-card"></div>
+          <div id="reportWaterfallCard" class="report-card"></div>
+        </section>
+
+        <section class="report-grid-three">
+          <div class="report-card">
+            <h2>经济性与绿电指标</h2>
+            <div id="reportGreenTable" class="data-table"></div>
+          </div>
+          <div class="report-card">
+            <h2>频率与运行安全指标</h2>
+            <div id="reportSafetyTable" class="data-table"></div>
+          </div>
+          <div class="report-card">
+            <h2>供电可靠性校核结论</h2>
+            <div id="reportReliabilityTable" class="data-table"></div>
+          </div>
+        </section>
+      </article>
+    </div>
   </main>
 
-  <script src="assets/i18n.js?v=20261127-ui-v24"></script>
-  <script src="assets/auth.js?v=20261127-ui-v24"></script>
-  <script src="assets/page_state.js?v=20261127-ui-v24"></script>
-  <script src="assets/chart-enhancer.js?v=20261127-ui-v24"></script>
-  <script src="assets/report.js?v=20261127-ui-v24"></script>
+  <script src="assets/i18n.js?v=20261127-ui-v26"></script>
+  <script src="assets/auth.js?v=20261127-ui-v26"></script>
+  <script src="assets/page_state.js?v=20261127-ui-v26"></script>
+  <script src="assets/chart-enhancer.js?v=20261127-ui-v26"></script>
+  <script src="assets/report.js?v=20261127-ui-v26"></script>
 </body>
 </html>

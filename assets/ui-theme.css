@@ -945,14 +945,17 @@ body .comparison-table-curve-resize-handle:hover::before {
 
 body .optimization-command-card,
 body[data-home-theme] .optimization-command-card {
-  padding: 6px 10px !important;
+  position: relative !important;
+  z-index: 45 !important;
+  overflow: visible !important;
+  padding: 5px 10px !important;
 }
 
 body .optimization-command-row,
 body .reliability-command-row {
   display: flex !important;
   align-items: center !important;
-  flex-wrap: wrap !important;
+  flex-wrap: nowrap !important;
   gap: 8px !important;
   min-height: 34px !important;
 }
@@ -2565,13 +2568,13 @@ html[data-theme] body .user-status strong {
   display: inline-block;
 }
 
-/* 命令条与单行状态条防横向溢出 */
+/* 命令条与单行状态条：强制整合为严格 1 行不折行 */
 html[data-theme] .optimization-command-row,
 html[data-theme] .reliability-command-row {
   display: flex !important;
   align-items: center !important;
-  flex-wrap: wrap !important;
-  gap: 6px !important;
+  flex-wrap: nowrap !important;
+  gap: 8px !important;
   width: 100% !important;
   max-width: 100% !important;
   min-width: 0 !important;
@@ -2579,7 +2582,11 @@ html[data-theme] .reliability-command-row {
 
 html[data-theme] .optimization-current-scheme {
   max-width: 220px !important;
+  min-width: 88px !important;
   flex: 0 1 auto !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
 }
 
 html[data-theme] .optimization-status-grid {
@@ -2587,11 +2594,22 @@ html[data-theme] .optimization-status-grid {
   min-width: 0 !important;
   max-width: 100% !important;
   justify-content: flex-end;
+  scrollbar-width: none;
+}
+
+html[data-theme] .optimization-status-grid::-webkit-scrollbar {
+  display: none;
 }
 
 html[data-theme] .status-tile {
-  padding: 3px 8px !important;
-  gap: 5px !important;
+  padding: 3px 7px !important;
+  gap: 4px !important;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+}
+
+html[data-theme] .status-tile.is-mirrored-status {
+  display: none !important;
 }
 
 html[data-theme] .editor-panel .planning-command-card {
@@ -3108,50 +3126,160 @@ html[data-theme] button:disabled {
   font-size: 12.5px;
 }
 
-/* 业务页顶部工作流直达动作条 */
-.workflow-next-strip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-color);
-  flex-wrap: wrap;
-}
-
-.workflow-next-label {
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.workflow-next-links {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-}
-
-.workflow-next-link {
+/* 单状态操作胶囊 + 悬停悬浮 3 按钮操作栏（合并启动 / 排队 / 停止） */
+.cmd-action-hub {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: 4px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg-surface);
-  color: var(--text-secondary) !important;
-  font-size: 11.5px;
-  font-weight: 600;
-  text-decoration: none !important;
-  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+  flex: 0 0 auto;
+  z-index: 60;
 }
 
-.workflow-next-link:hover {
-  border-color: var(--accent);
+.cmd-action-trigger {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  padding: 0 11px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--accent-border) !important;
+  background: linear-gradient(135deg, var(--accent-soft), rgba(196, 181, 253, 0.14)) !important;
+  color: var(--text-primary) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  white-space: nowrap !important;
+  cursor: pointer;
+  box-shadow: var(--accent-glow, none);
+  transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast), transform 140ms ease;
+}
+
+.cmd-action-trigger:hover,
+.cmd-action-hub.is-open .cmd-action-trigger {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 18px rgba(103, 232, 249, 0.28);
+}
+
+.cmd-action-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--accent);
+  box-shadow: 0 0 8px currentColor;
+}
+
+.cmd-action-trigger[data-state="running"] {
+  border-color: var(--accent) !important;
   color: var(--accent) !important;
-  background: var(--accent-soft);
+}
+
+.cmd-action-trigger[data-state="running"] .cmd-action-dot {
+  background: var(--accent);
+  animation: cmdDotPulse 1.4s ease-in-out infinite;
+}
+
+.cmd-action-trigger[data-state="queued"] {
+  border-color: rgba(252, 211, 77, 0.5) !important;
+  background: var(--warn-soft) !important;
+  color: var(--warn) !important;
+}
+
+.cmd-action-trigger[data-state="queued"] .cmd-action-dot {
+  background: var(--warn);
+}
+
+.cmd-action-trigger[data-state="done"] {
+  border-color: rgba(94, 234, 212, 0.45) !important;
+  background: var(--ok-soft) !important;
+  color: var(--ok) !important;
+}
+
+.cmd-action-trigger[data-state="done"] .cmd-action-dot {
+  background: var(--ok);
+}
+
+.cmd-action-trigger[data-state="error"],
+.cmd-action-trigger[data-state="stopped"] {
+  border-color: rgba(253, 164, 175, 0.48) !important;
+  background: var(--danger-soft) !important;
+  color: var(--danger) !important;
+}
+
+.cmd-action-trigger[data-state="error"] .cmd-action-dot,
+.cmd-action-trigger[data-state="stopped"] .cmd-action-dot {
+  background: var(--danger);
+}
+
+@keyframes cmdDotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.cmd-action-caret {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.78;
+  transition: transform 160ms ease;
+}
+
+.cmd-action-hub.is-open .cmd-action-caret {
+  transform: rotate(180deg);
+}
+
+.cmd-action-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated, var(--bg-surface));
+  backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+  box-shadow: var(--shadow-popover);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px) scale(0.97);
+  pointer-events: none;
+  transition: opacity 150ms ease, transform 150ms cubic-bezier(0.22, 1, 0.36, 1), visibility 150ms;
+  z-index: 9700;
+}
+
+/* 顶部透明桥接热区，保证鼠标从状态胶囊平滑移入弹层绝不闪烁关闭 */
+.cmd-action-popover::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  height: 10px;
+}
+
+.cmd-action-hub.is-open .cmd-action-popover,
+.cmd-action-hub:focus-within .cmd-action-popover {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.cmd-action-popover .optimization-actions {
+  display: inline-flex !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  gap: 6px !important;
+  margin: 0 !important;
+}
+
+.cmd-action-popover .optimization-actions button {
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
 }
 
 /* 结果对比页：单行紧凑对比胶囊栏 + 一体化决策微工具条 */
@@ -3589,65 +3717,62 @@ body .workspace.sensitivity-workspace {
 }
 
 /* ==========================================================================
-   方案综合评审简报页（report.html）与打印排版
+   方案综合评审简报页（report.html）与打印排版（单行整合头部 + 独立滚动零重叠）
    ========================================================================== */
 
-.report-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  margin: 8px 8px 0;
-  background: var(--bg-surface);
-  border: var(--border);
-  border-radius: var(--radius-card);
-}
-
-.report-selectors,
-.report-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.report-selectors label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.report-selectors select {
-  height: 28px !important;
-  min-height: 28px !important;
-  min-width: 150px;
-  font-size: 12px !important;
+.report-scroll-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 10px 20px;
+  box-sizing: border-box;
 }
 
 .report-canvas {
-  max-width: 1320px;
-  width: calc(100% - 16px);
-  margin: 8px auto 20px;
-  padding: 14px 16px;
+  max-width: 1360px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 10px 14px 16px;
   background: var(--bg-surface);
   border: var(--border);
   border-radius: var(--radius-card);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  box-sizing: border-box;
 }
 
 .report-doc-head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border-strong);
+  gap: 10px;
+  flex-wrap: nowrap;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+  min-height: 32px;
+}
+
+.report-head-left,
+.report-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.report-head-left select {
+  height: 28px !important;
+  min-height: 28px !important;
+  min-width: 140px;
+  max-width: 240px;
+  font-size: 12px !important;
+}
+
+.print-only {
+  display: none !important;
 }
 
 .report-doc-head h1 {
@@ -3660,6 +3785,8 @@ body .workspace.sensitivity-workspace {
   font-size: 12px;
   color: var(--text-secondary);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .report-kpi-strip {
@@ -5874,6 +6001,15 @@ body.has-nav-tree-docked.home-page > .home-portal {
   .cmd-palette-backdrop,
   .ui-toast-stack {
     display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .report-scroll-body {
+    overflow: visible !important;
+    padding: 0 !important;
+    margin-left: 0 !important;
+    width: 100% !important;
   }
   .report-canvas {
     width: 100% !important;

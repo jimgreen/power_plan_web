@@ -1005,57 +1005,106 @@
     schedulePoll(6000);
   }
 
-  /** 在规划/评估/可靠性/频率页面命令卡底部挂载跨页工作流直达动作条 */
-  function mountWorkflowNextStrip() {
-    const file = (window.location.pathname.split("/").pop() || "index.html").toLowerCase();
-    const targetPages = new Set(["optimize.html", "evaluation.html", "reliability.html", "frequency.html"]);
-    if (!targetPages.has(file)) return;
-    const hostCard = document.querySelector(".optimization-command-card, .reliability-main > .optimization-command-card");
-    if (!hostCard || hostCard.querySelector(".workflow-next-strip")) return;
+  /** 将计算类页面「启动 / 排队 / 停止」3 联按钮合并为 1 个实时当前状态胶囊，悬停时悬浮弹出 3 按钮操作栏 */
+  function mountCompactCommandActionHub() {
+    document.querySelectorAll(".optimization-command-row, .reliability-command-row").forEach((row) => {
+      const actions = row.querySelector(":scope > .optimization-actions");
+      if (!actions || row.querySelector(".cmd-action-hub")) return;
+      const buttons = actions.querySelectorAll("button");
+      if (buttons.length < 2) return;
 
-    const strip = document.createElement("div");
-    strip.className = "workflow-next-strip";
-    strip.setAttribute("aria-label", tr("工作流直达"));
-    hostCard.appendChild(strip);
+      const statusGrid = row.querySelector(".optimization-status-grid");
+      const statusStrong =
+        row.querySelector("#optimizationStatus, #reliabilityStatus, #frequencyStatus") ||
+        statusGrid?.querySelector(".status-tile:first-child strong");
+      const statusTile = statusStrong?.closest(".status-tile");
 
-    const linksDef = [
-      { page: "scada.html", label: "规划大屏", needFile: true },
-      { page: "planning.html", label: "参数维护", needFile: false },
-      { page: "optimize.html", label: "规划求解", needFile: false },
-      { page: "evaluation.html", label: "方案评估", needFile: true },
-      { page: "reliability.html", label: "供电可靠性", needFile: true },
-      { page: "frequency.html", label: "频率计算", needFile: true },
-      { page: "comparison.html", label: "加入对比", isCompare: true },
-      { page: "sensitivity.html", label: "批量扫参", needFile: false },
-      { page: "report.html", label: "综合简报", needFile: true },
-    ];
-
-    const renderStrip = () => {
-      const ctx = window.PowerPlanPageState?.getActiveContext?.() || { scheme: "", filename: "" };
-      const scheme = ctx.scheme || "";
-      const filename = ctx.filename || (file === "optimize.html" ? "opt_results.xlsx" : "");
-      const items = linksDef
-        .filter((item) => item.page !== file)
-        .map((item) => {
-          let href = item.page;
-          if (item.isCompare && scheme && filename) {
-            href = `comparison.html?add=${encodeURIComponent(`${scheme}|${filename}`)}`;
-          } else if (scheme) {
-            const p = new URLSearchParams();
-            p.set("scheme", scheme);
-            if (item.needFile && filename) p.set("file", filename);
-            href = `${item.page}?${p.toString()}`;
-          }
-          return `<a class="workflow-next-link" href="${href}">${item.label}</a>`;
-        });
-      strip.innerHTML = `<span class="workflow-next-label">快捷流转</span><div class="workflow-next-links">${items.join("")}</div>`;
-      if (window.PowerPlanI18n) {
-        window.PowerPlanI18n.translate(strip, window.PowerPlanI18n.currentLanguage());
+      // 隐藏右侧指标条内重复的「状态」格（保留 DOM 以便业务脚本持续更新文本供镜像同步）
+      if (statusTile) {
+        statusTile.classList.add("is-mirrored-status");
       }
-    };
 
-    renderStrip();
-    window.addEventListener("powerplan:contextchange", renderStrip);
+      const hub = document.createElement("div");
+      hub.className = "cmd-action-hub";
+
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "cmd-action-trigger";
+      trigger.setAttribute("aria-haspopup", "true");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.innerHTML =
+        `<i class="cmd-action-dot" aria-hidden="true"></i>` +
+        `<span class="cmd-action-label">—</span>` +
+        `<svg class="cmd-action-caret" viewBox="0 0 24 24" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
+
+      const popover = document.createElement("div");
+      popover.className = "cmd-action-popover";
+      popover.setAttribute("role", "toolbar");
+      popover.setAttribute("aria-label", actions.getAttribute("aria-label") || tr("任务操作"));
+
+      actions.parentNode.insertBefore(hub, actions);
+      popover.appendChild(actions);
+      hub.append(trigger, popover);
+
+      const labelEl = trigger.querySelector(".cmd-action-label");
+
+      const classifyState = (txt) => {
+        const s = String(txt || "").trim();
+        if (/(运行|计算中|评估中|执行中|running|solving)/i.test(s)) return "running";
+        if (/(排队|等待|queued|pending)/i.test(s)) return "queued";
+        if (/(完成|成功|已计算|done|completed|success)/i.test(s)) return "done";
+        if (/(失败|错误|异常|failed|error)/i.test(s)) return "error";
+        if (/(停止|中止|已取消|stopped|cancel)/i.test(s)) return "stopped";
+        return "idle";
+      };
+
+      const syncStatus = () => {
+        const text = (statusStrong?.textContent || "").trim() || tr("待启动");
+        const stateKind = classifyState(text);
+        if (labelEl) labelEl.textContent = text;
+        trigger.dataset.state = stateKind;
+        trigger.setAttribute("title", `${text} — ${tr("悬停展开操作栏")}`);
+      };
+
+      syncStatus();
+
+      if (statusStrong) {
+        const obs = new MutationObserver(syncStatus);
+        obs.observe(statusStrong, { childList: true, characterData: true, subtree: true });
+      }
+
+      let closeTimer = 0;
+      const setOpen = (open) => {
+        if (closeTimer) {
+          window.clearTimeout(closeTimer);
+          closeTimer = 0;
+        }
+        hub.classList.toggle("is-open", open);
+        trigger.setAttribute("aria-expanded", String(open));
+      };
+      const scheduleClose = () => {
+        if (closeTimer) window.clearTimeout(closeTimer);
+        closeTimer = window.setTimeout(() => setOpen(false), 160);
+      };
+
+      hub.addEventListener("mouseenter", () => setOpen(true));
+      hub.addEventListener("mouseleave", scheduleClose);
+      trigger.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        setOpen(!hub.classList.contains("is-open"));
+      });
+      actions.addEventListener("click", (ev) => {
+        if (ev.target.closest("button")) {
+          window.setTimeout(() => setOpen(false), 120);
+        }
+      });
+      document.addEventListener("click", (ev) => {
+        if (!hub.contains(ev.target)) setOpen(false);
+      });
+      document.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") setOpen(false);
+      });
+    });
   }
 
   /** 全站左侧栏纵向可拖拽分割条与一键隐藏/展开引擎（支持持久化记忆与图表重绘） */
@@ -2195,8 +2244,8 @@
       el.insertAdjacentHTML("afterbegin", renderIcon(iconName, extraClass));
     };
 
-    // 1. 顶栏导航 & 快捷流转链接：按目标页面自动挂载页面图标
-    document.querySelectorAll(".topbar a[href], .topnav a[href], .workflow-next-strip a[href], .scada-nav-link[href], .scada-mini-link[href]").forEach((a) => {
+    // 1. 顶栏导航链接：按目标页面自动挂载页面图标
+    document.querySelectorAll(".topbar a[href], .topnav a[href], .scada-nav-link[href], .scada-mini-link[href]").forEach((a) => {
       const href = String(a.getAttribute("href") || "").split("?")[0].split("/").pop().toLowerCase();
       if (PAGE_ICON_MAP[href]) {
         injectIcon(a, PAGE_ICON_MAP[href], "ui-ico-sm");
@@ -2257,7 +2306,7 @@
     mountGlobalTaskDrawer();
     mountCommandPalette();
     mountGlobalNavTree();
-    mountWorkflowNextStrip();
+    mountCompactCommandActionHub();
     mountSidebarSplitter();
     enhanceSchemeRail();
     bindGlobalShortcuts();
