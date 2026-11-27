@@ -4,12 +4,84 @@
   const DEFAULT_THEME = "precision-dark";
 
   const THEMES = [
-    { id: "precision-dark", label: "精密暗黑", dark: true },
-    { id: "minimalist-light", label: "极简明亮", dark: false },
-    { id: "sci-fi-cyan", label: "科幻 · 电光青", dark: true },
-    { id: "sci-fi-purple", label: "科幻 · 赛博紫", dark: true },
-    { id: "sci-fi-matrix", label: "科幻 · 矩阵绿", dark: true },
+    { id: "precision-dark", label: "极光幻境", dark: true },
+    { id: "minimalist-light", label: "冰川月白", dark: false },
+    { id: "sci-fi-cyan", label: "星海冰青", dark: true },
+    { id: "sci-fi-purple", label: "紫霞星云", dark: true },
+    { id: "sci-fi-matrix", label: "翠雾极光", dark: true },
   ];
+
+  /** 全站统一高可读线性微发光 SVG 图标库（16×16/24×24 圆润线条） */
+  const UI_ICONS = {
+    home: '<path d="M3 10.5L12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/><path d="M9.5 20v-5.5h5V20"/>',
+    screen: '<rect x="2.5" y="3.5" width="19" height="13" rx="3"/><path d="M8 20.5h8"/><path d="M12 16.5v4"/><path d="M6.5 11.5l3-3 2.5 2.2 4.5-4.2"/>',
+    sliders: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/>',
+    cpu: '<rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2.5V6M15 2.5V6M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/><path d="M10 12h4"/>',
+    chart: '<path d="M4 19.5h16"/><rect x="6" y="11" width="3" height="6" rx="1"/><rect x="10.5" y="7" width="3" height="10" rx="1"/><rect x="15" y="4.5" width="3" height="12.5" rx="1"/>',
+    shield: '<path d="M12 3l7 3v5.5c0 4.6-3 8.1-7 9.5-4-1.4-7-4.9-7-9.5V6l7-3z"/><path d="M9.2 12.2l2 2 3.8-4"/>',
+    wave: '<path d="M2.5 12h3.2l2.3-6 3.2 12 2.6-8 1.9 2h5.8"/>',
+    compare: '<rect x="3" y="4" width="7.5" height="16" rx="2"/><rect x="13.5" y="4" width="7.5" height="16" rx="2"/><path d="M6.5 9h1M6.5 13h1M17 9h1M17 13h1"/>',
+    sweep: '<path d="M4 17c2.5-6 6-10 16-11"/><path d="M4 12c3-3 7-5 16-5.5"/><circle cx="10" cy="10.2" r="2"/><circle cx="16.5" cy="6.5" r="2"/>',
+    report: '<path d="M6.5 3.5h8L19 8v12.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 20.5V5a1.5 1.5 0 0 1 1.5-1.5z"/><path d="M14 3.5V8.5h5"/><path d="M8.5 12.5h7M8.5 16h5"/>',
+    tasks: '<rect x="4" y="4" width="16" height="4.5" rx="1.5"/><rect x="4" y="10" width="16" height="4.5" rx="1.5"/><rect x="4" y="16" width="10" height="4.5" rx="1.5"/><circle cx="18" cy="18.2" r="2"/>',
+    users: '<circle cx="9.5" cy="8" r="3"/><path d="M3.5 19c0-3 2.7-5 6-5s6 2 6 5"/><circle cx="16.8" cy="9" r="2.2"/><path d="M16.5 14.3c2.2.4 4 1.9 4 4.2"/>',
+    topology: '<circle cx="5.5" cy="6" r="2.3"/><circle cx="18.5" cy="6" r="2.3"/><circle cx="12" cy="18" r="2.5"/><path d="M7.8 6h8.4M6.8 8l4 7.8M17.2 8l-4 7.8"/>',
+    play: '<polygon points="6.5,4.5 19.5,12 6.5,19.5"/>',
+    pause: '<rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/>',
+    queue: '<path d="M4 6.5h11M4 12h11M4 17.5h7"/><path d="M17.5 13v6M14.5 16h6"/>',
+    stop: '<rect x="5.5" y="5.5" width="13" height="13" rx="2.5"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    copy: '<rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M5.5 15.5H5a1.5 1.5 0 0 1-1.5-1.5V5A1.5 1.5 0 0 1 5 3.5h9A1.5 1.5 0 0 1 15.5 5v.5"/>',
+    edit: '<path d="M4 20h4l10.5-10.5a2 2 0 0 0-2.8-2.8L5.2 17.2 4 20z"/>',
+    save: '<path d="M5 4h11l3 3v12.5a1.5 1.5 0 0 1-1.5 1.5h-12A1.5 1.5 0 0 1 4 19.5v-14A1.5 1.5 0 0 1 5 4z"/><path d="M8 4v5h7V4"/><rect x="8" y="13.5" width="8" height="7" rx="1"/>',
+    trash: '<path d="M4 6.5h16"/><path d="M9.5 3.5h5"/><path d="M6.5 6.5l1 13a1.5 1.5 0 0 0 1.5 1.5h6a1.5 1.5 0 0 0 1.5-1.5l1-13"/><path d="M10 10.5v6M14 10.5v6"/>',
+    upload: '<path d="M12 15.5V4.5"/><path d="M7.5 9L12 4.5 16.5 9"/><path d="M4 16.5v2A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-2"/>',
+    download: '<path d="M12 4.5v11"/><path d="M7.5 11.5L12 16l4.5-4.5"/><path d="M4 16.5v2A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-2"/>',
+    share: '<circle cx="18" cy="5.5" r="2.3"/><circle cx="6" cy="12" r="2.3"/><circle cx="18" cy="18.5" r="2.3"/><path d="M8.1 10.9l7.8-4.3M8.1 13.1l7.8 4.3"/>',
+    refresh: '<path d="M20 6v5h-5"/><path d="M19.2 14.5A7.5 7.5 0 1 1 17.6 6.8L20 11"/>',
+    reset: '<path d="M4 7v5h5"/><path d="M5 12a7.2 7.2 0 1 0 2.1-5.1L4 12"/>',
+    sparkles: '<path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3z"/><path d="M18.5 16l.8 2.2L21.5 19l-2.2.8-.8 2.2-.8-2.2L15.5 19l2.2-.8.8-2.2z"/>',
+    thermometer: '<path d="M14 14.5V5a2 2 0 0 0-4 0v9.5a3.5 3.5 0 1 0 4 0z"/><path d="M12 11v4.5"/>',
+    snowflake: '<path d="M12 2.5v19M3.8 7.2l16.4 9.6M20.2 7.2L3.8 16.8"/><path d="M9.5 4.5L12 6.8l2.5-2.3M9.5 19.5L12 17.2l2.5 2.3"/>',
+    wind: '<path d="M3 8.5h11.5a2.5 2.5 0 1 0-2.5-2.5"/><path d="M3 13h15a2.5 2.5 0 1 1-2.5 2.5"/><path d="M3 17.5h8.5a2 2 0 1 1-2 2"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8"/>',
+    moon: '<path d="M19.5 14.8A7.8 7.8 0 0 1 9.2 4.5a7.8 7.8 0 1 0 10.3 10.3z"/>',
+    storm: '<path d="M6.5 16.5H18a3.5 3.5 0 0 0 .5-6.9A5.2 5.2 0 0 0 8.2 8 3.8 3.8 0 0 0 6.5 16.5z"/><path d="M12.5 13l-2 4.5h3l-1.5 4"/>',
+    snowcloud: '<path d="M6.5 15H18a3.5 3.5 0 0 0 .5-6.9A5.2 5.2 0 0 0 8.2 6.5 3.8 3.8 0 0 0 6.5 15z"/><path d="M8.5 18.5h.01M12 19.5h.01M15.5 18.5h.01"/>',
+    battery: '<rect x="3" y="7" width="16" height="10" rx="2.2"/><path d="M21 10.5v3"/><path d="M7 10.5v3M10.5 10.5v3"/>',
+    flame: '<path d="M12.5 3.2c.4 3.4-2.8 4.8-2.8 8.3a3.8 3.8 0 0 0 7.6 0c0-3.2-2.2-5.4-4.8-8.3z"/><path d="M12 14.5a1.8 1.8 0 0 1 1.8 1.8"/>',
+    bolt: '<path d="M13 2.5L5.5 13h5.5l-1 8.5L18.5 11H13l0-8.5z"/>',
+    leaf: '<path d="M5 19C5 10.5 10.5 5 19.5 4.5c-.5 9-6 14.5-14.5 14.5z"/><path d="M5 19l8.5-8.5"/>',
+    coin: '<circle cx="12" cy="12" r="8.5"/><path d="M9.5 9.5h5M9.5 13h5M12 7.5v9"/>',
+    check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.5 12.2l2.4 2.4 4.8-4.8"/>',
+    alert: '<path d="M12 3.5L21 19.5H3L12 3.5z"/><path d="M12 9.5v4.5"/><path d="M12 17h.01"/>',
+    logs: '<path d="M5 6h14M5 11h10M5 16h14"/><circle cx="18.5" cy="11" r="1.5"/>',
+    expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+    search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/>',
+    compass: '<circle cx="12" cy="12" r="8.5"/><polygon points="15.5,8.5 13.4,13.4 8.5,15.5 10.6,10.6"/>',
+  };
+
+  function renderIcon(name, extraClass = "") {
+    const body = UI_ICONS[name];
+    if (!body) return "";
+    const cls = extraClass ? `ui-ico ${extraClass}` : "ui-ico";
+    return `<span class="${cls}" aria-hidden="true"><svg viewBox="0 0 24 24">${body}</svg></span>`;
+  }
+
+  const PAGE_ICON_MAP = {
+    "index.html": "home",
+    "scada.html": "screen",
+    "planning.html": "sliders",
+    "optimize.html": "cpu",
+    "evaluation.html": "chart",
+    "reliability.html": "shield",
+    "frequency.html": "wave",
+    "comparison.html": "compare",
+    "sensitivity.html": "sweep",
+    "report.html": "report",
+    "tasks.html": "tasks",
+    "users.html": "users",
+  };
 
   const LEGACY_THEME_MAP = {
     bright: "minimalist-light",
@@ -399,31 +471,153 @@
       }
     }
 
-    // 注入主题切换器
-    if (!document.getElementById("themeSelect")) {
-      const themeWrap = document.createElement("label");
-      themeWrap.className = "theme-switch";
-      themeWrap.setAttribute("title", tr("显示主题"));
-      themeWrap.innerHTML =
-        `<svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path></svg>` +
-        `<select id="themeSelect" class="topbar-select" aria-label="显示主题">${THEMES.map(
-          (item) => `<option value="${item.id}">${item.label}</option>`,
-        ).join("")}</select>`;
-      const firstChild = utilities.firstChild;
-      utilities.insertBefore(themeWrap, firstChild);
+    // 整合「主题切换 + 语言切换」为 1 个超紧凑柔光图标按钮 + 琉璃浮层，释放顶栏宽度
+    const THEME_SWATCHES = {
+      "precision-dark": "linear-gradient(135deg,#67E8F9,#A78BFA)",
+      "minimalist-light": "linear-gradient(135deg,#E0F2FE,#38BDF8)",
+      "sci-fi-cyan": "linear-gradient(135deg,#22D3EE,#818CF8)",
+      "sci-fi-purple": "linear-gradient(135deg,#D8B4FE,#F472B6)",
+      "sci-fi-matrix": "linear-gradient(135deg,#5EEAD4,#34D399)",
+    };
+    const LANG_OPTIONS = [
+      { code: "zh-CN", short: "中文", label: "中文" },
+      { code: "en-US", short: "EN", label: "English" },
+      { code: "ru-RU", short: "RU", label: "Русский" },
+    ];
 
-      const select = themeWrap.querySelector("select");
-      select.value = getTheme();
-      select.addEventListener("change", (event) => setTheme(event.target.value));
+    if (!utilities.querySelector(".ui-pref-host")) {
+      const prefHost = document.createElement("div");
+      prefHost.className = "ui-pref-host";
+
+      const trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.id = "uiPrefTrigger";
+      trigger.className = "ui-pref-trigger";
+      trigger.setAttribute("aria-haspopup", "true");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.setAttribute("aria-label", tr("外观与语言"));
+      trigger.innerHTML = `<svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3.6 9h16.8M3.6 15h16.8M12 3a13.5 13.5 0 0 1 0 18M12 3a13.5 13.5 0 0 0 0 18"/></svg>`;
+
+      const popover = document.createElement("div");
+      popover.className = "ui-pref-popover";
+      popover.setAttribute("role", "dialog");
+      popover.setAttribute("aria-label", tr("外观与语言"));
+
+      // 保留原生 select 供全站既有脚本读写与监听（视觉隐藏）
+      const themeSel = document.getElementById("themeSelect") || document.createElement("select");
+      themeSel.id = "themeSelect";
+      themeSel.className = "ui-sr-select";
+      themeSel.setAttribute("aria-label", tr("显示主题"));
+      if (!themeSel.options.length) {
+        themeSel.innerHTML = THEMES.map((item) => `<option value="${item.id}">${item.label}</option>`).join("");
+      }
+      themeSel.value = getTheme();
+
+      const existingLangWrap = topbar.querySelector(".language-switch") || document.querySelector(".language-switch");
+      let langSel = document.getElementById("languageSelect");
+      if (!langSel) {
+        langSel = document.createElement("select");
+        langSel.id = "languageSelect";
+        langSel.setAttribute("aria-label", "Language");
+        langSel.innerHTML = LANG_OPTIONS.map((item) => `<option value="${item.code}">${item.label}</option>`).join("");
+        langSel.value = window.PowerPlanI18n?.currentLanguage?.() || "zh-CN";
+        langSel.addEventListener("change", (ev) => {
+          window.PowerPlanI18n?.setLanguage?.(ev.target.value);
+        });
+      }
+      langSel.className = "ui-sr-select";
+      if (existingLangWrap) existingLangWrap.remove();
+
+      popover.innerHTML = `
+        <div class="ui-pref-section">
+          <div class="ui-pref-head">${renderIcon("sparkles", "ui-ico-sm ui-ico-accent")}<span>${tr("显示主题")}</span></div>
+          <div class="ui-pref-theme-grid">
+            ${THEMES.map(
+              (item) => `<button type="button" class="ui-pref-chip" data-pref-theme="${item.id}"><i class="ui-pref-dot" style="background:${THEME_SWATCHES[item.id] || "var(--accent)"}"></i><span>${tr(item.label)}</span></button>`,
+            ).join("")}
+          </div>
+        </div>
+        <div class="ui-pref-section">
+          <div class="ui-pref-head">${renderIcon("compass", "ui-ico-sm ui-ico-aurora")}<span>${tr("语言")}</span></div>
+          <div class="ui-pref-lang-row">
+            ${LANG_OPTIONS.map(
+              (item) => `<button type="button" class="ui-pref-lang-btn" data-pref-lang="${item.code}">${item.short}</button>`,
+            ).join("")}
+          </div>
+        </div>
+      `;
+      popover.append(themeSel, langSel);
+      prefHost.append(trigger, popover);
+
+      const userStatusNode = utilities.querySelector(".user-status");
+      if (userStatusNode) utilities.insertBefore(prefHost, userStatusNode);
+      else utilities.appendChild(prefHost);
+
+      const syncPrefUi = () => {
+        const curTheme = getTheme();
+        const curLang = window.PowerPlanI18n?.currentLanguage?.() || langSel.value || "zh-CN";
+        const themeObj = THEMES.find((t) => t.id === curTheme) || THEMES[0];
+        const langObj = LANG_OPTIONS.find((l) => l.code === curLang) || LANG_OPTIONS[0];
+        themeSel.value = curTheme;
+        langSel.value = curLang;
+        trigger.setAttribute("title", `${tr(themeObj.label)} · ${langObj.short}`);
+        popover.querySelectorAll("[data-pref-theme]").forEach((btn) => {
+          const act = btn.dataset.prefTheme === curTheme;
+          btn.classList.toggle("active", act);
+          btn.setAttribute("aria-pressed", String(act));
+        });
+        popover.querySelectorAll("[data-pref-lang]").forEach((btn) => {
+          const act = btn.dataset.prefLang === curLang;
+          btn.classList.toggle("active", act);
+          btn.setAttribute("aria-pressed", String(act));
+        });
+      };
+
+      const setOpen = (open) => {
+        prefHost.classList.toggle("is-open", open);
+        trigger.setAttribute("aria-expanded", String(open));
+        if (open) syncPrefUi();
+      };
+
+      trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setOpen(!prefHost.classList.contains("is-open"));
+      });
+      popover.addEventListener("click", (event) => {
+        const themeBtn = event.target.closest("[data-pref-theme]");
+        if (themeBtn) {
+          setTheme(themeBtn.dataset.prefTheme);
+          syncPrefUi();
+          return;
+        }
+        const langBtn = event.target.closest("[data-pref-lang]");
+        if (langBtn) {
+          const code = langBtn.dataset.prefLang;
+          langSel.value = code;
+          if (window.PowerPlanI18n?.setLanguage) {
+            window.PowerPlanI18n.setLanguage(code);
+          }
+          langSel.dispatchEvent(new Event("change", { bubbles: true }));
+          syncPrefUi();
+        }
+      });
+      themeSel.addEventListener("change", (event) => {
+        setTheme(event.target.value);
+        syncPrefUi();
+      });
+      window.addEventListener("powerplan:themechange", syncPrefUi);
+      window.addEventListener("powerplan:langchange", syncPrefUi);
+      document.addEventListener("click", (event) => {
+        if (!prefHost.contains(event.target)) setOpen(false);
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") setOpen(false);
+      });
+
+      syncPrefUi();
     }
 
-    // 如果语言切换器已由 i18n.js 插入，将其归位到工具容器内保持整齐对齐
-    const langWrap = topbar.querySelector(".language-switch");
     const userStatus = utilities.querySelector(".user-status");
-    if (langWrap && langWrap.parentElement !== utilities) {
-      if (userStatus) utilities.insertBefore(langWrap, userStatus);
-      else utilities.appendChild(langWrap);
-    }
 
     // 确保管理员在任意子页面都能一键访问用户管理，并将用户区折叠为“用户名胶囊 + 悬停/点击浮层菜单”
     if (userStatus) {
@@ -1809,7 +2003,8 @@
               ${visibleItems
                 .map((it) => {
                   const active = it.page === curFile;
-                  return `<li><a class="nav-tree-link${active ? " is-active" : ""}" href="${buildHref(it)}"${active ? ' aria-current="page"' : ""} title="${tr(it.label)}"><span class="nav-tree-dot" aria-hidden="true"></span><span>${tr(it.label)}</span></a></li>`;
+                  const icoName = PAGE_ICON_MAP[it.page] || "compass";
+                  return `<li><a class="nav-tree-link${active ? " is-active" : ""}" href="${buildHref(it)}"${active ? ' aria-current="page"' : ""} title="${tr(it.label)}">${renderIcon(icoName, "ui-ico-sm")}<span>${tr(it.label)}</span></a></li>`;
                 })
                 .join("")}
             </ul>
@@ -1835,6 +2030,17 @@
     `;
 
     document.body.append(edgeCue, aside);
+
+    // 动态同步顶栏实际高度，保证左栏始终严格位于通栏顶栏正下方，不遮挡不挤压顶栏
+    const syncNavTreeTopOffset = () => {
+      const bar = document.querySelector(".scada-topbar, .topbar");
+      const h = bar ? Math.round(bar.getBoundingClientRect().height) : 44;
+      if (h > 0) {
+        document.documentElement.style.setProperty("--nav-tree-top", `${h}px`);
+      }
+    };
+    syncNavTreeTopOffset();
+    window.addEventListener("resize", syncNavTreeTopOffset);
 
     const triggerLayoutResize = () => {
       window.setTimeout(() => window.dispatchEvent(new Event("resize")), 210);
@@ -1981,6 +2187,67 @@
     };
   }
 
+  /** 全站图标自动增强引擎：为顶栏、高频按钮、结果分页与流转链接自动注入统一矢量图标 */
+  function enhanceIconicUI() {
+    const injectIcon = (el, iconName, extraClass = "ui-ico-sm") => {
+      if (!el || !iconName || !UI_ICONS[iconName]) return;
+      if (el.querySelector(".ui-ico, svg")) return;
+      el.insertAdjacentHTML("afterbegin", renderIcon(iconName, extraClass));
+    };
+
+    // 1. 顶栏导航 & 快捷流转链接：按目标页面自动挂载页面图标
+    document.querySelectorAll(".topbar a[href], .topnav a[href], .workflow-next-strip a[href], .scada-nav-link[href], .scada-mini-link[href]").forEach((a) => {
+      const href = String(a.getAttribute("href") || "").split("?")[0].split("/").pop().toLowerCase();
+      if (PAGE_ICON_MAP[href]) {
+        injectIcon(a, PAGE_ICON_MAP[href], "ui-ico-sm");
+      }
+    });
+
+    // 2. 全站高频操作按钮与结果分页：按语义规则挂载高可读线性图标
+    const TEXT_ICON_RULES = [
+      [/^(启动|开始|运行|播放|Run|Start)/i, "play", "ui-ico-sm ui-ico-accent"],
+      [/^(暂停|Pause)/i, "pause", "ui-ico-sm ui-ico-warn"],
+      [/^(排队|加入队列|Queue)/i, "queue", "ui-ico-sm ui-ico-warn"],
+      [/^(停止|中止|Stop)/i, "stop", "ui-ico-sm ui-ico-danger"],
+      [/^(新建|新增|添加|New|Add)/i, "plus", "ui-ico-sm ui-ico-accent"],
+      [/^(保存|Save)/i, "save", "ui-ico-sm ui-ico-ok"],
+      [/^(复制|Copy)/i, "copy", "ui-ico-sm"],
+      [/^(修改名称|重命名|Rename)/i, "edit", "ui-ico-sm"],
+      [/^(删除|清理|清空|Delete|Clear)/i, "trash", "ui-ico-sm ui-ico-danger"],
+      [/^(导入|Import)/i, "upload", "ui-ico-sm"],
+      [/^(导出|下载|打印|Export|Print)/i, "download", "ui-ico-sm"],
+      [/^(分享|Share)/i, "share", "ui-ico-sm ui-ico-aurora"],
+      [/^(刷新|Refresh)/i, "refresh", "ui-ico-sm"],
+      [/^(重置|Reset)/i, "reset", "ui-ico-sm"],
+      [/^(生成工况方案|生成并排队|生成|Create)/i, "sparkles", "ui-ico-sm ui-ico-accent"],
+      [/^(潮流接线图|Power Flow)/i, "topology", "ui-ico-sm ui-ico-accent"],
+      [/^(结果概览|概览|Overview)/i, "chart", "ui-ico-sm"],
+      [/^(经济性|经济|成本|Cost|Econ)/i, "coin", "ui-ico-sm ui-ico-warn"],
+      [/^(安全性|可靠|Safety|Reliab)/i, "shield", "ui-ico-sm ui-ico-ok"],
+      [/^(曲线|频率|Curve|Freq)/i, "wave", "ui-ico-sm ui-ico-accent"],
+      [/^(工程洞察|洞察|Insight)/i, "sparkles", "ui-ico-sm ui-ico-aurora"],
+      [/^(运行日志|日志|Log)/i, "logs", "ui-ico-sm"],
+      [/^(对比|加入对比|深度对比|Compare)/i, "compare", "ui-ico-sm ui-ico-aurora"],
+      [/^(扫参|批量扫参|Sweep)/i, "sweep", "ui-ico-sm ui-ico-accent"],
+      [/^(简报|综合简报|Report)/i, "report", "ui-ico-sm"],
+      [/^(南极气象|气象|Weather)/i, "snowflake", "ui-ico-sm ui-ico-accent"],
+      [/^(规划配置与年流)/i, "topology", "ui-ico-sm"],
+      [/^(典型日校核)/i, "sun", "ui-ico-sm"],
+    ];
+
+    document.querySelectorAll("button:not(.nav-tree-group-head):not(.nav-tree-hide-btn):not(.ui-toast-close)").forEach((btn) => {
+      if (btn.closest("td")) return; // 严禁干扰表格单元格内嵌控件
+      const label = (btn.textContent || "").trim();
+      if (!label) return;
+      for (const [re, iconName, cls] of TEXT_ICON_RULES) {
+        if (re.test(label)) {
+          injectIcon(btn, iconName, cls);
+          break;
+        }
+      }
+    });
+  }
+
   /** 立即在脚本加载时预设主题，消除首屏闪烁 */
   setTheme(getTheme(), { silent: true });
 
@@ -1994,10 +2261,13 @@
     mountSidebarSplitter();
     enhanceSchemeRail();
     bindGlobalShortcuts();
+    enhanceIconicUI();
   }
 
   window.PowerPlanUI = {
     THEMES,
+    UI_ICONS,
+    icon: renderIcon,
     getTheme,
     setTheme,
     isDarkTheme,
@@ -2008,6 +2278,7 @@
     prompt: promptDialog,
     alert: (message, options = {}) => toast(message, options),
     mountTopbarUtilities,
+    enhanceIconicUI,
     fetchJson,
     clearClientCache,
     renderSkeleton,

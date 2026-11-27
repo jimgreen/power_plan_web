@@ -1276,21 +1276,21 @@
       const dark = window.PowerPlanUI?.isDarkTheme?.() ?? true;
       const p = getPalette();
       const pal = {
-        wind: p.wind || (dark ? "#38BDF8" : "#0284C7"),
-        solar: p.solar || (dark ? "#FBBF24" : "#D97706"),
-        bess: p.storage || (dark ? "#2DD4BF" : "#0D9488"),
-        h2: p.hydrogen || (dark ? "#A78BFA" : "#7C3AED"),
-        diesel: p.diesel || (dark ? "#FB7185" : "#DC2626"),
-        load: p.load || (dark ? "#34D399" : "#059669"),
-        warn: dark ? "#FBBF24" : "#D97706",
-        busAc: dark ? "#38BDF8" : "#2563EB",
-        busDc: dark ? "#A78BFA" : "#7C3AED",
-        nodeFill: dark ? "#111827" : "#FFFFFF",
-        nodeFillAlt: dark ? "#162032" : "#F1F5F9",
-        nodeBorder: dark ? "rgba(148,163,184,0.32)" : "#CBD5E1",
-        pillBg: dark ? "rgba(15,23,42,0.92)" : "rgba(255,255,255,0.95)",
-        text: dark ? "#F8FAFC" : "#0F172A",
-        muted: dark ? "#94A3B8" : "#64748B",
+        wind: dark ? "#67E8F9" : "#0284C7",
+        solar: dark ? "#FCD34D" : "#D97706",
+        bess: dark ? "#5EEAD4" : "#0D9488",
+        h2: dark ? "#C4B5FD" : "#7C3AED",
+        diesel: dark ? "#FDA4AF" : "#E11D48",
+        load: dark ? "#6EE7B7" : "#059669",
+        warn: dark ? "#FCD34D" : "#D97706",
+        busAc: dark ? "#67E8F9" : "#0284C7",
+        busDc: dark ? "#C4B5FD" : "#7C3AED",
+        nodeFill: dark ? "rgba(15, 26, 52, 0.84)" : "rgba(255, 255, 255, 0.90)",
+        nodeFillAlt: dark ? "rgba(20, 34, 66, 0.86)" : "rgba(241, 248, 255, 0.94)",
+        nodeBorder: dark ? "rgba(165, 216, 255, 0.24)" : "rgba(125, 165, 204, 0.48)",
+        pillBg: dark ? "rgba(10, 19, 42, 0.88)" : "rgba(255, 255, 255, 0.94)",
+        text: dark ? "#F1F7FF" : "#10243E",
+        muted: dark ? "#9CB6D4" : "#5B7694",
       };
 
       const isTyp = localState.mode === "typical" && typicalDays.length > 0;
@@ -1358,14 +1358,14 @@
         const sel = localState.selectedNode === id;
         return `
           <g class="topo-node${sel ? " is-selected" : ""}" data-topo-node="${id}" transform="translate(${x}, ${y})">
-            <rect class="topo-node-box" width="${w}" height="${ch}" rx="8" fill="${pal.nodeFill}" stroke="${sel ? accent : pal.nodeBorder}" stroke-width="${sel ? 2.2 : 1.2}"/>
-            <rect x="0" y="0" width="${w}" height="4" rx="2" fill="${active ? accent : pal.nodeBorder}"/>
-            <circle cx="${w - 13}" cy="17" r="3.8" fill="${active ? accent : pal.muted}"/>
-            <g transform="translate(10, 12)">${icon}</g>
-            <text x="42" y="21" fill="${pal.text}" font-size="12.5" font-weight="700">${escapeHtml(title)}</text>
-            <text x="42" y="34" fill="${pal.muted}" font-size="9.5" font-family="var(--font-mono)">${escapeHtml(code)}</text>
-            <text x="12" y="${ch - 24}" fill="${active ? accent : pal.muted}" font-size="${main.length > 13 ? "13.5" : "15.5"}" font-weight="700" font-family="var(--font-mono)">${escapeHtml(main)}</text>
-            <text x="12" y="${ch - 9}" fill="${pal.muted}" font-size="10" font-family="var(--font-mono)">${escapeHtml(sub)}</text>
+            <rect class="topo-node-box" width="${w}" height="${ch}" rx="14" fill="${pal.nodeFill}" stroke="${sel ? accent : pal.nodeBorder}" stroke-width="${sel ? 2 : 1.15}"/>
+            <rect x="14" y="1" width="${w - 28}" height="2.8" rx="1.4" fill="${active ? accent : pal.nodeBorder}" opacity="${active ? "0.92" : "0.45"}"/>
+            <circle cx="${w - 14}" cy="18" r="3.6" fill="${active ? accent : pal.muted}" opacity="${active ? "0.95" : "0.5"}"/>
+            <g transform="translate(11, 13)">${icon}</g>
+            <text x="43" y="22" fill="${pal.text}" font-size="12.5" font-weight="600">${escapeHtml(title)}</text>
+            <text x="43" y="35" fill="${pal.muted}" font-size="9.5" font-family="var(--font-mono)">${escapeHtml(code)}</text>
+            <text x="14" y="${ch - 24}" fill="${active ? accent : pal.muted}" font-size="${main.length > 13 ? "13.5" : "15.5"}" font-weight="700" font-family="var(--font-mono)">${escapeHtml(main)}</text>
+            <text x="14" y="${ch - 9}" fill="${pal.muted}" font-size="10" font-family="var(--font-mono)">${escapeHtml(sub)}</text>
           </g>`;
       };
 
@@ -1383,6 +1383,18 @@
         : `AC 交流汇流母线 · ${tr("年度能量平衡")} · ${Number.isFinite(fMin) ? `${fMin.toFixed(2)}–${fMax.toFixed(2)} Hz` : "50 Hz"}`;
 
       svg.innerHTML = `
+        <defs>
+          <linearGradient id="topoAcGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="${pal.wind}" stop-opacity="0.72"/>
+            <stop offset="50%" stop-color="${pal.busAc}" stop-opacity="0.96"/>
+            <stop offset="100%" stop-color="${pal.load}" stop-opacity="0.78"/>
+          </linearGradient>
+          <linearGradient id="topoDcGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="${pal.solar}" stop-opacity="0.72"/>
+            <stop offset="50%" stop-color="${pal.busDc}" stop-opacity="0.94"/>
+            <stop offset="100%" stop-color="${pal.bess}" stop-opacity="0.80"/>
+          </linearGradient>
+        </defs>
         ${branch({ d: "M150,104 L150,162", val: fWind, color: pal.wind, lx: 150, ly: 132, txt: `${fWind.toFixed(1)} ${unitFlow}` })}
         ${branch({ d: "M460,104 L460,162", val: fDiesel, color: pal.diesel, lx: 460, ly: 132, txt: `${fDiesel.toFixed(1)} ${unitFlow}` })}
         ${branch({ d: "M770,162 L770,104", val: fLoad, color: pal.load, lx: 770, ly: 132, txt: `${fLoad.toFixed(1)} ${unitFlow}` })}
@@ -1392,21 +1404,21 @@
         ${branch({ d: "M460,322 L460,278", val: fBess, color: fBess >= 0 ? pal.bess : pal.busAc, rev: fBess < 0, lx: 460, ly: 300, txt: isTyp ? `${fBess >= 0 ? "+" : ""}${fBess.toFixed(1)} kW` : `${stDisMwh.toFixed(1)} MWh` })}
         ${branch({ d: "M730,322 L730,278", val: fH2, color: pal.h2, rev: fH2 < 0, lx: 730, ly: 300, txt: isTyp ? `${fH2 >= 0 ? "+" : ""}${fH2.toFixed(1)} kW` : `${(fcOutMwh + h2InMwh).toFixed(1)} MWh` })}
 
-        <rect x="64" y="158" width="780" height="8" rx="4" fill="${pal.busAc}" opacity="0.86"/>
-        <text x="72" y="152" fill="${pal.busAc}" font-size="10.5" font-weight="700" font-family="var(--font-mono)">${escapeHtml(acTitle)}</text>
-        <rect x="128" y="274" width="664" height="7" rx="3.5" fill="${pal.busDc}" opacity="0.84"/>
-        <text x="134" y="268" fill="${pal.busDc}" font-size="10.5" font-weight="700" font-family="var(--font-mono)">DC ${escapeHtml(tr("直流汇流母线"))} · 750V DC</text>
+        <rect x="64" y="158" width="780" height="7" rx="3.5" fill="url(#topoAcGrad)"/>
+        <text x="72" y="151" fill="${pal.busAc}" font-size="10.5" font-weight="600" font-family="var(--font-mono)">${escapeHtml(acTitle)}</text>
+        <rect x="128" y="274" width="664" height="6.5" rx="3.25" fill="url(#topoDcGrad)"/>
+        <text x="134" y="267" fill="${pal.busDc}" font-size="10.5" font-weight="600" font-family="var(--font-mono)">DC ${escapeHtml(tr("直流汇流母线"))} · 750V DC</text>
 
         <g transform="translate(422, 198)">
-          <rect width="76" height="44" rx="6" fill="${pal.nodeFillAlt}" stroke="${pal.busAc}" stroke-width="1.6"/>
-          <line x1="6" y1="38" x2="70" y2="6" stroke="${pal.nodeBorder}" stroke-width="1"/>
+          <rect width="76" height="44" rx="11" fill="${pal.nodeFillAlt}" stroke="${pal.busAc}" stroke-width="1.4"/>
+          <line x1="10" y1="36" x2="66" y2="8" stroke="${pal.nodeBorder}" stroke-width="1"/>
           <text x="14" y="18" fill="${pal.busAc}" font-size="10" font-weight="700" font-family="var(--font-mono)">AC</text>
           <text x="48" y="34" fill="${pal.busDc}" font-size="10" font-weight="700" font-family="var(--font-mono)">DC</text>
           <text x="38" y="56" text-anchor="middle" fill="${pal.muted}" font-size="9.5" font-family="var(--font-mono)">PCS</text>
         </g>
 
         <g transform="translate(838, 242)">
-          <rect width="76" height="34" rx="5" fill="${pal.nodeFillAlt}" stroke="${fCurt > 0.05 ? pal.warn : pal.nodeBorder}"/>
+          <rect width="76" height="34" rx="10" fill="${pal.nodeFillAlt}" stroke="${fCurt > 0.05 ? pal.warn : pal.nodeBorder}"/>
           <text x="38" y="14" text-anchor="middle" fill="${pal.muted}" font-size="9.5">${escapeHtml(isTyp ? tr("时段弃电") : tr("年度弃电"))}</text>
           <text x="38" y="27" text-anchor="middle" fill="${fCurt > 0.05 ? pal.warn : pal.muted}" font-size="10.5" font-weight="700" font-family="var(--font-mono)">${fCurt.toFixed(1)} ${unitFlow}</text>
         </g>

@@ -10,7 +10,9 @@ body.scada-body {
   height: 100vh;
   overflow: hidden;
   font-size: 13px;
-  background: var(--bg-canvas);
+  background-color: var(--bg-canvas);
+  background-image: var(--bg-canvas-grid);
+  background-size: var(--bg-canvas-size, 100% 100%);
   color: var(--text-primary);
 }
 
@@ -20,20 +22,22 @@ body.scada-body {
   height: 100vh;
   min-height: 0;
   overflow: hidden;
-  background: var(--bg-canvas);
+  background: transparent;
 }
 
-/* 顶栏（40px 单行高密度） */
+/* 顶栏（40px 单行柔光琉璃） */
 .scada-topbar {
   flex: 0 0 auto;
   height: 40px;
   min-height: 40px;
-  padding: 0 10px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   gap: 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-color);
   background: var(--bg-surface);
+  backdrop-filter: var(--glass-blur, blur(14px) saturate(135%));
+  -webkit-backdrop-filter: var(--glass-blur, blur(14px) saturate(135%));
   z-index: 30;
 }
 
@@ -170,10 +174,10 @@ html[data-theme] .scada-topbar .scada-brand,
 
 .scada-kpi-item {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 5px;
-  padding: 0 12px;
-  border-right: 1px solid var(--border);
+  padding: 0 11px;
+  border-right: 1px solid var(--border-color);
   white-space: nowrap;
 }
 
@@ -187,6 +191,9 @@ html[data-theme] .scada-topbar .scada-brand,
 }
 
 .scada-kpi-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11.5px;
   color: var(--text-secondary);
 }
@@ -197,6 +204,11 @@ html[data-theme] .scada-topbar .scada-brand,
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
+  text-shadow: 0 0 12px rgba(103, 232, 249, 0.14);
+}
+
+[data-theme="minimalist-light"] .scada-kpi-item strong {
+  text-shadow: none;
 }
 
 .scada-kpi-unit {
@@ -206,41 +218,42 @@ html[data-theme] .scada-topbar .scada-brand,
 }
 
 .scada-kpi-alarm.has-risk strong {
-  color: var(--danger, #FB7185);
+  color: var(--danger, #FDA4AF);
 }
 
 .scada-kpi-alarm.has-warn strong {
-  color: var(--warn, #FBBF24);
+  color: var(--warn, #FCD34D);
 }
 
 /* 主三栏 100vh 网格工作区 */
 .scada-workspace {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 6px;
+  padding: 7px 8px;
   display: grid;
   grid-template-columns: 268px minmax(0, 1fr) 292px;
-  gap: 6px;
+  gap: 7px;
   overflow: hidden;
 }
 
 .scada-col {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-width: 0;
   min-height: 0;
 }
 
 .scada-panel {
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-card, 13px);
+  padding: 7px 9px;
   display: flex;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  box-shadow: var(--shadow-card);
 }
 
 .scada-panel-head {
@@ -522,13 +535,15 @@ html[data-theme] .scada-topbar .scada-brand,
   flex: 1 1 auto;
   min-height: 0;
   position: relative;
-  border-radius: 6px;
-  border: 1px solid var(--border);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
   background-color: var(--bg-input, var(--bg-canvas));
   background-image:
-    linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
-  background-size: 24px 24px;
+    radial-gradient(ellipse 68% 58% at 50% 48%, rgba(103, 232, 249, 0.11), transparent 72%),
+    radial-gradient(ellipse 46% 42% at 16% 84%, rgba(196, 181, 253, 0.10), transparent 68%),
+    radial-gradient(ellipse 44% 38% at 86% 16%, rgba(94, 234, 212, 0.08), transparent 66%),
+    radial-gradient(rgba(186, 230, 253, 0.16) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 100% 100%, 26px 26px;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -536,10 +551,12 @@ html[data-theme] .scada-topbar .scada-brand,
 }
 
 [data-theme="minimalist-light"] .scada-mimic-stage {
-  background-color: #F8FAFC;
+  background-color: rgba(244, 249, 255, 0.88);
   background-image:
-    linear-gradient(to right, rgba(15, 23, 42, 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(15, 23, 42, 0.05) 1px, transparent 1px);
+    radial-gradient(ellipse 68% 58% at 50% 48%, rgba(14, 165, 233, 0.10), transparent 72%),
+    radial-gradient(ellipse 46% 42% at 84% 18%, rgba(167, 139, 250, 0.09), transparent 68%),
+    radial-gradient(rgba(2, 132, 199, 0.14) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 26px 26px;
 }
 
 .scada-mimic-svg {
@@ -983,25 +1000,26 @@ html[data-theme] .scada-topbar .scada-brand,
   color: var(--ok, #34D399);
 }
 
-/* 南极气象环境条与左翼极端工况输入卡 */
+/* 南极气象环境条与左翼极端工况输入卡（柔光琉璃 + 图标直觉） */
 .scada-env-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 4px 8px;
+  padding: 4px 10px;
   margin-bottom: 5px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg-subtle);
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: linear-gradient(90deg, var(--bg-subtle), rgba(103, 232, 249, 0.06), var(--bg-subtle));
   font-size: 11px;
   flex-wrap: wrap;
 }
 
 .scada-env-bar.is-extreme {
-  border-color: rgba(251, 191, 36, 0.55);
-  background: var(--warn-soft, rgba(251, 191, 36, 0.1));
+  border-color: rgba(252, 211, 77, 0.45);
+  background: linear-gradient(90deg, rgba(252, 211, 77, 0.11), rgba(196, 181, 253, 0.09), rgba(253, 164, 175, 0.10));
+  box-shadow: 0 0 18px rgba(252, 211, 77, 0.10);
 }
 
 .scada-env-metrics,
@@ -1013,53 +1031,86 @@ html[data-theme] .scada-topbar .scada-brand,
 }
 
 .scada-env-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-secondary);
   white-space: nowrap;
+  cursor: default;
 }
 
 .scada-env-metric b {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--text-primary);
-  margin-left: 2px;
+  font-weight: 600;
 }
 
 .scada-env-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
   background: var(--bg-surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-color);
   color: var(--accent);
 }
 
 .scada-env-pill.is-warn {
-  color: var(--warn, #FBBF24);
-  border-color: rgba(251, 191, 36, 0.45);
+  color: var(--warn, #FCD34D);
+  border-color: rgba(252, 211, 77, 0.42);
+  background: rgba(252, 211, 77, 0.10);
 }
 
 .scada-env-pill.is-risk {
-  color: var(--danger, #FB7185);
-  border-color: rgba(251, 113, 133, 0.5);
+  color: var(--danger, #FDA4AF);
+  border-color: rgba(253, 164, 175, 0.48);
+  background: rgba(253, 164, 175, 0.12);
+}
+
+.scada-wx-ctrl span {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px;
+}
+
+.scada-wx-ctrl-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .scada-subtabs {
   display: inline-flex;
   gap: 3px;
+  flex-shrink: 0;
 }
 
 .scada-subtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   height: 22px;
-  padding: 0 7px;
-  border-radius: 5px;
+  padding: 0 6px;
+  border-radius: 999px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-secondary);
   font-size: 11.5px;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
+}
+
+.scada-subtab .ui-ico,
+.scada-mini-link .ui-ico {
+  margin-right: 0;
 }
 
 .scada-subtab.active {

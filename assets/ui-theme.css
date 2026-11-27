@@ -14,61 +14,70 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --transition-fast: 160ms cubic-bezier(0.2, 0, 0, 1);
+  --transition-fast: 200ms cubic-bezier(0.22, 1, 0.36, 1);
 
-  /* 默认激活：精密暗黑（precision-dark） */
+  /* 默认激活：极光幻境 · 深空（柔和仙气科幻琉璃） */
   color-scheme: dark;
-  --bg-canvas: #0B0F19;
-  --bg-canvas-grid: transparent;
-  --bg-surface: #111827;
-  --bg-subtle: #1E293B;
-  --bg-elevated: #162032;
-  --bg-input: #0F172A;
-  --bg-selected: rgba(56, 189, 248, 0.14);
-  --table-head: #162032;
-  --table-stripe: #141D2E;
-  --table-hover: #1E293B;
-  --text-primary: #F8FAFC;
-  --text-secondary: #94A3B8;
-  --text-muted: #64748B;
-  --text-on-accent: #082F49;
-  --accent: #38BDF8;
-  --accent-hover: #0EA5E9;
-  --accent-soft: rgba(56, 189, 248, 0.14);
-  --accent-border: rgba(56, 189, 248, 0.42);
-  --ok: #34D399;
-  --ok-soft: rgba(52, 211, 153, 0.14);
-  --warn: #FBBF24;
-  --warn-soft: rgba(251, 191, 36, 0.15);
-  --danger: #FB7185;
-  --danger-soft: rgba(251, 113, 133, 0.15);
-  --info: #38BDF8;
-  --info-soft: rgba(56, 189, 248, 0.14);
-  --border-color: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
+  --bg-canvas: #070C1B;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 68% 52% at 14% 8%, rgba(94, 234, 212, 0.12), transparent 62%),
+    radial-gradient(ellipse 58% 48% at 86% 12%, rgba(167, 139, 250, 0.13), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 52% 96%, rgba(56, 189, 248, 0.10), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(15, 24, 48, 0.74);
+  --bg-surface-solid: #101A36;
+  --bg-subtle: rgba(26, 40, 74, 0.62);
+  --bg-elevated: rgba(20, 32, 62, 0.80);
+  --bg-input: rgba(10, 17, 36, 0.72);
+  --bg-selected: rgba(103, 232, 249, 0.14);
+  --glass-blur: blur(14px) saturate(135%);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.11);
+  --table-head: rgba(19, 31, 60, 0.88);
+  --table-stripe: rgba(21, 33, 62, 0.42);
+  --table-hover: rgba(103, 232, 249, 0.09);
+  --text-primary: #F1F7FF;
+  --text-secondary: #A5BCD8;
+  --text-muted: #7691B3;
+  --text-on-accent: #052033;
+  --accent: #67E8F9;
+  --accent-2: #C4B5FD;
+  --accent-hover: #A5F3FC;
+  --accent-soft: rgba(103, 232, 249, 0.14);
+  --accent-border: rgba(103, 232, 249, 0.36);
+  --accent-glow: 0 0 18px rgba(103, 232, 249, 0.18);
+  --ok: #5EEAD4;
+  --ok-soft: rgba(94, 234, 212, 0.14);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.14);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.15);
+  --info: #93C5FD;
+  --info-soft: rgba(147, 197, 253, 0.14);
+  --border-color: rgba(165, 216, 255, 0.13);
+  --border-strong: rgba(165, 216, 255, 0.24);
   --border: 1px solid var(--border-color);
-  --radius-card: 10px;
-  --radius-btn: 6px;
-  --radius-input: 6px;
-  --radius-modal: 14px;
-  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.24);
-  --shadow-popover: 0 10px 28px rgba(0, 0, 0, 0.44);
-  --shadow-modal: 0 20px 56px rgba(0, 0, 0, 0.62);
-  --scrollbar-track: #0F172A;
-  --scrollbar-thumb: rgba(148, 163, 184, 0.34);
-  --scrollbar-thumb-hover: rgba(148, 163, 184, 0.56);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(3, 8, 24, 0.36);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(3, 8, 24, 0.52);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(2, 6, 20, 0.68);
+  --scrollbar-track: rgba(10, 17, 36, 0.55);
+  --scrollbar-thumb: rgba(165, 216, 255, 0.24);
+  --scrollbar-thumb-hover: rgba(103, 232, 249, 0.45);
 
   /* 图表主题令牌 */
-  --chart-grid: rgba(255, 255, 255, 0.07);
-  --chart-axis: rgba(148, 163, 184, 0.34);
-  --chart-text: #94A3B8;
-  --chart-crosshair: rgba(56, 189, 248, 0.52);
-  --chart-tooltip-bg: rgba(15, 23, 42, 0.96);
-  --chart-tooltip-border: rgba(56, 189, 248, 0.35);
-  --chart-tooltip-text: #F8FAFC;
-  --chart-tooltip-muted: #94A3B8;
+  --chart-grid: rgba(165, 216, 255, 0.08);
+  --chart-axis: rgba(165, 216, 255, 0.28);
+  --chart-text: #A5BCD8;
+  --chart-crosshair: rgba(103, 232, 249, 0.52);
+  --chart-tooltip-bg: rgba(12, 21, 44, 0.92);
+  --chart-tooltip-border: rgba(103, 232, 249, 0.34);
+  --chart-tooltip-text: #F1F7FF;
+  --chart-tooltip-muted: #A5BCD8;
   --chart-tooltip-strong: #FFFFFF;
-  --chart-tooltip-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+  --chart-tooltip-shadow: 0 12px 32px rgba(2, 8, 26, 0.52);
 
   /* 映射历史 CSS 变量，确保旧模块无缝融合 */
   --hud-cyan: var(--accent);
@@ -115,223 +124,247 @@
   accent-color: var(--accent);
 }
 
-/* 1. 极简明亮风（minimalist-light） */
+/* 1. 冰川月白 · 清透（minimalist-light） */
 html[data-theme="minimalist-light"] {
   color-scheme: light;
-  --bg-canvas: #F4F6F8;
-  --bg-canvas-grid: transparent;
-  --bg-surface: #FFFFFF;
-  --bg-subtle: #F1F5F9;
-  --bg-elevated: #F8FAFC;
-  --bg-input: #FFFFFF;
-  --bg-selected: rgba(37, 99, 235, 0.10);
-  --table-head: #F1F5F9;
-  --table-stripe: #F8FAFC;
-  --table-hover: #EFF6FF;
-  --text-primary: #0F172A;
-  --text-secondary: #475569;
-  --text-muted: #64748B;
+  --bg-canvas: #EEF5FC;
+  --bg-canvas-grid:
+    radial-gradient(ellipse 65% 50% at 12% 8%, rgba(56, 189, 248, 0.13), transparent 62%),
+    radial-gradient(ellipse 58% 48% at 88% 10%, rgba(167, 139, 250, 0.12), transparent 60%),
+    radial-gradient(ellipse 50% 45% at 50% 95%, rgba(45, 212, 191, 0.10), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(255, 255, 255, 0.80);
+  --bg-surface-solid: #FFFFFF;
+  --bg-subtle: rgba(235, 244, 253, 0.78);
+  --bg-elevated: rgba(248, 252, 255, 0.88);
+  --bg-input: rgba(255, 255, 255, 0.92);
+  --bg-selected: rgba(14, 165, 233, 0.11);
+  --glass-blur: blur(14px) saturate(140%);
+  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  --table-head: rgba(235, 244, 253, 0.90);
+  --table-stripe: rgba(244, 249, 255, 0.65);
+  --table-hover: rgba(14, 165, 233, 0.08);
+  --text-primary: #10243E;
+  --text-secondary: #486482;
+  --text-muted: #6C86A3;
   --text-on-accent: #FFFFFF;
-  --accent: #2563EB;
-  --accent-hover: #1D4ED8;
-  --accent-soft: rgba(37, 99, 235, 0.10);
-  --accent-border: rgba(37, 99, 235, 0.42);
+  --accent: #0284C7;
+  --accent-2: #7C3AED;
+  --accent-hover: #0369A1;
+  --accent-soft: rgba(2, 132, 199, 0.10);
+  --accent-border: rgba(2, 132, 199, 0.36);
+  --accent-glow: 0 0 16px rgba(14, 165, 233, 0.16);
   --ok: #0D9488;
   --ok-soft: rgba(13, 148, 136, 0.12);
   --warn: #D97706;
-  --warn-soft: rgba(217, 119, 6, 0.13);
-  --danger: #DC2626;
-  --danger-soft: rgba(220, 38, 38, 0.10);
-  --info: #2563EB;
-  --info-soft: rgba(37, 99, 235, 0.10);
-  --border-color: #E2E8F0;
-  --border-strong: #CBD5E1;
-  --radius-card: 10px;
-  --radius-btn: 7px;
-  --radius-input: 7px;
-  --radius-modal: 14px;
-  --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.05), 0 1px 2px rgba(15, 23, 42, 0.03);
-  --shadow-popover: 0 10px 24px rgba(15, 23, 42, 0.12);
-  --shadow-modal: 0 20px 50px rgba(15, 23, 42, 0.22);
-  --scrollbar-track: #F1F5F9;
-  --scrollbar-thumb: #CBD5E1;
-  --scrollbar-thumb-hover: #94A3B8;
-  --chart-grid: #E2E8F0;
-  --chart-axis: #CBD5E1;
-  --chart-text: #475569;
-  --chart-crosshair: rgba(37, 99, 235, 0.45);
-  --chart-tooltip-bg: rgba(255, 255, 255, 0.97);
-  --chart-tooltip-border: #CBD5E1;
-  --chart-tooltip-text: #0F172A;
-  --chart-tooltip-muted: #475569;
-  --chart-tooltip-strong: #0F172A;
-  --chart-tooltip-shadow: 0 8px 20px rgba(15, 23, 42, 0.12);
+  --warn-soft: rgba(217, 119, 6, 0.12);
+  --danger: #E11D48;
+  --danger-soft: rgba(225, 29, 72, 0.10);
+  --info: #0284C7;
+  --info-soft: rgba(2, 132, 199, 0.10);
+  --border-color: rgba(148, 184, 218, 0.38);
+  --border-strong: rgba(125, 165, 204, 0.54);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 6px 22px rgba(16, 48, 86, 0.06);
+  --shadow-popover: var(--glass-highlight), 0 12px 28px rgba(16, 48, 86, 0.12);
+  --shadow-modal: var(--glass-highlight), 0 22px 54px rgba(16, 48, 86, 0.20);
+  --scrollbar-track: #EBF3FA;
+  --scrollbar-thumb: rgba(125, 165, 204, 0.55);
+  --scrollbar-thumb-hover: rgba(2, 132, 199, 0.55);
+  --chart-grid: rgba(148, 184, 218, 0.34);
+  --chart-axis: rgba(125, 165, 204, 0.56);
+  --chart-text: #486482;
+  --chart-crosshair: rgba(2, 132, 199, 0.45);
+  --chart-tooltip-bg: rgba(255, 255, 255, 0.94);
+  --chart-tooltip-border: rgba(148, 184, 218, 0.65);
+  --chart-tooltip-text: #10243E;
+  --chart-tooltip-muted: #486482;
+  --chart-tooltip-strong: #10243E;
+  --chart-tooltip-shadow: 0 10px 26px rgba(16, 48, 86, 0.12);
 }
 
-/* 2. 精密暗黑风（precision-dark） */
+/* 2. 极光幻境 · 深空（precision-dark） */
 html[data-theme="precision-dark"] {
   color-scheme: dark;
 }
 
-/* 3. 科幻 · 电光青（sci-fi-cyan） */
+/* 3. 星海冰青（sci-fi-cyan） */
 html[data-theme="sci-fi-cyan"] {
   color-scheme: dark;
-  --bg-canvas: #040812;
+  --bg-canvas: #050C1B;
   --bg-canvas-grid:
-    linear-gradient(rgba(0, 229, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 229, 255, 0.035) 1px, transparent 1px);
-  --bg-surface: #081121;
-  --bg-subtle: #0D1B33;
-  --bg-elevated: #0B172B;
-  --bg-input: #060E1C;
-  --bg-selected: rgba(0, 229, 255, 0.14);
-  --table-head: #0B1930;
-  --table-stripe: #0A162B;
-  --table-hover: #102444;
-  --text-primary: #EBF9FF;
-  --text-secondary: #A3C9EB;
-  --text-muted: #7CA8CF;
-  --text-on-accent: #021420;
-  --accent: #00E5FF;
-  --accent-hover: #38F2FF;
-  --accent-soft: rgba(0, 229, 255, 0.14);
-  --accent-border: rgba(0, 229, 255, 0.42);
-  --ok: #00E6A8;
-  --ok-soft: rgba(0, 230, 168, 0.14);
-  --warn: #FFB020;
-  --warn-soft: rgba(255, 176, 32, 0.15);
-  --danger: #FF4D6D;
-  --danger-soft: rgba(255, 77, 109, 0.16);
-  --info: #00E5FF;
-  --info-soft: rgba(0, 229, 255, 0.14);
-  --border-color: rgba(0, 229, 255, 0.20);
-  --border-strong: rgba(0, 229, 255, 0.34);
-  --radius-card: 6px;
-  --radius-btn: 4px;
-  --radius-input: 4px;
-  --radius-modal: 10px;
-  --shadow-card: 0 0 0 1px rgba(0, 229, 255, 0.07), 0 6px 20px rgba(0, 8, 24, 0.5);
-  --shadow-popover: 0 12px 30px rgba(0, 6, 18, 0.65);
-  --shadow-modal: 0 0 0 1px rgba(0, 229, 255, 0.22), 0 24px 60px rgba(0, 4, 14, 0.78);
-  --scrollbar-track: #050C18;
-  --scrollbar-thumb: rgba(0, 229, 255, 0.26);
-  --scrollbar-thumb-hover: rgba(0, 229, 255, 0.48);
-  --chart-grid: rgba(0, 229, 255, 0.09);
-  --chart-axis: rgba(0, 229, 255, 0.30);
-  --chart-text: #7DA2C4;
-  --chart-crosshair: rgba(0, 229, 255, 0.55);
-  --chart-tooltip-bg: rgba(4, 12, 26, 0.96);
-  --chart-tooltip-border: rgba(0, 229, 255, 0.42);
-  --chart-tooltip-text: #E6F7FF;
-  --chart-tooltip-muted: #7DA2C4;
+    radial-gradient(ellipse 70% 52% at 16% 10%, rgba(34, 211, 238, 0.15), transparent 60%),
+    radial-gradient(ellipse 56% 48% at 86% 16%, rgba(96, 165, 250, 0.14), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 50% 96%, rgba(45, 212, 191, 0.10), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(10, 22, 44, 0.74);
+  --bg-surface-solid: #0A162C;
+  --bg-subtle: rgba(17, 36, 68, 0.62);
+  --bg-elevated: rgba(14, 29, 56, 0.80);
+  --bg-input: rgba(7, 16, 33, 0.74);
+  --bg-selected: rgba(34, 211, 238, 0.15);
+  --table-head: rgba(13, 30, 58, 0.88);
+  --table-stripe: rgba(12, 26, 52, 0.44);
+  --table-hover: rgba(34, 211, 238, 0.10);
+  --text-primary: #ECFBFF;
+  --text-secondary: #9ECAE8;
+  --text-muted: #6FA0C5;
+  --text-on-accent: #031B29;
+  --accent: #38E8FF;
+  --accent-2: #818CF8;
+  --accent-hover: #7CF3FF;
+  --accent-soft: rgba(56, 232, 255, 0.14);
+  --accent-border: rgba(56, 232, 255, 0.38);
+  --accent-glow: 0 0 20px rgba(56, 232, 255, 0.22);
+  --ok: #34E8C0;
+  --ok-soft: rgba(52, 232, 192, 0.14);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.15);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.16);
+  --info: #38E8FF;
+  --info-soft: rgba(56, 232, 255, 0.14);
+  --border-color: rgba(103, 232, 249, 0.18);
+  --border-strong: rgba(103, 232, 249, 0.32);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(0, 10, 28, 0.46);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(0, 8, 22, 0.62);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(0, 5, 18, 0.74);
+  --scrollbar-track: rgba(6, 15, 30, 0.6);
+  --scrollbar-thumb: rgba(56, 232, 255, 0.24);
+  --scrollbar-thumb-hover: rgba(56, 232, 255, 0.46);
+  --chart-grid: rgba(103, 232, 249, 0.09);
+  --chart-axis: rgba(103, 232, 249, 0.28);
+  --chart-text: #8CBAD9;
+  --chart-crosshair: rgba(56, 232, 255, 0.55);
+  --chart-tooltip-bg: rgba(6, 16, 36, 0.93);
+  --chart-tooltip-border: rgba(56, 232, 255, 0.38);
+  --chart-tooltip-text: #ECFBFF;
+  --chart-tooltip-muted: #8CBAD9;
   --chart-tooltip-strong: #FFFFFF;
 }
 
-/* 4. 科幻 · 赛博紫（sci-fi-purple） */
+/* 4. 紫霞星云（sci-fi-purple） */
 html[data-theme="sci-fi-purple"] {
   color-scheme: dark;
-  --bg-canvas: #090614;
+  --bg-canvas: #0B081B;
   --bg-canvas-grid:
-    linear-gradient(rgba(192, 132, 252, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(192, 132, 252, 0.035) 1px, transparent 1px);
-  --bg-surface: #120C24;
-  --bg-subtle: #1C1336;
-  --bg-elevated: #17102E;
-  --bg-input: #0D081C;
-  --bg-selected: rgba(192, 132, 252, 0.16);
-  --table-head: #181030;
-  --table-stripe: #160F2B;
-  --table-hover: #231845;
-  --text-primary: #F3EEFF;
-  --text-secondary: #A695C9;
-  --text-muted: #7B6BA0;
+    radial-gradient(ellipse 68% 52% at 15% 10%, rgba(192, 132, 252, 0.16), transparent 60%),
+    radial-gradient(ellipse 56% 48% at 85% 14%, rgba(244, 114, 182, 0.11), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 50% 96%, rgba(103, 232, 249, 0.10), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(22, 16, 44, 0.74);
+  --bg-surface-solid: #16102C;
+  --bg-subtle: rgba(34, 24, 66, 0.62);
+  --bg-elevated: rgba(28, 20, 56, 0.80);
+  --bg-input: rgba(14, 10, 30, 0.74);
+  --bg-selected: rgba(196, 181, 253, 0.16);
+  --table-head: rgba(28, 20, 56, 0.88);
+  --table-stripe: rgba(26, 18, 52, 0.44);
+  --table-hover: rgba(196, 181, 253, 0.10);
+  --text-primary: #F6F2FF;
+  --text-secondary: #B9A9DD;
+  --text-muted: #8B7AB5;
   --text-on-accent: #18062B;
-  --accent: #C084FC;
-  --accent-hover: #D8B4FE;
-  --accent-soft: rgba(192, 132, 252, 0.15);
-  --accent-border: rgba(192, 132, 252, 0.44);
-  --ok: #2DD4BF;
-  --ok-soft: rgba(45, 212, 191, 0.15);
-  --warn: #FBBF24;
-  --warn-soft: rgba(251, 191, 36, 0.15);
-  --danger: #FB7185;
-  --danger-soft: rgba(251, 113, 133, 0.16);
-  --info: #C084FC;
-  --info-soft: rgba(192, 132, 252, 0.15);
-  --border-color: rgba(192, 132, 252, 0.22);
-  --border-strong: rgba(192, 132, 252, 0.36);
-  --radius-card: 6px;
-  --radius-btn: 4px;
-  --radius-input: 4px;
-  --radius-modal: 10px;
-  --shadow-card: 0 0 0 1px rgba(192, 132, 252, 0.08), 0 6px 20px rgba(9, 4, 24, 0.54);
-  --shadow-popover: 0 12px 30px rgba(8, 3, 20, 0.68);
-  --shadow-modal: 0 0 0 1px rgba(192, 132, 252, 0.24), 0 24px 60px rgba(6, 2, 16, 0.8);
-  --scrollbar-track: #0C071A;
-  --scrollbar-thumb: rgba(192, 132, 252, 0.28);
-  --scrollbar-thumb-hover: rgba(192, 132, 252, 0.48);
-  --chart-grid: rgba(192, 132, 252, 0.09);
-  --chart-axis: rgba(192, 132, 252, 0.30);
-  --chart-text: #A695C9;
-  --chart-crosshair: rgba(192, 132, 252, 0.55);
-  --chart-tooltip-bg: rgba(15, 9, 32, 0.96);
-  --chart-tooltip-border: rgba(192, 132, 252, 0.42);
-  --chart-tooltip-text: #F3EEFF;
-  --chart-tooltip-muted: #A695C9;
+  --accent: #D8B4FE;
+  --accent-2: #67E8F9;
+  --accent-hover: #E9D5FF;
+  --accent-soft: rgba(216, 180, 254, 0.15);
+  --accent-border: rgba(216, 180, 254, 0.40);
+  --accent-glow: 0 0 20px rgba(192, 132, 252, 0.22);
+  --ok: #5EEAD4;
+  --ok-soft: rgba(94, 234, 212, 0.14);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.15);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.16);
+  --info: #D8B4FE;
+  --info-soft: rgba(216, 180, 254, 0.15);
+  --border-color: rgba(216, 180, 254, 0.18);
+  --border-strong: rgba(216, 180, 254, 0.32);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(9, 4, 24, 0.48);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(8, 3, 20, 0.62);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(6, 2, 16, 0.76);
+  --scrollbar-track: rgba(14, 9, 30, 0.6);
+  --scrollbar-thumb: rgba(216, 180, 254, 0.25);
+  --scrollbar-thumb-hover: rgba(216, 180, 254, 0.46);
+  --chart-grid: rgba(216, 180, 254, 0.09);
+  --chart-axis: rgba(216, 180, 254, 0.28);
+  --chart-text: #B9A9DD;
+  --chart-crosshair: rgba(216, 180, 254, 0.55);
+  --chart-tooltip-bg: rgba(18, 12, 38, 0.93);
+  --chart-tooltip-border: rgba(216, 180, 254, 0.38);
+  --chart-tooltip-text: #F6F2FF;
+  --chart-tooltip-muted: #B9A9DD;
   --chart-tooltip-strong: #FFFFFF;
 }
 
-/* 5. 科幻 · 矩阵绿（sci-fi-matrix） */
+/* 5. 翠雾极光（sci-fi-matrix） */
 html[data-theme="sci-fi-matrix"] {
   color-scheme: dark;
-  --bg-canvas: #040D08;
+  --bg-canvas: #061311;
   --bg-canvas-grid:
-    linear-gradient(rgba(0, 230, 118, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 230, 118, 0.035) 1px, transparent 1px);
-  --bg-surface: #081810;
-  --bg-subtle: #0F261A;
-  --bg-elevated: #0C2116;
-  --bg-input: #05110A;
-  --bg-selected: rgba(0, 230, 118, 0.14);
-  --table-head: #0D2217;
-  --table-stripe: #0B1F15;
-  --table-hover: #133322;
-  --text-primary: #E2FBE9;
-  --text-secondary: #7EB396;
-  --text-muted: #54846A;
-  --text-on-accent: #03190D;
-  --accent: #00E676;
-  --accent-hover: #33F094;
-  --accent-soft: rgba(0, 230, 118, 0.14);
-  --accent-border: rgba(0, 230, 118, 0.42);
-  --ok: #00E676;
-  --ok-soft: rgba(0, 230, 118, 0.15);
-  --warn: #FBBF24;
-  --warn-soft: rgba(251, 191, 36, 0.15);
-  --danger: #FF5C77;
-  --danger-soft: rgba(255, 92, 119, 0.16);
-  --info: #38BDF8;
-  --info-soft: rgba(56, 189, 248, 0.14);
-  --border-color: rgba(0, 230, 118, 0.20);
-  --border-strong: rgba(0, 230, 118, 0.34);
-  --radius-card: 6px;
-  --radius-btn: 4px;
-  --radius-input: 4px;
-  --radius-modal: 10px;
-  --shadow-card: 0 0 0 1px rgba(0, 230, 118, 0.07), 0 6px 20px rgba(2, 14, 8, 0.54);
-  --shadow-popover: 0 12px 30px rgba(2, 12, 6, 0.68);
-  --shadow-modal: 0 0 0 1px rgba(0, 230, 118, 0.22), 0 24px 60px rgba(1, 10, 5, 0.8);
-  --scrollbar-track: #041009;
-  --scrollbar-thumb: rgba(0, 230, 118, 0.26);
-  --scrollbar-thumb-hover: rgba(0, 230, 118, 0.48);
-  --chart-grid: rgba(0, 230, 118, 0.09);
-  --chart-axis: rgba(0, 230, 118, 0.30);
-  --chart-text: #7EB396;
-  --chart-crosshair: rgba(0, 230, 118, 0.55);
-  --chart-tooltip-bg: rgba(5, 18, 11, 0.96);
-  --chart-tooltip-border: rgba(0, 230, 118, 0.42);
-  --chart-tooltip-text: #E2FBE9;
-  --chart-tooltip-muted: #7EB396;
+    radial-gradient(ellipse 68% 52% at 14% 10%, rgba(52, 211, 153, 0.15), transparent 60%),
+    radial-gradient(ellipse 56% 48% at 86% 14%, rgba(45, 212, 191, 0.13), transparent 60%),
+    radial-gradient(ellipse 52% 46% at 50% 96%, rgba(167, 243, 208, 0.08), transparent 64%);
+  --bg-canvas-size: 100% 100%;
+  --bg-surface: rgba(10, 30, 25, 0.74);
+  --bg-surface-solid: #0A1E19;
+  --bg-subtle: rgba(17, 46, 38, 0.62);
+  --bg-elevated: rgba(14, 38, 32, 0.80);
+  --bg-input: rgba(6, 20, 17, 0.74);
+  --bg-selected: rgba(94, 234, 212, 0.15);
+  --table-head: rgba(14, 38, 31, 0.88);
+  --table-stripe: rgba(12, 34, 28, 0.44);
+  --table-hover: rgba(94, 234, 212, 0.10);
+  --text-primary: #E8FFF6;
+  --text-secondary: #8CCBB5;
+  --text-muted: #5F9B87;
+  --text-on-accent: #031F16;
+  --accent: #5EEAD4;
+  --accent-2: #6EE7B7;
+  --accent-hover: #99F6E4;
+  --accent-soft: rgba(94, 234, 212, 0.14);
+  --accent-border: rgba(94, 234, 212, 0.38);
+  --accent-glow: 0 0 20px rgba(94, 234, 212, 0.20);
+  --ok: #6EE7B7;
+  --ok-soft: rgba(110, 231, 183, 0.15);
+  --warn: #FCD34D;
+  --warn-soft: rgba(252, 211, 77, 0.15);
+  --danger: #FDA4AF;
+  --danger-soft: rgba(253, 164, 175, 0.16);
+  --info: #67E8F9;
+  --info-soft: rgba(103, 232, 249, 0.14);
+  --border-color: rgba(94, 234, 212, 0.18);
+  --border-strong: rgba(94, 234, 212, 0.32);
+  --radius-card: 13px;
+  --radius-btn: 9px;
+  --radius-input: 9px;
+  --radius-modal: 18px;
+  --shadow-card: var(--glass-highlight), 0 8px 28px rgba(2, 14, 10, 0.48);
+  --shadow-popover: var(--glass-highlight), 0 14px 36px rgba(2, 12, 8, 0.62);
+  --shadow-modal: var(--glass-highlight), 0 24px 64px rgba(1, 10, 6, 0.76);
+  --scrollbar-track: rgba(5, 18, 14, 0.6);
+  --scrollbar-thumb: rgba(94, 234, 212, 0.25);
+  --scrollbar-thumb-hover: rgba(94, 234, 212, 0.46);
+  --chart-grid: rgba(94, 234, 212, 0.09);
+  --chart-axis: rgba(94, 234, 212, 0.28);
+  --chart-text: #8CCBB5;
+  --chart-crosshair: rgba(94, 234, 212, 0.55);
+  --chart-tooltip-bg: rgba(7, 24, 19, 0.93);
+  --chart-tooltip-border: rgba(94, 234, 212, 0.38);
+  --chart-tooltip-text: #E8FFF6;
+  --chart-tooltip-muted: #8CCBB5;
   --chart-tooltip-strong: #FFFFFF;
 }
 
@@ -386,7 +419,8 @@ body[data-home-theme] {
   color: var(--text-primary) !important;
   background-color: var(--bg-canvas) !important;
   background-image: var(--bg-canvas-grid) !important;
-  background-size: 28px 28px !important;
+  background-size: var(--bg-canvas-size, 100% 100%) !important;
+  background-repeat: no-repeat !important;
   background-attachment: fixed !important;
   font-family: var(--font-sans) !important;
   font-size: 13px;
@@ -396,7 +430,7 @@ body[data-home-theme] {
 
 select option,
 select optgroup {
-  background-color: var(--bg-surface);
+  background-color: var(--bg-surface-solid, #101A36);
   color: var(--text-primary);
 }
 
@@ -4944,7 +4978,7 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   .global-nav-tree {
     position: fixed;
     left: 0;
-    top: 0;
+    top: var(--nav-tree-top, 44px);
     bottom: 0;
     width: var(--nav-tree-width);
     z-index: 9500;
@@ -5363,6 +5397,430 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     border: 1px solid var(--border);
   }
 
+  /* ==========================================================================
+     全站「极光幻境 · 仙气柔光科幻」琉璃质感与高可读矢量图标增强层
+     ========================================================================== */
+
+  /* 1. 顶栏、主面板、侧栏、目录树与弹窗的柔光琉璃质感 */
+  .topbar,
+  .scada-topbar,
+  .sidebar,
+  .workspace-card,
+  .panel,
+  .card,
+  .home-card,
+  .home-hero,
+  .metric-card,
+  .result-card,
+  .config-card,
+  .scada-panel,
+  .global-nav-tree,
+  .global-task-drawer,
+  .cmd-palette,
+  .ui-modal,
+  .auth-card,
+  .report-card,
+  .insight-card,
+  .topo-detail-bar {
+    backdrop-filter: var(--glass-blur, blur(14px) saturate(135%));
+    -webkit-backdrop-filter: var(--glass-blur, blur(14px) saturate(135%));
+    box-shadow: var(--shadow-card);
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+  }
+
+  .topbar,
+  .scada-topbar {
+    position: relative;
+    z-index: 9600;
+    border-bottom: 1px solid var(--border-color) !important;
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04), 0 4px 20px rgba(3, 8, 26, 0.22);
+  }
+
+  /* 品牌徽标柔和极光流光渐变 */
+  .topbar .brand,
+  .scada-brand {
+    background: linear-gradient(120deg, var(--text-primary) 10%, var(--accent) 62%, var(--accent-2, var(--ok)) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent !important;
+  }
+
+  /* 顶栏导航链接与左侧目录树项：紧凑圆润柔光胶囊（兼顾 1280px 完整显示不裁切） */
+  .topbar .topnav,
+  .topbar .main-nav,
+  .topbar-nav,
+  .nav-links {
+    gap: 2px !important;
+  }
+
+  .topbar .topnav a,
+  .topbar .main-nav a,
+  .topbar-nav a,
+  .nav-links a {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 3px !important;
+    border-radius: 999px !important;
+    padding: 0 7px !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    flex-shrink: 0 !important;
+    transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform var(--transition-fast) !important;
+  }
+
+  .topbar .topnav a .ui-ico,
+  .topbar .main-nav a .ui-ico,
+  .topbar-nav a .ui-ico,
+  .nav-links a .ui-ico,
+  .nav-tree-link .ui-ico,
+  .result-tab .ui-ico,
+  .tab-btn .ui-ico,
+  .workflow-next-link .ui-ico {
+    margin-right: 0 !important;
+  }
+
+  /* 顶栏右上角：主题 + 语言二合一紧凑图标按钮与极光琉璃浮层 */
+  .ui-pref-host {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+  }
+
+  .ui-pref-trigger {
+    width: 30px !important;
+    height: 28px !important;
+    min-width: 30px !important;
+    padding: 0 !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 999px !important;
+    border: 1px solid var(--border-color) !important;
+    background: var(--bg-subtle) !important;
+    color: var(--text-secondary) !important;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+  }
+
+  .ui-pref-trigger:hover,
+  .ui-pref-host.is-open .ui-pref-trigger {
+    border-color: var(--accent-border) !important;
+    color: var(--accent) !important;
+    background: var(--accent-soft) !important;
+    box-shadow: var(--accent-glow, none);
+  }
+
+  .ui-pref-trigger .topbar-icon {
+    width: 15px;
+    height: 15px;
+    margin: 0 !important;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+  }
+
+  .ui-pref-popover {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 238px;
+    padding: 10px;
+    border-radius: 14px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-elevated, var(--bg-surface));
+    backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+    -webkit-backdrop-filter: var(--glass-blur, blur(16px) saturate(140%));
+    box-shadow: var(--shadow-popover);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(0.98);
+    pointer-events: none;
+    transition: opacity 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1), visibility 160ms;
+    z-index: 9800;
+  }
+
+  .ui-pref-host.is-open .ui-pref-popover {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+  }
+
+  .ui-pref-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .ui-pref-head {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    letter-spacing: 0.02em;
+  }
+
+  .ui-pref-theme-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .ui-pref-chip {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    height: 28px !important;
+    padding: 0 8px !important;
+    border-radius: 8px !important;
+    border: 1px solid var(--border-color) !important;
+    background: var(--bg-subtle) !important;
+    color: var(--text-secondary) !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .ui-pref-chip:hover {
+    border-color: var(--accent-border) !important;
+    color: var(--text-primary) !important;
+  }
+
+  .ui-pref-chip.active {
+    border-color: var(--accent-border) !important;
+    background: var(--accent-soft) !important;
+    color: var(--accent) !important;
+    box-shadow: inset 0 0 0 1px var(--accent-border);
+  }
+
+  .ui-pref-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    box-shadow: 0 0 6px rgba(103, 232, 249, 0.35);
+  }
+
+  .ui-pref-lang-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .ui-pref-lang-btn {
+    height: 26px !important;
+    padding: 0 6px !important;
+    border-radius: 8px !important;
+    border: 1px solid var(--border-color) !important;
+    background: var(--bg-subtle) !important;
+    color: var(--text-secondary) !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    cursor: pointer;
+  }
+
+  .ui-pref-lang-btn:hover {
+    border-color: var(--accent-border) !important;
+    color: var(--text-primary) !important;
+  }
+
+  .ui-pref-lang-btn.active {
+    border-color: var(--accent-border) !important;
+    background: var(--accent-soft) !important;
+    color: var(--accent) !important;
+  }
+
+  .ui-sr-select {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    border: 0 !important;
+  }
+
+  /* 修正左侧方案筛选输入框左侧图标留白，杜绝文字与放大镜图标重叠 */
+  .scheme-search-wrap input,
+  .scheme-filter-wrap input,
+  input[id*="schemeSearch"],
+  input[id*="SchemeSearch"],
+  input[placeholder*="筛选方案"] {
+    padding-left: 28px !important;
+  }
+
+  .topbar .topnav a.active,
+  .topbar-nav a.active,
+  .nav-links a.active {
+    background: linear-gradient(135deg, var(--accent-soft), rgba(196, 181, 253, 0.14)) !important;
+    box-shadow: inset 0 0 0 1px var(--accent-border), var(--accent-glow, none) !important;
+    color: var(--accent) !important;
+  }
+
+  .topbar .topnav a:hover:not(.active),
+  .topbar-nav a:hover:not(.active),
+  .nav-links a:hover:not(.active) {
+    background: var(--bg-subtle) !important;
+  }
+
+  /* 柔和圆润按钮与次级交互控件（严格排除表格内嵌子控件） */
+  button:not(.nav-tree-item):not(.nav-tree-group-head):not(.scada-subtab):not(.topo-mode-btn):not(.tab-btn):not(.subtab-btn):not([role="tab"]),
+  .btn,
+  .action-btn,
+  .scada-icon-btn,
+  .scada-nav-link,
+  .scada-wx-apply-btn,
+  .scada-wx-mini-btn,
+  .scada-mini-link,
+  .topo-btn {
+    border-radius: var(--radius-btn);
+    transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast), transform 140ms ease;
+  }
+
+  .btn-primary,
+  button.primary,
+  #runOptimize,
+  #startOptimize,
+  #scadaWxGenerateBtn {
+    background: linear-gradient(135deg, var(--accent-soft), rgba(196, 181, 253, 0.18));
+    border-color: var(--accent-border);
+    box-shadow: var(--accent-glow, none);
+  }
+
+  .btn-primary:hover,
+  button.primary:hover,
+  #scadaWxGenerateBtn:hover {
+    box-shadow: 0 0 22px rgba(103, 232, 249, 0.30);
+    transform: translateY(-0.5px);
+  }
+
+  /* 柔化潮流接线图画布：用极光柔雾 + 微光星点取代生硬工程方格 */
+  .topo-stage {
+    border-radius: 12px;
+    background-color: var(--bg-input, var(--bg-canvas));
+    background-image:
+      radial-gradient(ellipse 64% 58% at 50% 48%, rgba(103, 232, 249, 0.09), transparent 72%),
+      radial-gradient(ellipse 46% 42% at 18% 82%, rgba(196, 181, 253, 0.08), transparent 68%),
+      radial-gradient(rgba(186, 230, 253, 0.15) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 26px 26px;
+  }
+
+  [data-theme="minimalist-light"] .topo-stage {
+    background-color: rgba(244, 249, 255, 0.86);
+    background-image:
+      radial-gradient(ellipse 64% 58% at 50% 48%, rgba(14, 165, 233, 0.09), transparent 72%),
+      radial-gradient(ellipse 46% 42% at 84% 18%, rgba(167, 139, 250, 0.08), transparent 68%),
+      radial-gradient(rgba(2, 132, 199, 0.14) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 26px 26px;
+  }
+
+  /* 左栏边缘仙气微光呼吸引导条 */
+  .nav-tree-edge-cue {
+    background: linear-gradient(180deg, transparent, var(--accent), var(--accent-2, var(--ok)), transparent) !important;
+    box-shadow: 0 0 12px var(--accent-border) !important;
+    border-radius: 0 999px 999px 0 !important;
+  }
+
+  .global-nav-tree {
+    border-right: 1px solid var(--border-strong);
+    box-shadow: var(--shadow-popover);
+  }
+
+  .nav-tree-item {
+    border-radius: 8px;
+    transition: background-color var(--transition-fast), color var(--transition-fast), padding-left var(--transition-fast);
+  }
+
+  .nav-tree-item.active {
+    background: linear-gradient(90deg, var(--accent-soft), rgba(196, 181, 253, 0.08));
+    box-shadow: inset 2.5px 0 0 var(--accent);
+  }
+
+  /* 2. 全站高可读微发光线性 SVG 图标系统 */
+  .ui-ico {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex: 0 0 auto;
+    vertical-align: -0.15em;
+    color: currentColor;
+    opacity: 0.94;
+    filter: drop-shadow(0 0 4px rgba(103, 232, 249, 0.22));
+    pointer-events: none;
+  }
+
+  [data-theme="minimalist-light"] .ui-ico {
+    filter: none;
+  }
+
+  .ui-ico svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .ui-ico-sm {
+    width: 13px;
+    height: 13px;
+  }
+
+  .ui-ico-md {
+    width: 15px;
+    height: 15px;
+  }
+
+  .ui-ico-lg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .ui-ico-accent { color: var(--accent); }
+  .ui-ico-aurora { color: var(--accent-2, #C4B5FD); }
+  .ui-ico-ok { color: var(--ok); }
+  .ui-ico-warn { color: var(--warn); }
+  .ui-ico-danger { color: var(--danger); }
+
+  button .ui-ico,
+  a .ui-ico {
+    margin-right: 4px;
+  }
+
+  button .ui-ico:only-child,
+  a .ui-ico:only-child,
+  .ui-icon-only .ui-ico {
+    margin-right: 0;
+  }
+
+  /* 目录树与导航项内部自动对齐 */
+  .nav-tree-item,
+  .topbar-action,
+  .workflow-next-link,
+  .result-tab,
+  .tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .nav-tree-item {
+    display: flex;
+  }
+
   @media (max-width: 1024px) {
     .insights-grid,
     .comparison-radar-layout,
@@ -5372,12 +5830,28 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
   }
 }
 
-/* 内嵌模式推开主内容（须置于 @layer 之外，确保压过 unlayered 的 body { padding: 0 }） */
+/* 内嵌模式仅推开顶栏下方的主内容区，顶栏始终 100% 从左到右通栏不受左栏影响（须置于 @layer 之外） */
 html[data-theme] body.has-nav-tree-docked,
 body.scada-body.has-nav-tree-docked,
 body.has-nav-tree-docked {
+  padding-left: 0 !important;
+}
+
+body.has-nav-tree-docked .topbar,
+body.has-nav-tree-docked .scada-topbar {
+  position: relative;
+  z-index: 9600 !important;
+  width: 100% !important;
+  margin-left: 0 !important;
+}
+
+body.has-nav-tree-docked .planning-shell > :not(.topbar),
+body.has-nav-tree-docked .scada-shell > :not(.scada-topbar),
+body.has-nav-tree-docked.home-page > .home-portal {
   box-sizing: border-box !important;
-  padding-left: var(--nav-tree-width, 212px) !important;
+  margin-left: var(--nav-tree-width, 212px) !important;
+  width: calc(100% - var(--nav-tree-width, 212px)) !important;
+  max-width: calc(100% - var(--nav-tree-width, 212px)) !important;
 }
 
 @media print {
