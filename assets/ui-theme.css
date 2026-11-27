@@ -6038,7 +6038,8 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     flex: 0 0 auto;
   }
 
-  .ui-pref-trigger {
+  .ui-pref-trigger,
+  .ui-fullscreen-trigger {
     width: 30px !important;
     height: 28px !important;
     min-width: 30px !important;
@@ -6051,24 +6052,30 @@ body .comparison-curve-board.is-sidebar-collapsed > .comparison-curve-list-panel
     background: var(--bg-subtle) !important;
     color: var(--text-secondary) !important;
     cursor: pointer;
+    flex: 0 0 auto;
     transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
   }
 
   .ui-pref-trigger:hover,
-  .ui-pref-host.is-open .ui-pref-trigger {
+  .ui-pref-host.is-open .ui-pref-trigger,
+  .ui-fullscreen-trigger:hover,
+  .ui-fullscreen-trigger.is-active {
     border-color: var(--accent-border) !important;
     color: var(--accent) !important;
     background: var(--accent-soft) !important;
     box-shadow: var(--accent-glow, none);
   }
 
-  .ui-pref-trigger .topbar-icon {
+  .ui-pref-trigger .topbar-icon,
+  .ui-fullscreen-trigger .topbar-icon {
     width: 15px;
     height: 15px;
     margin: 0 !important;
     stroke: currentColor;
     fill: none;
     stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
   }
 
   .ui-pref-popover {

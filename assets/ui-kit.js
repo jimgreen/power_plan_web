@@ -628,6 +628,51 @@
       syncPrefUi();
     }
 
+    // 注入全站顶栏右侧统一「全屏显示 / 退出全屏」紧凑图标按钮
+    if (!utilities.querySelector("#uiFullscreenTrigger")) {
+      const fsBtn = document.createElement("button");
+      fsBtn.type = "button";
+      fsBtn.id = "uiFullscreenTrigger";
+      fsBtn.className = "ui-fullscreen-trigger";
+      fsBtn.setAttribute("aria-pressed", "false");
+
+      const EXPAND_SVG = `<svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>`;
+      const COMPRESS_SVG = `<svg class="topbar-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>`;
+
+      const isFullscreenActive = () =>
+        Boolean(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+
+      const syncFullscreenUi = () => {
+        const active = isFullscreenActive();
+        const label = active ? tr("退出全屏") : tr("全屏显示");
+        fsBtn.innerHTML = active ? COMPRESS_SVG : EXPAND_SVG;
+        fsBtn.classList.toggle("is-active", active);
+        fsBtn.setAttribute("aria-pressed", String(active));
+        fsBtn.setAttribute("aria-label", label);
+        fsBtn.setAttribute("title", label);
+      };
+
+      fsBtn.addEventListener("click", () => {
+        if (isFullscreenActive()) {
+          const exit = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
+          Promise.resolve(exit?.call(document)).catch(() => {});
+        } else {
+          const el = document.documentElement;
+          const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+          Promise.resolve(req?.call(el)).catch(() => {});
+        }
+      });
+
+      document.addEventListener("fullscreenchange", syncFullscreenUi);
+      document.addEventListener("webkitfullscreenchange", syncFullscreenUi);
+      window.addEventListener("powerplan:langchange", syncFullscreenUi);
+      syncFullscreenUi();
+
+      const userStatusNode = utilities.querySelector(".user-status");
+      if (userStatusNode) utilities.insertBefore(fsBtn, userStatusNode);
+      else utilities.appendChild(fsBtn);
+    }
+
     const userStatus = utilities.querySelector(".user-status");
 
     // 确保管理员在任意子页面都能一键访问用户管理，并将用户区折叠为“用户名胶囊 + 悬停/点击浮层菜单”

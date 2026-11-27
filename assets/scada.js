@@ -1487,11 +1487,6 @@
     document.getElementById("wxCutoutSelect")?.addEventListener("change", (e) => onWxCustomChange({ cutoutWind: Number(e.target.value) || 25 }));
     document.getElementById("scadaWxGenerateBtn")?.addEventListener("click", generateWeatherScenarioScheme);
 
-    document.getElementById("scadaFullscreenBtn")?.addEventListener("click", () => {
-      if (!document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
-      else document.exitFullscreen?.().catch(() => {});
-    });
-
     window.addEventListener("powerplan:themechange", renderMainView);
     document.getElementById("languageSelect")?.addEventListener("change", () => {
       window.setTimeout(renderMainView, 30);

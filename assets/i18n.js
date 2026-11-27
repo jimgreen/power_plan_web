@@ -1740,6 +1740,8 @@
     ["赤霞星辰", "Crimson Aurora", "Алая заря"],
     ["青瓷雪雾", "Arctic Jade", "Нефрит"],
     ["晨曦暖玉", "Warm Ivory", "Тёплый свет"],
+    ["全屏显示", "Fullscreen", "На весь экран"],
+    ["退出全屏", "Exit Fullscreen", "Выйти из полноэкранного"],
   ];
   EXTRA_I18N_ENTRIES.forEach(([zh, en, ru]) => {
     if (!enTranslations.has(zh)) enTranslations.set(zh, en);
